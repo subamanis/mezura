@@ -72,12 +72,24 @@ pub const EXCLUDE_HELP  :  &str =
 
     1..n glob patterns separated by commas.
 
-    A pattern without a slash matches a file or directory name at any depth ('node_modules', '*.min.js').
-    A pattern with slashes matches the end of the full path, anchored at path components
-    ('Rusty/mezura' matches '.../Rusty/mezura' but not '.../aRusty/mezura'). Full absolute
-    paths work too. Glob syntax is supported in both forms: * ? [..] {..}
-    Matching folders are skipped entirely; the files inside them are not traversed and
-    are not included in the reported count of excluded files.
+    What a pattern names is left out whole, and a directory left out is never entered. A pattern
+    starting with './' or '../', or carrying a root or a drive, names one place and everything
+    under it, read from the directory the command is typed in ('./target', 'D:/work/api/vendor').
+    Any other pattern is a name, matched at any depth under the directory that holds the target,
+    so it sees the target's own name and never a folder above it ('node_modules', '*.min.js',
+    'src/generated'). Names are matched with their case. A trailing '/' means a folder only, so
+    'build/' leaves a script named 'build' alone; 'x/**' means the folder 'x', and '**' alone a
+    whole target. Glob syntax is supported in both forms: * ? [..] {..}
+
+    A '!' in front of a pattern is refused: a directory left out is never entered, so there is
+    nothing to take back. A pattern that names nothing on disk, or a name with a slash in it
+    that matched nothing, is reported.
+
+    A file left out counts among the excluded files of the scan. The files of a directory left
+    out are never seen, so they are not counted there.
+
+    In a project's own configuration the patterns are read from the project directory, so they
+    say the same thing from wherever inside the project the command is typed.
 
     If you are using Windows Powershell, you will need to escape the commas with a backtick: `
     or surround all the arguments with quotation marks:

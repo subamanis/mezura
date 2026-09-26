@@ -48,7 +48,10 @@ pub enum Code {
     /// A style line does not parse and was skipped, the rest of its file applying.
     ConfigStyleInvalid,
     /// The theme that was asked for is not installed, so the default was used.
-    ThemeUnavailable
+    ThemeUnavailable,
+    /// A pattern of the exclusions or of the test code changed nothing. It names nothing on disk,
+    /// a place outside every target, or a name no file or directory of the scan matched.
+    PatternMatchedNothing
 }
 
 impl Code {
@@ -73,7 +76,8 @@ impl Code {
             Self::ConfigSectionRepeated => "config-section-repeated",
             Self::CommandIgnored => "command-ignored",
             Self::ConfigStyleInvalid => "config-style-invalid",
-            Self::ThemeUnavailable => "theme-unavailable"
+            Self::ThemeUnavailable => "theme-unavailable",
+            Self::PatternMatchedNothing => "pattern-matched-nothing"
         }
     }
 
@@ -91,7 +95,7 @@ impl Code {
             | Self::ConflictLineSkipped | Self::ConfigValueIgnored
             | Self::ConfigSectionUnknown | Self::ConfigSectionRepeated
             | Self::CommandIgnored | Self::ConfigStyleInvalid
-            | Self::ThemeUnavailable => Affects::Settings
+            | Self::ThemeUnavailable | Self::PatternMatchedNothing => Affects::Settings
         }
     }
 }

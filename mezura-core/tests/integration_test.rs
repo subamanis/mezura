@@ -804,7 +804,7 @@ fn each_module_keeps_the_files_that_were_counted_under_it() {
 fn an_exclude_pattern_that_does_not_parse_is_an_error_not_a_panic() {
     let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
     let config = EngineConfig {
-        exclude_dirs: vec!["target".to_owned(), "[invalid".to_owned()],
+        exclude_patterns: mezura_core::PathPatterns::of(["target", "[invalid"]),
         threads: Threads::new(1, 1),
         ..EngineConfig::new([format!("{current_dir}/src")])
     };
@@ -812,9 +812,14 @@ fn an_exclude_pattern_that_does_not_parse_is_an_error_not_a_panic() {
     let (languages, _) = Languages::shipped(&config);
 
     let err = run(&config, languages).unwrap_err();
-    // Named as the caller wrote it, not in the anchored form the matcher builds internally
-    assert!(matches!(&err, mezura_core::RunError::InvalidExcludePattern(p) if p == "[invalid"),
+    assert!(matches!(&err, mezura_core::RunError::InvalidExcludePattern(mezura_core::PatternError::InvalidGlob(p)) if p == "[invalid"),
             "expected InvalidExcludePattern carrying the pattern as written, got: {err:?}");
+
+    let taken_back = EngineConfig { exclude_patterns: mezura_core::PathPatterns::of(["!vendor/"]), ..config.clone() };
+    let (languages, _) = Languages::shipped(&taken_back);
+    let err = run(&taken_back, languages).unwrap_err();
+    assert!(matches!(&err, mezura_core::RunError::InvalidExcludePattern(mezura_core::PatternError::TakesBack(p)) if p == "!vendor/"),
+            "{err:?}");
 }
 
 // A bundle is found and read like any other file and then left out of every figure, so the walk's
@@ -1357,4 +1362,62 @@ fn a_pattern_declares_test_code_whole_and_a_later_negative_takes_it_back_while_t
     std::fs::remove_dir_all(&root).unwrap();
     assert!(matches!(refused, Err(mezura_core::RunError::InvalidTestPattern(mezura_core::PatternError::InvalidGlob(ref x))) if x == "[bad"),
             "{refused:?}");
+}
+
+#[test]
+fn an_exclusion_never_reaches_above_the_target_and_a_pattern_that_changes_nothing_is_reported() {
+    let root = std::env::temp_dir().join("mezura-exclude-patterns");
+    let _ = std::fs::remove_dir_all(&root);
+    let proj = root.join("tests").join("proj");
+    for dir in ["src/gen", "vendor/lib", "build"] {
+        std::fs::create_dir_all(proj.join(dir)).unwrap();
+    }
+    std::fs::write(proj.join("src").join("lib.rs"), "pub fn a() {}\n").unwrap();
+    std::fs::write(proj.join("src").join("gen").join("g.rs"), "pub fn g() {}\npub fn h() {}\n").unwrap();
+    std::fs::write(proj.join("vendor").join("lib").join("v.rs"), "pub fn v() {}\npub fn w() {}\npub fn x() {}\n").unwrap();
+    std::fs::write(proj.join("build").join("b.rs"), "pub fn b() {}\npub fn c() {}\npub fn d() {}\npub fn e() {}\n").unwrap();
+    std::fs::write(proj.join("src").join("build"), "#!/bin/sh\necho hi\n").unwrap();
+    let proj_str = proj.to_string_lossy().replace('\\', "/");
+    let root_str = root.to_string_lossy().replace('\\', "/");
+
+    let counted = |target: &str, exclude_patterns: mezura_core::PathPatterns| {
+        let config = EngineConfig { exclude_patterns, threads: Threads::new(1, 2), ..EngineConfig::new([target]) };
+        let (languages, _) = Languages::shipped(&config);
+        let result = run(&config, languages).unwrap();
+        let warned = result.warnings.iter().map(|x| x.subject.clone()).collect::<Vec<_>>();
+        assert!(result.warnings.iter().all(|x| x.code == mezura_core::Code::PatternMatchedNothing), "{:?}", result.warnings);
+        (result.total.lines, result.files_present.excluded_files, warned)
+    };
+    let of = |patterns: &[&str]| mezura_core::PathPatterns::of(patterns);
+    let none : Vec<String> = Vec::new();
+
+    assert_eq!((12, 0, none.clone()), counted(&proj_str, of(&[])));
+    assert_eq!((12, 0, none.clone()), counted(&proj_str, of(&["tests/**"])), "a project under a folder named 'tests' was dropped");
+    assert_eq!((10, 0, none.clone()), counted(&proj_str, of(&["src/gen"])));
+    assert_eq!((10, 0, none.clone()), counted(&proj_str, of(&[&format!("{proj_str}/src/gen")])), "a full path did not exclude what it names");
+    assert_eq!((10, 0, none.clone()), counted(&proj_str, of(&["proj/src/gen"])), "a name does not see the target's own name");
+    assert_eq!((12, 0, vec!["tests/proj/src/gen".to_owned()]), counted(&proj_str, of(&["tests/proj/src/gen"])),
+            "a name reaching above the target matched, or went unreported");
+    assert_eq!((8, 0, none.clone()), counted(&proj_str, of(&["build/"])), "a script named 'build' was left out with the folder");
+    assert_eq!((6, 0, none.clone()), counted(&proj_str, of(&["build"])));
+    assert_eq!((10, 1, none.clone()), counted(&proj_str, of(&["g.rs"])), "a file left out was not counted as excluded");
+    assert_eq!((12, 0, vec![format!("{proj_str}/nowhere")]), counted(&proj_str, of(&[&format!("{proj_str}/nowhere")])),
+            "a place that is not on disk went unreported");
+    assert_eq!((0, 1, none.clone()), counted(&format!("{proj_str}/src"), of(&[&format!("{root_str}/tests")])),
+            "a place above the target does not leave out everything under it");
+    assert_eq!((12, 0, none.clone()), counted(&proj_str, of(&["nowhere"])),
+            "a plain name was reported, though a list shared between projects names folders not every project has");
+
+    let from_project = |patterns: &[&str]| mezura_core::PathPatterns { patterns: patterns.iter().map(|x| (*x).to_owned()).collect(),
+            read_from: Some(proj_str.clone()) };
+    let src = format!("{proj_str}/src");
+    assert_eq!((5, 0, vec!["proj/src/gen".to_owned()]), counted(&src, of(&["proj/src/gen"])),
+            "a target below the project saw the project's name");
+    assert_eq!((3, 0, none.clone()), counted(&src, from_project(&["proj/src/gen"])),
+            "names from the project are read from the project folder's parent for a target inside it");
+    assert_eq!((3, 0, none.clone()), counted(&src, from_project(&[&format!("{proj_str}/src/gen")])));
+    assert_eq!((5, 0, none.clone()), counted(&src, from_project(&[&format!("{proj_str}/vendor")])),
+            "a project's own place outside the target was reported as out of reach");
+
+    std::fs::remove_dir_all(&root).unwrap();
 }

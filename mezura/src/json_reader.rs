@@ -209,6 +209,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
             },
             performance,
             targets,
+            warnings: Vec::new(),
             unreadable_dirs: match root.get("unreadable_dirs") {
                 Some(x) => parse_unreadable_dirs(read_array(x, "unreadable_dirs")?)?,
                 None => Vec::new()
@@ -567,11 +568,12 @@ mod tests {
             performance: Performance { duration_millis: 1180, threads: Threads::new(2, 8) },
             targets: vec![Target::named("backend", "D:/dev/api"), Target::named("backend", "D:/dev/api-v2"),
                     Target::of("D:/dev/web")],
-            unreadable_dirs: vec![UnreadableDirDetails::new("D:/dev/locked".to_owned(), "Access is denied. (os error 5)".to_owned())]
+            unreadable_dirs: vec![UnreadableDirDetails::new("D:/dev/locked".to_owned(), "Access is denied. (os error 5)".to_owned())],
+            warnings: Vec::new()
         };
 
         let mut config = Configuration::new(vec!["./src".to_owned()]);
-        config.engine.exclude_dirs = vec!["target".to_owned(), "*.min.js".to_owned()];
+        config.engine.exclude_patterns = mezura_core::PathPatterns::of(["target", "*.min.js"]);
         config.engine.test_patterns = mezura_core::PathPatterns::of(["spec/", "!spec/fixtures"]);
         config.engine.languages_of_interest = vec!["rust".to_owned()].into();
         config.engine.excluded_languages = vec!["json".to_owned()].into();

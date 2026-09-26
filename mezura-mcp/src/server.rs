@@ -81,9 +81,11 @@ pub struct CountArguments {
     #[schemars(description = "The directory or file to count. An absolute path is safest; a \
             relative one is taken from the directory this server was started in.")]
     pub path: String,
-    #[schemars(description = "Paths to leave out, as glob patterns. A pattern with no slash in it \
-            leaves out a file or directory of that name at any depth ('node_modules', '*.min.js'); \
-            a pattern with slashes matches the end of the whole path ('src/generated').")]
+    #[schemars(description = "Paths to leave out, as glob patterns. A pattern starting with './' \
+            or an absolute one names one place and everything under it; any other pattern is a \
+            name matched at any depth under the directory that holds the path being counted, so \
+            it never reaches a folder above it ('node_modules', '*.min.js', 'src/generated'). A \
+            trailing '/' means a directory only.")]
     pub exclude: Option<Vec<String>>,
     #[schemars(description = "Count only these languages and leave every other one out, named \
             either by language ('rust', 'c++') or by any extension they claim ('js' names \

@@ -155,12 +155,19 @@ pub fn await_checkout_removals() {
     }
 }
 
+// The tree is written into a folder named like the repository's own, inside one of this run's, so
+// that a name pattern sees the same folders on both sides of the comparison
 pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
     let repository = resolved.repository.as_str();
-    let path = normalise_separators(&std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned()
+    let holder = normalise_separators(&std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned()
             + &resolved.commit[..resolved.commit.len().min(12)]
             + "-" + &std::process::id().to_string()).to_string_lossy()).into_owned();
-    let _ = std::fs::remove_dir_all(&path);
+    let _ = std::fs::remove_dir_all(&holder);
+    let name = Path::new(repository.trim_end_matches('/')).file_name()
+            .map_or_else(|| "repository".to_owned(), |x| x.to_string_lossy().into_owned());
+    let path = format!("{holder}/{name}");
+    std::fs::create_dir_all(&holder).map_err(|error| GitError::Refused { doing: "making room for the revision",
+            message: error.to_string() })?;
 
     // git writes the tree out on one thread unless told otherwise, and a git too old to know the
     // option ignores it, so no version check guards it
@@ -168,6 +175,7 @@ pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
             "worktree", "add", "--detach", "--quiet", &path, &resolved.commit])
             .output().map_err(GitError::NotInstalled)?;
     if !outcome.status.success() {
+        let _ = std::fs::remove_dir_all(&holder);
         return Err(GitError::Refused { doing: "writing out the revision",
                 message: String::from_utf8_lossy(&outcome.stderr).trim().to_owned() });
     }
@@ -176,28 +184,52 @@ pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
 }
 
 // What a killed run left behind. 'prune' alone clears nothing while the directory still exists, so
-// every worktree under the temp directory carrying this prefix and another process's id is removed
-// whole, and the prune afterwards drops whatever registration has already lost its directory.
-// Called once per run and never from inside 'checkout': the prune walking the registrations while a
-// parallel write is half registered is the one interference between them.
+// every worktree under the temp directory whose holding folder carries this prefix and another
+// process's id is removed whole, and the prune afterwards drops whatever registration has already
+// lost its directory. A holding folder whose worktree is already gone is removed last, since a run
+// killed between the two leaves it empty. Called once per run and never from inside 'checkout'. The
+// prune walking the registrations while a parallel write is half registered is the one interference
+// between them.
 pub fn remove_leftover_checkouts(repository: &str) {
     let ours = format!("-{}", std::process::id());
-    let temp = fold_for_comparison(&std::env::temp_dir().to_string_lossy()).into_owned();
+    let temp = std::env::temp_dir();
+    let folded_temp = fold_for_comparison(&temp.to_string_lossy()).into_owned();
+    let is_a_leftover = |name: &str| is_a_holder_of_a_checkout(name) && !name.ends_with(&ours);
     if let Ok(listed) = Command::new("git").args(["-C", repository, "worktree", "list", "--porcelain"]).output() {
         for line in String::from_utf8_lossy(&listed.stdout).lines() {
             let Some(path) = line.strip_prefix("worktree ") else { continue };
-            let name = Path::new(path).file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
-            if name.starts_with(CHECKOUT_PREFIX) && !name.ends_with(&ours)
-                    && fold_for_comparison(path).starts_with(&temp) {
-                let _ = Command::new("git").args(["-C", repository, "worktree", "remove", "--force", path]).output();
+            let Some(holder) = Path::new(path).parent() else { continue };
+            let name = holder.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+            if is_a_leftover(&name) && fold_for_comparison(path).starts_with(&folded_temp) {
+                remove_worktree(repository, path);
             }
         }
     }
     let _ = Command::new("git").args(["-C", repository, "worktree", "prune"]).output();
+    if let Ok(entries) = std::fs::read_dir(&temp) {
+        for holder in entries.flatten().filter(|entry| is_a_leftover(&entry.file_name().to_string_lossy())) {
+            let _ = std::fs::remove_dir_all(holder.path());
+        }
+    }
 }
 
 fn remove_worktree(repository: &str, path: &str) {
     let _ = Command::new("git").args(["-C", repository, "worktree", "remove", "--force", path]).output();
+    if let Some(holder) = Path::new(path).parent() {
+        let _ = std::fs::remove_dir_all(holder);
+    }
+}
+
+// The exact shape 'checkout' writes, since the sweep deletes what it recognises
+fn is_a_holder_of_a_checkout(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(CHECKOUT_PREFIX) else {
+        return false;
+    };
+    match rest.split_once('-') {
+        Some((commit, pid)) => commit.len() == 12 && commit.chars().all(|x| x.is_ascii_hexdigit())
+                && !pid.is_empty() && pid.chars().all(|x| x.is_ascii_digit()),
+        None => false
+    }
 }
 
 // None when git ran and answered no, which every caller turns into its own words; an error only
@@ -255,6 +287,9 @@ mod tests {
             let checkout = checkout(&resolve_revision(&root, "HEAD").unwrap()).unwrap();
             assert!(Path::new(&checkout.path).join("mezura/src/main.rs").exists(),
                     "the revision was not written out to {}", checkout.path);
+            assert_eq!(Path::new(&root).file_name(), Path::new(&checkout.path).file_name(),
+                    "the checkout is not named like the repository's folder");
+            assert!(Path::new(&checkout.path).parent().unwrap().file_name().unwrap().to_string_lossy().starts_with(CHECKOUT_PREFIX));
             assert!(checkout.find_target_of("mezura-core/src/").is_some());
             assert_eq!(None, checkout.find_target_of("a-directory-this-commit-never-had/"));
             // The repository root's prefix is empty, and its target must not end in a separator
@@ -265,6 +300,22 @@ mod tests {
         };
         await_checkout_removals();
         assert!(!Path::new(&path).exists(), "the checkout outlived the run that made it");
+        assert!(!Path::new(&path).parent().unwrap().exists(), "the folder holding the checkout outlived it");
+
+        let killed = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + "0123456789ab-1");
+        let ours = std::env::temp_dir().join(format!("{CHECKOUT_PREFIX}0123456789ab-{}", std::process::id()));
+        let somebody_elses = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + "notes");
+        for folder in [&killed, &ours, &somebody_elses] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        remove_leftover_checkouts(&root);
+        assert!(!killed.exists(), "the empty folder a killed run left was not swept");
+        assert!(ours.exists(), "a folder of this run was swept");
+        assert!(somebody_elses.exists(), "a folder that only starts with the prefix was swept");
+        std::fs::remove_dir_all(&ours).unwrap();
+        std::fs::remove_dir_all(&somebody_elses).unwrap();
+        assert!(is_a_holder_of_a_checkout("mezura-diff-0123456789ab-1") && !is_a_holder_of_a_checkout("mezura-diff-0123456789a-1")
+                && !is_a_holder_of_a_checkout("mezura-diff-0123456789ab-") && !is_a_holder_of_a_checkout("mezura-diff-0123456789ab-x"));
     }
 
     #[test]

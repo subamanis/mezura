@@ -1312,7 +1312,7 @@ fn count_languages_hidden_by_top(pairs: Option<&[super::diff::ModulePair]>, base
 fn format_note_sentence(theme: &Theme, note: &super::diff::Note) -> String {
     use super::diff::Note;
     let sentence = match note {
-        Note::SettingsAdopted { from, settings } => {
+        Note::SettingsAdopted { from, settings, naming_nothing } => {
             let one = settings.len() == 1;
             let (was, value, it) = if one {("has", "value", "it")} else {("have", "values", "them")};
             // Nothing can be typed to keep the keywords or the tests switched on
@@ -1324,8 +1324,13 @@ fn format_note_sentence(theme: &Theme, note: &super::diff::Note) -> String {
                 all if all == settings.len() => format!(" Provide {it} explicitly in the command line to keep your own."),
                 _ => format!(" Provide '{}' explicitly in the command line to keep your own.", typeable.join("', '"))
             };
+            let nowhere = match naming_nothing.len() {
+                0 => String::new(),
+                1 => format!(" '{}' of them names nothing on this machine.", naming_nothing[0]),
+                _ => format!(" '{}' of them name nothing on this machine.", naming_nothing.join("', '"))
+            };
             format!("'{}' {was} been overridden by the {value} recorded in '{from}', so both \
-                    readings are counted the same way.{advice}",
+                    readings are counted the same way.{advice}{nowhere}",
                     settings.join("', '"))
         },
         Note::SettingsDiffer { baseline, subject, settings } => format!(
@@ -2664,10 +2669,11 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
         targets: &[mezura_core::Target]) -> Vec<&'static str>
 {
     // Both sides as the entry would have recorded them, which for a project's log means relative to
-    // the project: the same tree counted from two checkouts of it is one measurement, and only
+    // the project. The same tree counted from two checkouts of it is one measurement, and only
     // spelling it absolutely would make the two look different.
+    let project = config.view.find_project_of_the_log();
     let as_recorded = |targets: &[mezura_core::Target]| {
-        let mut sorted = match config.view.find_project_of_the_log() {
+        let mut sorted = match &project {
             Some(project) => targets.iter().map(|target| mezura_core::Target { module: target.module.clone(),
                     path: config_manager::format_path_inside(&project.project_dir, &target.path) }).collect(),
             None => targets.to_vec()
@@ -2675,17 +2681,24 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
         sorted.sort();
         sorted
     };
+    let patterns_as_recorded = |patterns: &[String]| match &project {
+        Some(project) => patterns.iter()
+                .map(|pattern| config_manager::format_pattern_inside(&project.project_dir, pattern)).collect(),
+        None => patterns.to_vec()
+    };
 
     let mut changed = Vec::new();
-    // The scope cannot carry the targets, so they are compared beside it: the same './src'
-    // declared over two different trees is two different measurements
+    // The scope cannot carry the targets, so they are compared beside it. The same './src'
+    // declared over two different trees is two different measurements.
     if as_recorded(&entry.targets) != as_recorded(targets) {
         changed.push(config_manager::TARGETS);
     }
+    let mut scope = super::diff::scope_of(&config.engine, config.view.counting);
+    scope.exclude = patterns_as_recorded(&scope.exclude);
+    scope.tests = patterns_as_recorded(&scope.tests);
     // The log holds no keyword counts and no tests, so a run that only stopped counting either, or
     // declared its tests with other patterns, changed nothing the log records
-    changed.extend(super::diff::find_settings_that_differ(&entry.scope,
-            &super::diff::scope_of(&config.engine, config.view.counting))
+    changed.extend(super::diff::find_settings_that_differ(&entry.scope, &scope)
             .into_iter().filter(|setting| ![super::diff::HIDE_KEYWORDS, super::diff::HIDE_TESTS,
                     config_manager::TESTS].contains(setting)));
 
@@ -2986,7 +2999,7 @@ mod tests {
             files_hidden: 0,
             result: RunResult {total, per_language, modules, nested_languages: HashMap::new(), tests: HashMap::new(),
                     faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present, targets: Vec::new(),
-                    unreadable_dirs: Vec::new(),
+                    unreadable_dirs: Vec::new(), warnings: Vec::new(),
                     performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}}
         }
     }
@@ -2994,7 +3007,8 @@ mod tests {
     fn groups_from<'a>(modules: &'a [ModuleResult], config: &crate::config_manager::Configuration) -> Vec<Group<'a>> {
         let result = RunResult {per_language: HashMap::new(),
                 modules: Vec::new(), nested_languages: HashMap::new(), tests: HashMap::new(), total: Stats::default(), faulty_files: Vec::new(),
-                skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
+                skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
+                warnings: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
         let mut result = result;
         result.modules = modules.iter().map(|x| ModuleResult {
             name: x.name.clone(),
@@ -3510,7 +3524,8 @@ mod tests {
         let of_modules = |modules: Vec<ModuleResult>| RunResult {
             per_language: content_info.clone(), modules, nested_languages: HashMap::new(), tests: HashMap::new(),
             total: crate::test_support::plain_stats_of(23, 485500, 10934, 7643, 650, hashmap![]),
-            faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
+            faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
+            warnings: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
         let single = || vec![ModuleResult {name: None, per_language: content_info.clone(),
                 total: Stats::total_of(&content_info), nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}];
 
@@ -3548,7 +3563,7 @@ mod tests {
         let of_modules = |modules: Vec<ModuleResult>| RunResult {
             per_language: content_info.clone(), modules, nested_languages: HashMap::new(), tests: HashMap::new(),
             total: total.clone(), faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(),
-            targets: vec![mezura_core::Target::of("D:/x")], unreadable_dirs: Vec::new(),
+            targets: vec![mezura_core::Target::of("D:/x")], unreadable_dirs: Vec::new(), warnings: Vec::new(),
             performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
 
         let split = || vec![of_module(Some("web"), &["HTML"]), of_module(None, &["Python", "Rust"])];
@@ -3696,7 +3711,7 @@ mod tests {
                     files: HashMap::new() }],
             nested_languages: nested.clone(), tests: HashMap::new(), total: total.clone(), faulty_files: Vec::new(),
             skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
-            performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
+            warnings: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
 
         for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
             for top in [None, Some(1), Some(3), Some(6)] {
@@ -3814,9 +3829,13 @@ mod tests {
         colored::control::set_override(false);
         let theme = Theme::default();
         let sentence_of = |settings: Vec<&'static str>| format_note_sentence(&theme,
-                &crate::diff::Note::SettingsAdopted { from: "old.json".to_owned(), settings }).replace('\n', " ");
+                &crate::diff::Note::SettingsAdopted { from: "old.json".to_owned(), settings, naming_nothing: Vec::new() })
+                .replace('\n', " ");
 
         assert!(sentence_of(vec!["exclude"]).contains("Provide it explicitly"));
+        let nowhere = format_note_sentence(&theme, &crate::diff::Note::SettingsAdopted { from: "old.json".to_owned(),
+                settings: vec!["exclude"], naming_nothing: vec!["D:/elsewhere/gen".to_owned()] }).replace('\n', " ");
+        assert!(nowhere.contains("'D:/elsewhere/gen' of them names nothing on this machine"), "{nowhere}");
         let hidden = sentence_of(vec![crate::diff::HIDE_TESTS]);
         assert!(hidden.contains("'hide tests' has been overridden") && !hidden.contains("Provide"), "{hidden}");
         assert!(!sentence_of(vec![crate::diff::HIDE_KEYWORDS, crate::diff::HIDE_TESTS]).contains("Provide"));
@@ -4036,6 +4055,16 @@ mod tests {
         // nor one that declared its tests with other patterns, since the entry holds no test count
         let declared = entry_of(|then| {then.engine.test_patterns = mezura_core::PathPatterns::of(["spec/"]);});
         assert!(find_settings_changed_since(&declared, &config, &[]).is_empty());
+
+        let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        config.view.local_dir = Some(crate::paths::LocalDir::of("/home/other/portal"));
+        config.engine.exclude_patterns = mezura_core::PathPatterns::of(["/home/other/portal/build/", "node_modules"]);
+        let mut of_another_checkout = entry_of(|_| {});
+        of_another_checkout.scope.exclude = vec!["./build/".to_owned(), "node_modules".to_owned()];
+        assert!(find_settings_changed_since(&of_another_checkout, &config, &[]).is_empty(),
+                "a place inside the project was compared in its absolute spelling");
+        of_another_checkout.scope.exclude = vec!["./build".to_owned(), "node_modules".to_owned()];
+        assert_eq!(vec!["exclude"], find_settings_changed_since(&of_another_checkout, &config, &[]));
     }
 
     // The log of a project is shared the way its code is, so an entry from another checkout of it

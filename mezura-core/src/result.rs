@@ -6,6 +6,7 @@ use crate::{CountingModel, Keyword, Stats};
 use crate::domain::FileStats;
 use crate::engine::config::{Target, Threads};
 use crate::engine::modules::{ModuleId, Modules};
+use crate::warnings::Warning;
 
 /// Everything one run of [`crate::run`] produced.
 #[derive(Debug,Clone)]
@@ -45,7 +46,9 @@ pub struct RunResult {
     pub targets: Vec<Target>,
     /// Directories that could not be opened, so everything inside them is missing from every number
     /// above.
-    pub unreadable_dirs: Vec<UnreadableDirDetails>
+    pub unreadable_dirs: Vec<UnreadableDirDetails>,
+    /// A pattern of the exclusions or of the test code that changed nothing, which is no error.
+    pub warnings: Vec<Warning>
 }
 
 impl RunResult {
@@ -83,7 +86,7 @@ impl RunResult {
     // leaving it out would make 'has_modules' say no and take the whole block out of the document
     // exactly when the scan came back empty.
     pub(crate) fn of_nothing(files_present: FilesPresent, performance: Performance, modules: &Modules,
-            targets: Vec<Target>, unreadable_dirs: Vec<UnreadableDirDetails>) -> Self {
+            targets: Vec<Target>, unreadable_dirs: Vec<UnreadableDirDetails>, warnings: Vec<Warning>) -> Self {
         RunResult {
             per_language: HashMap::new(),
             total: Stats::default(),
@@ -102,7 +105,8 @@ impl RunResult {
             files_present,
             performance,
             targets,
-            unreadable_dirs
+            unreadable_dirs,
+            warnings
         }
     }
 }
@@ -386,8 +390,8 @@ pub enum RunError {
     /// The targets could not be turned into places to visit: a path that names nothing, a pattern
     /// that does not parse or matches nothing, or one place given under two names.
     InvalidTargets(crate::engine::targets::TargetError),
-    /// An exclude pattern does not parse, quoted as the caller wrote it.
-    InvalidExcludePattern(String),
+    /// A pattern of [`crate::EngineConfig::exclude_patterns`] could not be read.
+    InvalidExcludePattern(crate::engine::path_patterns::PatternError),
     /// A pattern of [`crate::EngineConfig::test_patterns`] could not be read.
     InvalidTestPattern(crate::engine::path_patterns::PatternError),
     /// The operating system refused every thread of one side. Refusing some but not all is not an
@@ -413,7 +417,7 @@ impl std::fmt::Display for RunError {
             Self::NoTargets => write!(f, "The configuration names no directories or files, so there is nothing to count."),
             Self::LanguagesFromAnotherConfig => write!(f, "The languages were resolved against a configuration that selects a different set of them than the one this run was given, so the counts would not be the ones the settings describe. Resolve them against the same configuration you are counting with."),
             Self::InvalidTargets(x) => write!(f, "{x} Nothing was counted."),
-            Self::InvalidExcludePattern(x) => write!(f, "'{x}' is not a valid exclude pattern, so nothing was counted."),
+            Self::InvalidExcludePattern(x) => write!(f, "{x} Nothing was counted."),
             Self::InvalidTestPattern(x) => write!(f, "{x} Nothing was counted."),
             Self::NoThreadsAvailable { side, error } => write!(f, "The operating system refused every {side} thread, so the run could not start: {error}"),
             Self::IncompleteRun { worker_panic } => write!(f, "A worker thread died mid-run, so the counts would have been incomplete and were discarded: {worker_panic}")
@@ -458,7 +462,7 @@ mod tests {
         RunResult::of_nothing(
                 FilesPresent { total_files: relevant, relevant_files: relevant, excluded_files: 0 },
                 Performance { duration_millis: 0, threads: Threads::new(1, 1) },
-                &Modules::of(&[]), Vec::new(), unreadable)
+                &Modules::of(&[]), Vec::new(), unreadable, Vec::new())
     }
 
     #[test]

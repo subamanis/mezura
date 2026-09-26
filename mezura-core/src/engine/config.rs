@@ -332,8 +332,9 @@ pub struct EngineConfig {
     /// beside them, so the flags that filter a pattern's matches and the flags the scan obeys
     /// cannot disagree. A relative path is joined to the working directory at that moment.
     pub targets: Vec<Target>,
-    /// Glob patterns for directories and files to skip, matched at any depth.
-    pub exclude_dirs: Vec<String>,
+    /// Glob patterns for the directories and files to leave out, read as [`PathPatterns`] says. A
+    /// `!` pattern is refused here, since a directory left out is never entered.
+    pub exclude_patterns: PathPatterns,
     /// Count only these. Empty means all of them.
     pub languages_of_interest: LanguageNames,
     /// Count everything but these.
@@ -388,7 +389,7 @@ impl Default for EngineConfig {
     fn default() -> Self {
         EngineConfig {
             targets: Vec::new(),
-            exclude_dirs: Vec::new(),
+            exclude_patterns: PathPatterns::default(),
             languages_of_interest: LanguageNames::default(),
             excluded_languages: LanguageNames::default(),
             forced_languages: ForcedLanguages::default(),

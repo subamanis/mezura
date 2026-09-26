@@ -5,7 +5,8 @@ use colored::{ColoredString, Colorize};
 use colored::Color;
 use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, PathPatterns, ScanSkip, Target, Threads};
 use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
-use mezura_core::engine::path_patterns::{is_a_path_pattern, validate_test_patterns};
+use mezura_core::engine::path_patterns::{absolutize_path_pattern, is_a_path_pattern, validate_exclude_patterns,
+        validate_test_patterns};
 
 use super::message_printer::{Formatted, wrap_message};
 use super::paths::LocalDir;
@@ -729,7 +730,7 @@ impl TypedExplicitlyOnCommandLine {
     // Exhaustive on purpose: a new field of the builder has to be decided here, in or out, before
     // this compiles again.
     fn of(builder: &ConfigurationBuilder) -> Self {
-        let ConfigurationBuilder { exclude_dirs, test_patterns, languages_of_interest, excluded_languages,
+        let ConfigurationBuilder { exclude_patterns, test_patterns, languages_of_interest, excluded_languages,
             forced_languages, counting, should_search_in_dotted, count_minified, count_generated,
             count_not_code, no_gitignore, no_ignore_files, no_heuristics, no_shebang, hidden,
             targets: _, targets_source: _, threads: _, should_show_faulty_files: _,
@@ -740,7 +741,7 @@ impl TypedExplicitlyOnCommandLine {
             tests_breakdown: _, styles: _, config_styles: _, theme_styles: _, typed_explicitly: _ } = builder;
 
         TypedExplicitlyOnCommandLine {
-            exclude: exclude_dirs.is_some(),
+            exclude: exclude_patterns.is_some(),
             tests: test_patterns.is_some(),
             languages: languages_of_interest.is_some(),
             excluded_languages: excluded_languages.is_some(),
@@ -769,7 +770,7 @@ pub struct ConfigurationBuilder {
     // error has to name the file the reader cannot see failing. Absent from 'add_missing_fields',
     // being bookkeeping about the merge and not a merged value.
     pub targets_source:           Option<String>,
-    pub exclude_dirs:             Option<Vec<String>>,
+    pub exclude_patterns:         Option<PathPatterns>,
     pub test_patterns:            Option<PathPatterns>,
     pub languages_of_interest:    Option<Vec<String>>,
     pub excluded_languages:       Option<Vec<String>>,
@@ -826,7 +827,7 @@ pub struct ConfigurationBuilder {
 impl ConfigurationBuilder {
     pub fn add_missing_fields(&mut self, config: Self) -> &mut Self {
         if self.targets.is_none() {self.targets = config.targets};
-        if self.exclude_dirs.is_none() {self.exclude_dirs = config.exclude_dirs};
+        if self.exclude_patterns.is_none() {self.exclude_patterns = config.exclude_patterns};
         if self.test_patterns.is_none() {self.test_patterns = config.test_patterns};
         if self.languages_of_interest.is_none() {self.languages_of_interest = config.languages_of_interest};
         if self.excluded_languages.is_none() {self.excluded_languages = config.excluded_languages};
@@ -863,7 +864,7 @@ impl ConfigurationBuilder {
     pub fn forget_what_changes_the_numbers(mut self) -> Self {
         // Exhaustive on purpose: a new field of the builder has to be decided here, in or out,
         // before this compiles again.
-        let ConfigurationBuilder { targets, exclude_dirs, test_patterns, languages_of_interest, excluded_languages,
+        let ConfigurationBuilder { targets, exclude_patterns, test_patterns, languages_of_interest, excluded_languages,
             forced_languages, counting, should_search_in_dotted, count_minified, count_generated,
             count_not_code, no_gitignore, no_ignore_files, no_heuristics, no_shebang,
             threads: _, should_show_faulty_files: _, should_show_skipped_files: _, hidden: _,
@@ -876,7 +877,7 @@ impl ConfigurationBuilder {
             styles: _, theme_styles: _, typed_explicitly: _ } = &mut self;
 
         *targets = None;
-        *exclude_dirs = None;
+        *exclude_patterns = None;
         *test_patterns = None;
         *languages_of_interest = None;
         *excluded_languages = None;
@@ -898,7 +899,7 @@ impl ConfigurationBuilder {
     // to fill in" while that one field is still empty, the default configuration is never read at
     // all, and the value it holds for that field is dropped without a word.
     pub fn has_missing_fields(&self) -> bool {
-        self.targets.is_none() || self.exclude_dirs.is_none() || self.test_patterns.is_none() ||
+        self.targets.is_none() || self.exclude_patterns.is_none() || self.test_patterns.is_none() ||
         self.languages_of_interest.is_none() ||
         self.excluded_languages.is_none() || self.forced_languages.is_none() ||
         self.threads.is_none() || self.counting.is_none() || self.should_search_in_dotted.is_none() ||
@@ -974,7 +975,7 @@ impl ConfigurationBuilder {
             typed_explicitly: self.typed_explicitly,
             engine: EngineConfig {
                 targets: self.targets.clone().unwrap_or_default(),
-                exclude_dirs: self.exclude_dirs.clone().unwrap_or_default(),
+                exclude_patterns: self.exclude_patterns.clone().unwrap_or_default(),
                 languages_of_interest: LanguageNames::of_written_form(
                         &self.languages_of_interest.clone().unwrap_or_default()),
                 excluded_languages: LanguageNames::of_written_form(
@@ -1151,12 +1152,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 }
                 config_builder.targets = Some(parsed)
             },
-            EXCLUDE => config_builder.exclude_dirs = Some(parse_or_refuse(EXCLUDE, arguments,
-                    |x| Some(super::args::parse_paths_to_vec(x)).filter(|vec| !vec.is_empty()
-                            && mezura_core::engine::targets::validate_exclude_patterns(vec).is_ok()))?),
-            TESTS => config_builder.test_patterns = Some(parse_or_refuse(TESTS, arguments,
-                    |x| Some(super::args::parse_paths_to_vec(x)).filter(|vec| !vec.is_empty()
-                            && validate_test_patterns(vec).is_ok()).map(PathPatterns::of))?),
+            EXCLUDE => config_builder.exclude_patterns = Some(parse_patterns_or_refuse(EXCLUDE, arguments, validate_exclude_patterns)?),
+            TESTS => config_builder.test_patterns = Some(parse_patterns_or_refuse(TESTS, arguments, validate_test_patterns)?),
             LANGUAGES => config_builder.languages_of_interest = Some(parse_or_refuse(LANGUAGES, arguments,
                     |x| Some(super::args::parse_languages_to_vec(x)).filter(|vec| !vec.is_empty()))?),
             EXCLUDE_LANGUAGES => config_builder.excluded_languages = Some(parse_or_refuse(EXCLUDE_LANGUAGES, arguments,
@@ -1379,6 +1376,24 @@ fn parse_or_refuse<T>(command: &str, arguments: &str,
     })
 }
 
+// A place is stored absolute, as a target is, so a saved configuration names it from anywhere
+fn parse_patterns_or_refuse(command: &str, arguments: &str,
+        validate: impl FnOnce(&[String]) -> Result<(), mezura_core::PatternError>) -> Result<PathPatterns, ArgParsingError>
+{
+    let patterns = super::args::parse_paths_to_vec(arguments);
+    if patterns.is_empty() {
+        message_printer::print_help_message_for_command(command);
+        return Err(refuse_argument(arguments, command.to_owned()));
+    }
+    if let Err(why) = validate(&patterns) {
+        eprintln!("\n{}", wrap_message(&why.to_string()).red());
+        message_printer::print_help_message_for_command(command);
+        return Err(refuse_argument(arguments, command.to_owned()));
+    }
+
+    Ok(PathPatterns::of(patterns.iter().map(|pattern| absolutize_path_pattern(pattern))))
+}
+
 fn take_flag(segment: &str, command: &str) -> Result<bool, ArgParsingError> {
     if has_any_args(segment) {
         message_printer::print_help_message_for_command(command);
@@ -1424,7 +1439,8 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
     resolve_invalid_config_fields(config_builder, &changes_the_numbers, &label)?;
 
     local_config.targets = local_config.targets.map(|declared| rebase_targets_on(&local.project_dir, declared));
-    local_config.test_patterns = local_config.test_patterns.map(|declared| rebase_test_patterns_on(&local.project_dir, declared));
+    local_config.exclude_patterns = local_config.exclude_patterns.map(|declared| rebase_patterns_on(&local.project_dir, declared));
+    local_config.test_patterns = local_config.test_patterns.map(|declared| rebase_patterns_on(&local.project_dir, declared));
     config_builder.add_missing_fields(local_config);
 
     Ok(true)
@@ -1511,7 +1527,7 @@ fn rebase_targets_on(project_dir: &str, targets: Vec<Target>) -> Vec<Target> {
 }
 
 // The project directory rides along, so the names are read from it too.
-fn rebase_test_patterns_on(project_dir: &str, declared: PathPatterns) -> PathPatterns {
+fn rebase_patterns_on(project_dir: &str, declared: PathPatterns) -> PathPatterns {
     let patterns = declared.patterns.into_iter().map(|pattern| {
         let (negation, place) = split_negation(&pattern);
         if !is_a_path_pattern(place) {
@@ -1550,7 +1566,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
     // Destructured with no '..', so a new field of the builder stops the build here until somebody
     // decides whether it belongs in the match below.
     let ConfigurationBuilder {
-            targets, exclude_dirs, test_patterns, forced_languages, threads, counting, should_search_in_dotted,
+            targets, exclude_patterns, test_patterns, forced_languages, threads, counting, should_search_in_dotted,
             count_minified, count_generated, count_not_code, should_show_faulty_files,
             should_show_skipped_files, hidden,
             no_gitignore, no_ignore_files, no_heuristics, no_shebang, theme_name, compare_level,
@@ -1583,7 +1599,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             NO_IGNORE_FILES => no_ignore_files.is_some(),
             NO_HEURISTICS => no_heuristics.is_some(),
             NO_SHEBANG => no_shebang.is_some(),
-            EXCLUDE => exclude_dirs.is_some(),
+            EXCLUDE => exclude_patterns.is_some(),
             TESTS => test_patterns.is_some(),
             FORCE_LANGUAGE => forced_languages.is_some(),
             THEME => theme_name.is_some(),
@@ -1759,6 +1775,7 @@ mod tests {
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned(), String::new())), create_config_from_args("./ --exclude"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned(), String::new())), create_config_from_args("./ --exclude   --threads 4"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned(), "[invalid".to_owned())), create_config_from_args("./ --exclude [invalid"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("exclude".to_owned(), "build, !vendor/".to_owned())), create_config_from_args("./ --exclude build, !vendor/"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("tests".to_owned(), String::new())), create_config_from_args("./ --tests"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("tests".to_owned(), "[invalid".to_owned())), create_config_from_args("./ --tests [invalid"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("tests".to_owned(), "!".to_owned())), create_config_from_args("./ --tests !"));
@@ -1800,11 +1817,14 @@ mod tests {
                 create_config_from_args("./ --no-gitignore").unwrap());
         assert_eq!(conf("./", |c| {c.view.set_should_show_faulty_files(true);}),
                 create_config_from_args("./ --show-faulty-files").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()]; c.typed_explicitly.exclude = true;}),
+        assert_eq!(conf("./", |c| {c.engine.exclude_patterns = PathPatterns::of(["a", "b", "c"]); c.typed_explicitly.exclude = true;}),
                 create_config_from_args("./ --exclude a,b ,  c ").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.exclude_dirs = vec!["a/path".to_owned(),"b/path".to_owned()]; c.typed_explicitly.exclude = true;}),
+        assert_eq!(conf("./", |c| {c.engine.exclude_patterns = PathPatterns::of(["a/path", "b/path"]); c.typed_explicitly.exclude = true;}),
                 create_config_from_args("./ --exclude \"a/path\", \"b/path\"").unwrap());
-        assert_eq!(conf("./", |c| {c.engine.test_patterns = PathPatterns::of(["spec", "!spec/fixtures", "./gen"]); c.typed_explicitly.tests = true;}),
+        let cwd = crate::paths::normalise_separators(&std::env::current_dir().unwrap().to_string_lossy()).into_owned();
+        assert_eq!(conf("./", |c| {c.engine.exclude_patterns = PathPatterns::of([format!("{cwd}/gen/"), "D:/x/**".to_owned()]); c.typed_explicitly.exclude = true;}),
+                create_config_from_args("./ --exclude ./gen/, D:/x/**").unwrap(), "a place was not stored absolute, as a target is");
+        assert_eq!(conf("./", |c| {c.engine.test_patterns = PathPatterns::of(["spec".to_owned(), "!spec/fixtures".to_owned(), format!("{cwd}/gen")]); c.typed_explicitly.tests = true;}),
                 create_config_from_args("./ --tests spec, !spec/fixtures ,  ./gen").unwrap());
         assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()].into(); c.typed_explicitly.languages = true;}),
                 create_config_from_args("./ --languages a,b,c").unwrap());
@@ -2338,7 +2358,7 @@ mod tests {
         // which is what this machine's saved defaults are allowed to answer for under a project's
         // own configuration
         let kept = donor().forget_what_changes_the_numbers();
-        assert_eq!((None, None, None, None, None, None), (kept.targets, kept.exclude_dirs, kept.test_patterns,
+        assert_eq!((None, None, None, None, None, None), (kept.targets, kept.exclude_patterns, kept.test_patterns,
                 kept.languages_of_interest, kept.excluded_languages, kept.forced_languages));
         assert_eq!((None, None, None, None, None, None, None), (kept.counting, kept.should_search_in_dotted,
                 kept.count_minified, kept.count_generated, kept.count_not_code, kept.no_gitignore,
@@ -2375,7 +2395,8 @@ mod tests {
                 "===> exclude\nnode_modules\n\n===> languages\nrust,java\n\n===> top\n7\n");
 
         let found = create_config_from_args(&format!("{project}/src")).unwrap();
-        assert_eq!(vec!["node_modules".to_owned()], found.engine.exclude_dirs);
+        let of_the_project = PathPatterns { patterns: vec!["node_modules".to_owned()], read_from: Some(project.clone()) };
+        assert_eq!(of_the_project, found.engine.exclude_patterns);
         assert_eq!(vec!["rust".to_owned(), "java".to_owned()], found.engine.languages_of_interest.to_written_form());
         assert_eq!(Some(7), found.view.top_n);
         assert_eq!(Some(project.clone() + "/.mezura/config.txt"),
@@ -2385,11 +2406,11 @@ mod tests {
         let overridden = create_config_from_args(&format!("{project}/src --languages python --top 2")).unwrap();
         assert_eq!(vec!["python".to_owned()], overridden.engine.languages_of_interest.to_written_form());
         assert_eq!(Some(2), overridden.view.top_n);
-        assert_eq!(vec!["node_modules".to_owned()], overridden.engine.exclude_dirs,
+        assert_eq!(of_the_project, overridden.engine.exclude_patterns,
                 "what the command line did not mention was dropped along with what it did");
 
         let ignored = create_config_from_args(&format!("{project}/src --{NO_LOCAL}")).unwrap();
-        assert!(ignored.engine.exclude_dirs.is_empty() && ignored.view.top_n.is_none());
+        assert!(ignored.engine.exclude_patterns.is_empty() && ignored.view.top_n.is_none());
         assert_eq!(None, ignored.view.local_dir);
 
         std::fs::remove_dir_all(&project).unwrap();
@@ -2416,7 +2437,7 @@ mod tests {
 
         let survived = create_config_from_args(&format!("{looks}/src")).unwrap();
         assert_eq!(None, survived.view.top_n);
-        assert_eq!(vec!["build".to_owned()], survived.engine.exclude_dirs,
+        assert_eq!(vec!["build".to_owned()], survived.engine.exclude_patterns.patterns,
                 "one unreadable value took the rest of the file with it");
 
         let stopped = create_config_from_args(&format!("{counts}/src"));
@@ -2438,7 +2459,7 @@ mod tests {
 
         let loaded = create_config_from_args(&format!("{project}/src --{LOAD} zz-named-wins")).unwrap();
         assert_eq!(Some(5), loaded.view.top_n);
-        assert!(loaded.engine.exclude_dirs.is_empty(), "the project's settings were merged under a named configuration");
+        assert!(loaded.engine.exclude_patterns.is_empty(), "the project's settings were merged under a named configuration");
         // Found all the same, since '--save-local' writes to the folder this run found whatever
         // else was asked for, and only what it holds was left unused
         assert!(loaded.view.local_dir.is_some_and(|x| !x.configuration_applied));
@@ -2487,7 +2508,7 @@ mod tests {
         assert!(!contents.contains(&project), "the project was written into its own configuration as an absolute path:\n{contents}");
 
         let read_back = create_config_from_args(&format!("{project}/src")).unwrap();
-        assert_eq!(vec!["build".to_owned()], read_back.engine.exclude_dirs);
+        assert_eq!(vec!["build".to_owned()], read_back.engine.exclude_patterns.patterns);
         assert_eq!(Some(4), read_back.view.top_n);
 
         // Saved again from a run that mentions neither, and both survive: what is saved is the
@@ -2495,7 +2516,7 @@ mod tests {
         create_config_from_args(&format!("{project} --languages rust --{SAVE_LOCAL}")).unwrap();
         let after = create_config_from_args(&format!("{project}/src")).unwrap();
         assert_eq!(vec!["rust".to_owned()], after.engine.languages_of_interest.to_written_form());
-        assert_eq!(vec!["build".to_owned()], after.engine.exclude_dirs);
+        assert_eq!(vec!["build".to_owned()], after.engine.exclude_patterns.patterns);
         assert_eq!(Some(4), after.view.top_n);
 
         std::fs::remove_dir_all(&project).unwrap();
@@ -2503,21 +2524,27 @@ mod tests {
 
     #[test]
     fn the_patterns_of_a_project_name_the_same_places_from_wherever_inside_it_the_command_is_typed() {
-        let project = build_test_project("tests-of-the-project", "===> tests\n./spec, !./spec/fixtures/ ,fixtures/\n../shared/**\n");
+        let project = build_test_project("tests-of-the-project",
+                "===> exclude\n./build/, node_modules\n\n===> tests\n./spec, !./spec/fixtures/ ,fixtures/\n../shared/**\n");
         let written = format!("{project}/{}/{}", crate::paths::LOCAL_DIR_NAME, crate::paths::LOCAL_CONFIG_FILE_NAME);
 
         let found = create_config_from_args(&format!("{project}/src")).unwrap();
         assert_eq!(PathPatterns { patterns: vec![format!("{project}/spec"), format!("!{project}/spec/fixtures/"),
                 "fixtures/".to_owned(), format!("{project}/../shared/**")], read_from: Some(project.clone()) },
                 found.engine.test_patterns);
-        assert!(!found.typed_explicitly.tests);
+        assert_eq!(PathPatterns { patterns: vec![format!("{project}/build/"), "node_modules".to_owned()], read_from: Some(project.clone()) },
+                found.engine.exclude_patterns);
+        assert!(!found.typed_explicitly.tests && !found.typed_explicitly.exclude);
 
-        let typed = create_config_from_args(&format!("{project}/src --tests ./spec")).unwrap();
-        assert_eq!(PathPatterns::of(["./spec"]), typed.engine.test_patterns);
-        assert!(typed.typed_explicitly.tests);
+        let cwd = crate::paths::normalise_separators(&std::env::current_dir().unwrap().to_string_lossy()).into_owned();
+        let typed = create_config_from_args(&format!("{project}/src --tests ./spec --exclude ./gen")).unwrap();
+        assert_eq!(PathPatterns::of([format!("{cwd}/spec")]), typed.engine.test_patterns, "a typed place was read from the project");
+        assert_eq!(PathPatterns::of([format!("{cwd}/gen")]), typed.engine.exclude_patterns);
+        assert!(typed.typed_explicitly.tests && typed.typed_explicitly.exclude);
 
         create_config_from_args(&format!("{project} --top 4 --{SAVE_LOCAL}")).unwrap();
         let contents = std::fs::read_to_string(&written).unwrap();
+        assert!(contents.contains("===> exclude\n./build/,node_modules\n"), "{contents}");
         assert!(contents.contains("===> tests\n./spec,!./spec/fixtures/,fixtures/,"), "{contents}");
         assert!(!contents.contains(&project), "the project was written into its own configuration as an absolute path:\n{contents}");
 

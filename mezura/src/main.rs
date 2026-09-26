@@ -251,6 +251,9 @@ fn main() -> ExitCode {
     match outcome {
         Ok(result) => {
             let at = stamp();
+            for warning in &result.warnings {
+                crate::warning_collector::emit(warning.clone());
+            }
             let comparison = counted_baseline.map(|baseline| baseline.with_subject(
                     crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config), &config));
             crate::present::present(&result, comparison.as_ref(), &config);

@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::{EngineConfig, Language, LineClass, LineClasses, ScanSkip, Span};
 use crate::domain::CommentPair;
 use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file, find_scan_skip};
-use crate::engine::path_patterns::PathPatternMatcher;
+use crate::engine::path_patterns::{PathPatternMatcher, TakingBack};
 use crate::engine::targets::{find_names_root_of_path, normalise_separators};
 use crate::engine::test_detection::{DirectoryScope, TestScope};
 use crate::languages::Languages;
@@ -174,10 +174,11 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
 
 // The file is its own target, so a name pattern reads it from the folder above its own
 fn find_test_scope_of(path: &Path, config: &EngineConfig) -> Result<TestScope, ExplainError> {
-    let patterns = PathPatternMatcher::compile(&config.test_patterns.patterns).map_err(ExplainError::InvalidTestPattern)?;
+    let patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed)
+            .map_err(ExplainError::InvalidTestPattern)?;
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let absolute = normalise_separators(&absolute.to_string_lossy()).into_owned();
-    let names_root = crate::find_names_root_of_target(config, &absolute, || find_names_root_of_path(&absolute, true));
+    let names_root = crate::find_names_root_of_target(&config.test_patterns, &absolute, || find_names_root_of_path(&absolute, true));
     let file = Path::new(&absolute);
     let holder = DirectoryScope::of_target(file.parent().unwrap_or(file), names_root, &patterns);
     Ok(holder.of_file(file, &patterns, &mut Vec::new()))

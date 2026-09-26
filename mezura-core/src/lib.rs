@@ -79,7 +79,7 @@ use std::time::Instant;
 use crossbeam_deque::{Injector, Worker};
 
 use engine::modules::{ModuleId, Modules};
-use engine::path_patterns::PathPatternMatcher;
+use engine::path_patterns::{PathPatternMatcher, TakingBack, Unused, UnusedPattern};
 use engine::test_detection::{DirectoryScope, TestScope};
 
 /// The name of the file that decides which language gets an extension or a file name two of them
@@ -92,6 +92,9 @@ use engine::test_detection::{DirectoryScope, TestScope};
 pub const LANGUAGE_CONFLICTS_FILE_NAME : &str = "language_conflicts.txt";
 /// The name of the report row holding everything no target was given a name for.
 pub const UNNAMED_MODULE_NAME : &str = "(unnamed)";
+
+const EXCLUSION_CHANGED_NOTHING : &str = "it left nothing out";
+const DECLARATION_CHANGED_NOTHING : &str = "it declared no test code";
 
 pub(crate) type FaultyFilesListMut = Arc<Mutex<Vec<FaultyFileDetails>>>;
 pub(crate) type SharedModuleLookups = Arc<engine::identity::ModuleLookups>;
@@ -164,18 +167,11 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let idle_producers = Arc::new(AtomicUsize::new(0));
     let files_injector = Arc::new(Injector::<ParsableFile>::new());
     let dirs_injector = Arc::new(Injector::<TraversedDir>::new());
-    let exclude_matcher = Arc::new(engine::targets::build_exclude_matcher(&config.exclude_dirs)
-            .map_err(|_| {
-                // The builder rewrites every pattern into a longer form before compiling it, and its
-                // error quotes that rewritten text, which the user never typed. Trying them one at a
-                // time finds the broken one, so the error can quote it as it was written.
-                let culprit = config.exclude_dirs.iter()
-                        .find(|x| engine::targets::build_exclude_matcher(std::slice::from_ref(x)).is_err())
-                        .cloned().unwrap_or_default();
-                RunError::InvalidExcludePattern(culprit)
-            })?);
-    let test_patterns = Arc::new(PathPatternMatcher::compile(&config.test_patterns.patterns)
+    let exclude_matcher = Arc::new(PathPatternMatcher::compile(&config.exclude_patterns.patterns, TakingBack::Refused)
+            .map_err(RunError::InvalidExcludePattern)?);
+    let test_patterns = Arc::new(PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed)
             .map_err(RunError::InvalidTestPattern)?);
+    let mut warnings = collect_pattern_warnings(&config, &targets, &exclude_matcher, &test_patterns);
     queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector, &mut files_present,
             &language_lookups, &modules, &progress);
 
@@ -305,11 +301,12 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     for kind in ScanSkip::ALL {
         skipped_files.get_of_kind_mut(kind).sort_unstable();
     }
+    warnings.extend(collect_names_that_matched_nothing(&config, &exclude_matcher, &test_patterns));
     let relevant_files_num = files_present.relevant_files;
     if relevant_files_num == 0 {
         return Ok(RunResult::of_nothing(files_present,
                 Performance { duration_millis: parsing_duration_millis, threads: threads_used }, &modules,
-                targets.to_vec(), std::mem::take(&mut unreadable_dirs.lock().unwrap())));
+                targets.to_vec(), std::mem::take(&mut unreadable_dirs.lock().unwrap()), warnings));
     }
 
     let mut stats_guard = stats_per_module.lock();
@@ -357,7 +354,8 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
         files_present,
         performance: Performance { duration_millis: parsing_duration_millis, threads: threads_used },
         targets: targets.to_vec(),
-        unreadable_dirs: std::mem::take(&mut unreadable_dirs.lock().unwrap())
+        unreadable_dirs: std::mem::take(&mut unreadable_dirs.lock().unwrap()),
+        warnings
     })
 }
 
@@ -393,7 +391,8 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
     for target in crate::engine::targets::topmost_targets(targets) {
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(&target);
-        let names_root = find_names_root_of_target(config, &target.path, || targets.find_names_root_of(&target.path));
+        let names_root = find_names_root_of_target(&config.test_patterns, &target.path, || targets.find_names_root_of(&target.path));
+        let exclude_root = find_names_root_of_target(&config.exclude_patterns, &target.path, || targets.find_names_root_of(&target.path));
         if dir_path.is_file() {
             let lookup = language_lookups.get_of_module(module);
             let Some(lang_name) = lookup.of_path_or_shebang(dir_path) else {
@@ -418,18 +417,56 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
         } else if dir_path.is_dir() {
             let gitignore_stack = GitignoreStack::for_root_dir(dir_path, ObeyedIgnoreFiles::of(config));
             let scope = find_test_scope_of_target(config, test_patterns, dir_path, names_root, &mut scopes_of_directories);
-            dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module, scope));
+            dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module, scope, exclude_root));
         }
     }
 }
 
 // A target inside the project reads names from the project folder's parent, as 'mezura ./' typed there would
-pub(crate) fn find_names_root_of_target(config: &EngineConfig, path: &str, own: impl FnOnce() -> usize) -> usize {
-    match &config.test_patterns.read_from {
+pub(crate) fn find_names_root_of_target(patterns: &PathPatterns, path: &str, own: impl FnOnce() -> usize) -> usize {
+    match &patterns.read_from {
         Some(project) if engine::targets::is_inside_or_at(path, project) =>
                 engine::targets::find_names_root_of_path(project, false),
         _ => own()
     }
+}
+
+// A project's own patterns are read for the whole project, so its folder counts as a target here
+fn collect_pattern_warnings(config: &EngineConfig, targets: &engine::targets::Targets, exclude_patterns: &PathPatternMatcher,
+        test_patterns: &PathPatternMatcher) -> Vec<Warning>
+{
+    let roots_of = |patterns: &PathPatterns| targets.iter().map(|target| target.path.clone())
+            .chain(patterns.read_from.clone()).collect::<Vec<_>>();
+    let mut warnings = exclude_patterns.find_places_out_of_reach(&roots_of(&config.exclude_patterns)).into_iter()
+            .map(|unused| describe_unused_pattern(unused, EXCLUSION_CHANGED_NOTHING)).collect::<Vec<_>>();
+    if config.detect_tests {
+        warnings.extend(test_patterns.find_places_out_of_reach(&roots_of(&config.test_patterns)).into_iter()
+                .map(|unused| describe_unused_pattern(unused, DECLARATION_CHANGED_NOTHING)));
+    }
+    warnings
+}
+
+fn collect_names_that_matched_nothing(config: &EngineConfig, exclude_patterns: &PathPatternMatcher,
+        test_patterns: &PathPatternMatcher) -> Vec<Warning>
+{
+    let mut warnings = exclude_patterns.find_names_that_matched_nothing().into_iter()
+            .map(|unused| describe_unused_pattern(unused, EXCLUSION_CHANGED_NOTHING)).collect::<Vec<_>>();
+    if config.detect_tests {
+        warnings.extend(test_patterns.find_names_that_matched_nothing().into_iter()
+                .map(|unused| describe_unused_pattern(unused, DECLARATION_CHANGED_NOTHING)));
+    }
+    warnings
+}
+
+fn describe_unused_pattern(unused: UnusedPattern, so: &str) -> Warning {
+    let message = match unused.reason {
+        Unused::NotOnDisk => format!("'{}' names nothing on disk, so {so}.", unused.written),
+        Unused::OutsideEveryTarget => format!("'{}' names a place outside every target, so {so}.", unused.written),
+        Unused::MatchedNothing => format!("'{}' matched no file or directory under any target, so {so}. A name is \
+                read from the folder that holds the target down and never reaches a folder above it: 'api/gen' for \
+                the target 'services/api', or the place written out, './services/api/gen'.", unused.written)
+    };
+    Warning::new(Code::PatternMatchedNothing, &unused.written, message)
 }
 
 fn find_test_scope_of_target(config: &EngineConfig, test_patterns: &PathPatternMatcher, directory: &Path, names_root: usize,
@@ -507,18 +544,21 @@ pub(crate) struct TraversedDir {
     pub path: PathBuf,
     pub gitignore_stack: Option<Arc<GitignoreStack>>,
     pub module: ModuleId,
-    pub scope: DirectoryScope
+    pub scope: DirectoryScope,
+    // Apart from the root the scope carries, since the two lists are read from different folders
+    pub exclude_root: usize
 }
 
 impl TraversedDir {
     pub(crate) fn new(path: PathBuf, gitignore_stack: Option<Arc<GitignoreStack>>, module: ModuleId,
-        scope: DirectoryScope) -> Self
+        scope: DirectoryScope, exclude_root: usize) -> Self
     {
         TraversedDir {
             path,
             gitignore_stack,
             module,
-            scope
+            scope,
+            exclude_root
         }
     }
 }

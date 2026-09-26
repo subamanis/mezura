@@ -92,11 +92,11 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     }
                 },
                 config_manager::EXCLUDE => {
-                    let paths = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_paths_to_vec);
-                    if mezura_core::engine::targets::validate_exclude_patterns(&paths).is_err() {
+                    let patterns = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_paths_to_vec);
+                    if mezura_core::engine::path_patterns::validate_exclude_patterns(&patterns).is_err() {
                         issues.invalid_fields.push(config_manager::EXCLUDE);
-                    } else if !paths.is_empty() {
-                        builder.exclude_dirs = Some(paths);
+                    } else if !patterns.is_empty() {
+                        builder.exclude_patterns = Some(mezura_core::PathPatterns::of(patterns));
                     }
                 },
                 config_manager::TESTS => {
@@ -252,14 +252,15 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
                 None => config_manager::format_declared_form(target)
             }).collect::<Vec<_>>().join("\n"))?;
 
-    if let Some(exclude_dirs) = &config_builder.exclude_dirs {
-        write_block(&mut writer, config_manager::EXCLUDE, &exclude_dirs.join(","))?;
+    let format_patterns = |patterns: &mezura_core::PathPatterns| patterns.patterns.iter().map(|pattern| match relative_to {
+        Some(project_dir) => config_manager::format_pattern_inside(project_dir, pattern),
+        None => pattern.clone()
+    }).collect::<Vec<_>>().join(",");
+    if let Some(exclude_patterns) = &config_builder.exclude_patterns {
+        write_block(&mut writer, config_manager::EXCLUDE, &format_patterns(exclude_patterns))?;
     }
     if let Some(test_patterns) = &config_builder.test_patterns {
-        write_block(&mut writer, config_manager::TESTS, &test_patterns.patterns.iter().map(|pattern| match relative_to {
-            Some(project_dir) => config_manager::format_pattern_inside(project_dir, pattern),
-            None => pattern.clone()
-        }).collect::<Vec<_>>().join(","))?;
+        write_block(&mut writer, config_manager::TESTS, &format_patterns(test_patterns))?;
     }
     if let Some(languages_of_interest) = &config_builder.languages_of_interest {
         write_block(&mut writer, config_manager::LANGUAGES, &languages_of_interest.join(","))?;
@@ -507,9 +508,12 @@ mod tests {
         let (options, issues) = super::super::config_files::parse_config_file(Some("auto-generated"), Some(SCRATCH_CONFIG_DIR.to_owned())).unwrap();
         assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
         assert_eq!(config_builder.targets, options.targets);
-        assert_eq!(config_builder.exclude_dirs, options.exclude_dirs);
+        assert_eq!(config_builder.exclude_patterns, options.exclude_patterns);
+        assert_eq!(Some(mezura_core::PathPatterns::of(["a", "b", "c.txt", "d.txt"])), options.exclude_patterns);
         assert_eq!(config_builder.test_patterns, options.test_patterns);
-        assert_eq!(Some(mezura_core::PathPatterns::of(["spec", "!spec/fixtures", "./gen"])), options.test_patterns);
+        let cwd = crate::paths::normalise_separators(&std::env::current_dir().unwrap().to_string_lossy()).into_owned();
+        assert_eq!(Some(mezura_core::PathPatterns::of(["spec".to_owned(), "!spec/fixtures".to_owned(), format!("{cwd}/gen")])),
+                options.test_patterns, "a place was not written absolute, as a target is");
         assert_eq!(config_builder.threads, options.threads);
         assert_eq!(config_builder.counting, options.counting);
         assert_eq!(config_builder.should_show_faulty_files, options.should_show_faulty_files);
@@ -707,7 +711,7 @@ mod tests {
         let mut config = Configuration::new(vec![]);
         let declared_targets = vec![Target::of("C:/Some/Path/a"), Target::of("C:/Some/Path/b"),
                 Target::of("C:/Some/Path/c"), Target::of("C:/Some/Path/d")];
-        config.engine.exclude_dirs = vec!["a".to_owned(), "b".to_owned(), "c.txt".to_owned(), "d.txt".to_owned()];
+        config.engine.exclude_patterns = mezura_core::PathPatterns::of(["a", "b", "c.txt", "d.txt"]);
         config.engine.threads = mezura_core::Threads::new(1, 1);
         config.view.counting = mezura_core::CountingModel::Region;
         config
@@ -716,7 +720,7 @@ mod tests {
         let (options, issues) = super::super::config_files::parse_config_file(Some("test"), Some(FIXTURES_DIR.to_owned() + "config/")).unwrap();
         assert!(issues.invalid_fields.is_empty() && issues.warnings.is_empty());
         assert_eq!(declared_targets, options.targets.unwrap());
-        assert_eq!(config.engine.exclude_dirs, options.exclude_dirs.unwrap());
+        assert_eq!(config.engine.exclude_patterns, options.exclude_patterns.unwrap());
         assert_eq!(Some(mezura_core::PathPatterns::of(["spec", "!spec/fixtures", "./gen"])), options.test_patterns);
         assert_eq!(config.engine.threads, options.threads.unwrap());
         assert_eq!(config.view.counting, options.counting.unwrap());

@@ -2,10 +2,11 @@
 //! finds the root a name is read from, and lets the last written match win.
 
 use std::path::{Component, Path};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use globset::{Candidate, GlobBuilder, GlobSet, GlobSetBuilder};
 
-use crate::engine::targets::{absolutize_pattern, convert_to_absolute, normalise_separators};
+use crate::engine::targets::{absolutize_pattern, convert_to_absolute, is_inside_or_at, normalise_separators};
 
 const NEGATION : char = '!';
 const WILDCARDS : [char; 4] = ['*', '?', '[', '{'];
@@ -19,7 +20,9 @@ pub enum PatternError {
     /// Does not parse as a glob.
     InvalidGlob(String),
     /// Holds nothing once its `!` and its trailing `/` are read.
-    Empty(String)
+    Empty(String),
+    /// Starts with `!` in a list where nothing can be taken back.
+    TakesBack(String)
 }
 
 impl std::error::Error for PatternError {}
@@ -28,14 +31,21 @@ impl std::fmt::Display for PatternError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidGlob(x) => write!(f, "'{x}' is not a valid glob pattern."),
-            Self::Empty(x) => write!(f, "'{x}' names nothing once its '!' and its trailing '/' are read.")
+            Self::Empty(x) => write!(f, "'{x}' names nothing once its '!' and its trailing '/' are read."),
+            Self::TakesBack(x) => write!(f, "'{x}' starts with '!', which takes an earlier pattern back, but what an \
+                    exclude pattern leaves out cannot be taken back, since a directory left out is never entered.")
         }
     }
 }
 
 /// Whether every pattern of `--tests` reads, for refusing a bad one at the moment somebody typed it.
 pub fn validate_test_patterns(patterns: &[String]) -> Result<(), PatternError> {
-    PathPatternMatcher::compile(patterns).map(|_| ())
+    PathPatternMatcher::compile(patterns, TakingBack::Allowed).map(|_| ())
+}
+
+/// Whether every exclude pattern reads, a `!` among them refused, for refusing a bad one when typed.
+pub fn validate_exclude_patterns(patterns: &[String]) -> Result<(), PatternError> {
+    PathPatternMatcher::compile(patterns, TakingBack::Refused).map(|_| ())
 }
 
 /// Whether a pattern names a place, which is resolved from where the pattern was written.
@@ -45,17 +55,63 @@ pub fn is_a_path_pattern(pattern: &str) -> bool {
             Some(Component::Prefix(_) | Component::RootDir | Component::CurDir | Component::ParentDir))
 }
 
+/// The pattern with the place it names made absolute, the way a target is stored. A relative place
+/// is joined to the working directory and its `..` steps are taken. A name comes back as written.
+pub fn absolutize_path_pattern(pattern: &str) -> String {
+    let written = pattern.trim();
+    if !is_a_path_pattern(written) {
+        return written.to_owned();
+    }
+    let (negation, text) = match written.strip_prefix(NEGATION) {
+        Some(rest) => ("!", rest.trim()),
+        None => ("", written)
+    };
+    let text = normalise_separators(text);
+    let (_, without_suffix) = strip_folder_suffix(&text);
+    let suffix = &text[without_suffix.len()..];
+    let (place, rest, _) = split_place(without_suffix);
+    format!("{negation}{}{suffix}", join_place_and_rest(&absolutize_place(place), rest))
+}
+
+/// Whether the place a path pattern names, up to its first wildcard, is on disk.
+pub fn is_on_disk(pattern: &str) -> bool {
+    let text = normalise_separators(pattern.trim().trim_start_matches(NEGATION).trim());
+    let (_, without_suffix) = strip_folder_suffix(&text);
+    let (place, rest, whole_on_disk) = split_place(without_suffix);
+    whole_on_disk || !rest.is_empty() && Path::new(place).exists()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TakingBack {
+    Allowed,
+    Refused
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnusedPattern {
+    pub written: String,
+    pub reason: Unused
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unused {
+    NotOnDisk,
+    OutsideEveryTarget,
+    MatchedNothing
+}
+
 // Each glob remembers where in the written list it came from, since the last one written decides
 pub(crate) struct PathPatternMatcher {
     names: GlobSet,
     paths: GlobSet,
     names_written_at: Vec<usize>,
     paths_written_at: Vec<usize>,
-    rules: Vec<Rule>
+    rules: Vec<Rule>,
+    matched: Vec<AtomicBool>
 }
 
 impl PathPatternMatcher {
-    pub(crate) fn compile(patterns: &[String]) -> Result<Self, PatternError> {
+    pub(crate) fn compile(patterns: &[String], taking_back: TakingBack) -> Result<Self, PatternError> {
         let mut names = GlobSetBuilder::new();
         let mut paths = GlobSetBuilder::new();
         let mut names_written_at = Vec::new();
@@ -67,21 +123,24 @@ impl PathPatternMatcher {
                 Some(rest) => (true, rest.trim()),
                 None => (false, text)
             };
+            if negated && taking_back == TakingBack::Refused {
+                return Err(PatternError::TakesBack(pattern.clone()));
+            }
             let text = normalise_separators(text);
             let (folders_only, text) = strip_folder_suffix(&text);
             if text.is_empty() {
                 return Err(PatternError::Empty(pattern.clone()));
             }
-            rules.push(Rule { negated, folders_only });
             let invalid = |_| PatternError::InvalidGlob(pattern.clone());
-            if is_a_path_pattern(text) {
-                let place = resolve_path_pattern(text);
+            let kind = if is_a_path_pattern(text) {
+                let (place, on_disk, glob) = resolve_path_pattern(text);
                 let case_follows_the_filesystem = cfg!(any(windows, target_os = "macos"));
-                for glob in [place.clone(), format!("{place}{EVERYTHING_BELOW}")] {
+                for glob in [glob.clone(), format!("{glob}{EVERYTHING_BELOW}")] {
                     paths.add(GlobBuilder::new(&glob).literal_separator(true)
                             .case_insensitive(case_follows_the_filesystem).build().map_err(invalid)?);
                     paths_written_at.push(written_at);
                 }
+                Kind::Path { place, on_disk }
             } else {
                 let anchored = match text.starts_with(ANY_DEPTH) || text == "**" {
                     true => text.to_owned(),
@@ -89,15 +148,51 @@ impl PathPatternMatcher {
                 };
                 names.add(GlobBuilder::new(&anchored).literal_separator(true).build().map_err(invalid)?);
                 names_written_at.push(written_at);
-            }
+                Kind::Name { reaches_into_a_path: text.trim_start_matches(ANY_DEPTH).contains('/') }
+            };
+            rules.push(Rule { written: pattern.clone(), negated, folders_only, kind });
         }
         let invalid_set = |_| PatternError::InvalidGlob(String::new());
+        let matched = (0..rules.len()).map(|_| AtomicBool::new(false)).collect();
         Ok(PathPatternMatcher { names: names.build().map_err(invalid_set)?, paths: paths.build().map_err(invalid_set)?,
-                names_written_at, paths_written_at, rules })
+                names_written_at, paths_written_at, rules, matched })
     }
 
     pub(crate) fn is_empty(&self) -> bool {
         self.rules.is_empty()
+    }
+
+    // Any match leaves an entry out, since a list that refuses '!' has nothing to take back
+    pub(crate) fn matches(&self, path: &Path, names_root: usize, is_folder: bool, found: &mut Vec<usize>) -> bool {
+        !self.is_empty() && path.to_str()
+                .is_some_and(|absolute| self.find_last_match(absolute, names_root, is_folder, found).is_some())
+    }
+
+    pub(crate) fn find_places_out_of_reach(&self, roots: &[String]) -> Vec<UnusedPattern> {
+        self.rules.iter().filter_map(|rule| {
+            let Kind::Path { place, on_disk } = &rule.kind else {
+                return None;
+            };
+            let reason = if !on_disk {
+                Unused::NotOnDisk
+            } else if roots.iter().any(|root| is_inside_or_at(place, root) || is_inside_or_at(root, place)) {
+                return None;
+            } else {
+                Unused::OutsideEveryTarget
+            };
+            Some(UnusedPattern { written: rule.written.clone(), reason })
+        }).collect()
+    }
+
+    // A plain name is left alone, since a list shared between projects names folders some lack
+    pub(crate) fn find_names_that_matched_nothing(&self) -> Vec<UnusedPattern> {
+        self.rules.iter().zip(&self.matched).filter_map(|(rule, matched)| {
+            match rule.kind {
+                Kind::Name { reaches_into_a_path: true } if !matched.load(Ordering::Relaxed) =>
+                        Some(UnusedPattern { written: rule.written.clone(), reason: Unused::MatchedNothing }),
+                _ => None
+            }
+        }).collect()
     }
 
     // The names read 'absolute' from 'names_root' on, an offset that sits right after a separator
@@ -141,10 +236,11 @@ impl PathPatternMatcher {
         set.matches_candidate_into(&candidate, found);
         for &in_set in found.iter() {
             let at = written_at[in_set];
-            let rule = self.rules[at];
+            let rule = &self.rules[at];
             if rule.folders_only && !is_folder {
                 continue;
             }
+            self.matched[at].store(true, Ordering::Relaxed);
             if best.is_none_or(|earlier| at > earlier.written_at) {
                 *best = Some(PatternMatch { written_at: at, negated: rule.negated });
             }
@@ -158,10 +254,18 @@ pub(crate) struct PatternMatch {
     pub negated: bool
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Rule {
+    written: String,
     negated: bool,
-    folders_only: bool
+    folders_only: bool,
+    kind: Kind
+}
+
+#[derive(Debug, Clone)]
+enum Kind {
+    Name { reaches_into_a_path: bool },
+    Path { place: String, on_disk: bool }
 }
 
 fn strip_folder_suffix(text: &str) -> (bool, &str) {
@@ -174,25 +278,39 @@ fn strip_folder_suffix(text: &str) -> (bool, &str) {
     }
 }
 
-// What exists is taken whole, so a folder named 'br [v2]' is a name and no character class.
-// Otherwise the place ends at the last separator before the first wildcard.
-fn resolve_path_pattern(text: &str) -> String {
-    let (place, rest) = match Path::new(text).exists() {
-        true => (text, ""),
-        false => match text.find(WILDCARDS).and_then(|wildcard| text[..wildcard].rfind('/')) {
-            Some(slash) => (&text[..=slash], &text[slash + 1..]),
-            None => (text, "")
-        }
-    };
+// The place is escaped in the glob, so that a folder named 'br [v2]' is a name and no character class
+fn resolve_path_pattern(text: &str) -> (String, bool, String) {
+    let (place, rest, whole_on_disk) = split_place(text);
+    let on_disk = whole_on_disk || !rest.is_empty() && Path::new(place).exists();
+    let absolute = absolutize_place(place);
+    let glob = join_place_and_rest(&globset::escape(&absolute), rest);
+    (absolute, on_disk, glob)
+}
+
+// What exists is taken whole, and otherwise the place ends at the last separator before the first wildcard
+fn split_place(text: &str) -> (&str, &str, bool) {
+    if Path::new(text).exists() {
+        return (text, "", true);
+    }
+    match text.find(WILDCARDS).and_then(|wildcard| text[..wildcard].rfind('/')) {
+        Some(slash) => (&text[..=slash], &text[slash + 1..], false),
+        None => (text, "", false)
+    }
+}
+
+fn absolutize_place(place: &str) -> String {
     let absolute = convert_to_absolute(place);
     let absolute = match Path::new(&absolute).is_absolute() {
         true => absolute,
-        false => remove_parent_steps(&absolutize_pattern(&absolute))
+        false => absolutize_pattern(&absolute)
     };
-    let escaped = globset::escape(&absolute);
+    remove_parent_steps(&absolute)
+}
+
+fn join_place_and_rest(place: &str, rest: &str) -> String {
     match rest.is_empty() {
-        true => escaped,
-        false => format!("{}/{rest}", escaped.trim_end_matches('/'))
+        true => place.to_owned(),
+        false => format!("{}/{rest}", place.trim_end_matches('/'))
     }
 }
 
@@ -217,7 +335,11 @@ mod tests {
     use super::*;
 
     fn matcher(patterns: &[&str]) -> PathPatternMatcher {
-        PathPatternMatcher::compile(&patterns.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>()).unwrap()
+        PathPatternMatcher::compile(&owned(patterns), TakingBack::Allowed).unwrap()
+    }
+
+    fn owned(patterns: &[&str]) -> Vec<String> {
+        patterns.iter().map(|x| (*x).to_owned()).collect()
     }
 
     fn decide(matcher: &PathPatternMatcher, absolute: &str, names_root: usize, is_folder: bool) -> Option<(usize, bool)> {
@@ -372,13 +494,82 @@ mod tests {
 
     #[test]
     fn a_pattern_that_names_nothing_or_does_not_parse_is_refused_as_written() {
-        assert_eq!(Err(PatternError::Empty("!".to_owned())), PathPatternMatcher::compile(&["!".to_owned()]).map(|_| ()));
-        assert_eq!(Err(PatternError::Empty("/".to_owned())), PathPatternMatcher::compile(&["/".to_owned()]).map(|_| ()));
-        assert_eq!(Err(PatternError::Empty(" ! / ".to_owned())), PathPatternMatcher::compile(&[" ! / ".to_owned()]).map(|_| ()));
-        assert_eq!(Err(PatternError::InvalidGlob("[bad".to_owned())),
-                PathPatternMatcher::compile(&["fine".to_owned(), "[bad".to_owned()]).map(|_| ()));
-        assert!(validate_test_patterns(&["tests/".to_owned(), "!**/*_test.go".to_owned()]).is_ok());
+        let compile = |patterns: &[&str]| PathPatternMatcher::compile(&owned(patterns), TakingBack::Allowed).map(|_| ());
+        assert_eq!(Err(PatternError::Empty("!".to_owned())), compile(&["!"]));
+        assert_eq!(Err(PatternError::Empty("/".to_owned())), compile(&["/"]));
+        assert_eq!(Err(PatternError::Empty(" ! / ".to_owned())), compile(&[" ! / "]));
+        assert_eq!(Err(PatternError::InvalidGlob("[bad".to_owned())), compile(&["fine", "[bad"]));
+        assert!(validate_test_patterns(&owned(&["tests/", "!**/*_test.go"])).is_ok());
         assert!(matcher(&[]).is_empty());
         assert!(!matcher(&["x"]).is_empty());
+    }
+
+    #[test]
+    fn an_exclusion_cannot_be_taken_back_and_is_matched_or_not() {
+        assert_eq!(Err(PatternError::TakesBack("!vendor/".to_owned())),
+                validate_exclude_patterns(&owned(&["build", "!vendor/"])));
+        assert_eq!(Err(PatternError::TakesBack(" ! ./gen".to_owned())), validate_exclude_patterns(&owned(&[" ! ./gen"])));
+        assert_eq!(Err(PatternError::InvalidGlob("[bad".to_owned())), validate_exclude_patterns(&owned(&["[bad"])));
+        assert!(validate_exclude_patterns(&owned(&["node_modules", "*.min.js", "src/generated", "./target"])).is_ok());
+
+        let root = "D:/dev/".len();
+        let excluded = PathPatternMatcher::compile(&owned(&["node_modules", "*.min.js", "build/"]), TakingBack::Refused).unwrap();
+        let path = |x: &str| std::path::PathBuf::from(x);
+        assert!(excluded.matches(&path("D:/dev/proj/node_modules"), root, true, &mut Vec::new()));
+        assert!(excluded.matches(&path("D:/dev/proj/app/x.min.js"), root, false, &mut Vec::new()));
+        assert!(!excluded.matches(&path("D:/dev/proj/app/x.js"), root, false, &mut Vec::new()));
+        assert!(!excluded.matches(&path("D:/dev/proj/build"), root, false, &mut Vec::new()), "a script named 'build' was left out");
+        assert!(!matcher(&[]).matches(&path("D:/dev/proj/anything"), root, true, &mut Vec::new()));
+    }
+
+    #[test]
+    fn a_path_pattern_is_stored_absolute_and_a_name_as_written() {
+        let cwd = std::env::current_dir().unwrap().to_str().unwrap().replace('\\', "/");
+        assert_eq!(format!("{cwd}/src"), absolutize_path_pattern("./src"));
+        assert_eq!(format!("{cwd}/src/"), absolutize_path_pattern(" ./src/ "));
+        assert_eq!(format!("!{cwd}/gen/**"), absolutize_path_pattern("!./gen/**"));
+        assert_eq!(format!("{cwd}/nowhere/*/gen"), absolutize_path_pattern("./nowhere/*/gen"), "the wildcards after the place were lost");
+        let parent = Path::new(&cwd).parent().unwrap().to_str().unwrap().to_owned();
+        assert_eq!(format!("{parent}/elsewhere/gen"), absolutize_path_pattern("../elsewhere/gen"), "the '..' was kept");
+        assert_eq!("src/gen", absolutize_path_pattern(" src/gen "));
+        assert_eq!("!*.min.js", absolutize_path_pattern("!*.min.js"));
+        assert_eq!("D:/x/gen", absolutize_path_pattern(if cfg!(windows) {"D:\\x\\gen"} else {"D:/x/gen"}));
+
+        assert!(is_on_disk("./src"));
+        assert!(is_on_disk("!./src/"));
+        assert!(is_on_disk("./*/nowhere"), "the place before the wildcard is the working directory");
+        assert!(!is_on_disk("./nowhere/at/all"));
+        assert!(!is_on_disk(&format!("{cwd}/nowhere/*/gen")));
+    }
+
+    #[test]
+    fn a_pattern_that_changes_nothing_is_named_with_its_reason() {
+        let root = std::env::temp_dir().join("mezura-pattern-unused");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("proj").join("src").join("gen")).unwrap();
+        std::fs::create_dir_all(root.join("elsewhere")).unwrap();
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+        let target = format!("{root_str}/proj");
+        let targets = vec![target.clone()];
+
+        let placed = matcher(&[&format!("{root_str}/proj/src/gen"), &format!("{root_str}/proj/*/gen"), &format!("{root_str}/nowhere"),
+                &format!("{root_str}/elsewhere"), &format!("{root_str}/nowhere/*/gen"), &root_str, "src/gen"]);
+        let unused = |written: &str, reason: Unused| UnusedPattern { written: written.to_owned(), reason };
+        assert_eq!(vec![unused(&format!("{root_str}/nowhere"), Unused::NotOnDisk),
+                unused(&format!("{root_str}/elsewhere"), Unused::OutsideEveryTarget),
+                unused(&format!("{root_str}/nowhere/*/gen"), Unused::NotOnDisk)], placed.find_places_out_of_reach(&targets),
+                "a place above the target, or a wildcard pattern below it, was reported");
+
+        let names = matcher(&["src/gen", "tests", "**/spec/helpers", "vendor/lib/", "!src/gen/out"]);
+        let names_root = root_str.len() + 1;
+        let mut found = Vec::new();
+        names.find_last_match(&format!("{target}/src/gen"), names_root, true, &mut found);
+        names.find_last_match(&format!("{target}/vendor/lib"), names_root, false, &mut found);
+        assert_eq!(vec![unused("**/spec/helpers", Unused::MatchedNothing), unused("vendor/lib/", Unused::MatchedNothing),
+                unused("!src/gen/out", Unused::MatchedNothing)], names.find_names_that_matched_nothing(),
+                "a plain name was reported, or a folder-only match on a file counted");
+        assert!(placed.find_names_that_matched_nothing().len() == 1, "{:?}", placed.find_names_that_matched_nothing());
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

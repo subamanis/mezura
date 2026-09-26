@@ -125,8 +125,8 @@ fn format_scope(config: &Configuration, targets: &[Target]) -> String {
             \"keywords_counted\":{},\"tests_detected\":{},\"count_minified\":{},\"count_generated\":{},\"count_not_code\":{},\
             \"use_heuristics\":{},\"shebangs\":{}}}",
             format_targets(targets, config),
-            format_strings(&engine.exclude_dirs),
-            format_strings(&engine.test_patterns.patterns),
+            format_patterns(&engine.exclude_patterns.patterns, config),
+            format_patterns(&engine.test_patterns.patterns, config),
             format_strings(&engine.languages_of_interest.to_written_form()),
             format_strings(&engine.excluded_languages.to_written_form()),
             format_forced_languages(&engine.forced_languages.to_written_form()),
@@ -178,6 +178,16 @@ fn format_targets(targets: &[Target], config: &Configuration) -> String {
         };
         format!("{{\"module\":{module},\"path\":\"{}\"}}", escape(&path))
     }))
+}
+
+// The places a pattern names are spelled the way the targets are, for the same reason
+fn format_patterns(patterns: &[String], config: &Configuration) -> String {
+    match config.view.find_project_of_the_log() {
+        Some(project) => format_strings(&patterns.iter()
+                .map(|pattern| super::config_manager::format_pattern_inside(&project.project_dir, pattern))
+                .collect::<Vec<_>>()),
+        None => format_strings(patterns)
+    }
 }
 
 fn format_strings(values: &[String]) -> String {
@@ -246,7 +256,7 @@ mod tests {
     fn result_of(total: Stats, modules: Vec<ModuleResult>) -> RunResult {
         RunResult { per_language: HashMap::new(), modules, nested_languages: HashMap::new(), tests: HashMap::new(), total,
                 faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(),
-                files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
+                files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(), warnings: Vec::new(),
                 performance: Performance { duration_millis: 0, threads: Threads::new(1, 1) } }
     }
 
@@ -255,7 +265,7 @@ mod tests {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         config.view.set_log_option(LogOption::new(Some("with \"quotes\" in it".to_owned())));
         config.view.counting = mezura_core::CountingModel::Region;
-        config.engine.exclude_dirs = vec!["node_modules".to_owned()];
+        config.engine.exclude_patterns = mezura_core::PathPatterns::of(["node_modules"]);
         config.engine.test_patterns = mezura_core::PathPatterns::of(["spec/", "!spec/fixtures"]);
         config.engine.forced_languages = hashmap!["m".to_owned() => "matlab".to_owned()].into();
 

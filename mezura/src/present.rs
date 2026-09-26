@@ -288,7 +288,8 @@ mod tests {
                     format!("a{i}.rs"), "no".to_owned(), 1)).collect(),
             skipped_files: mezura_core::SkippedFiles::default(),
             unreadable_dirs: (0..unreadable).map(|i| UnreadableDirDetails::new(
-                    format!("D:/d{i}"), "Access is denied. (os error 5)".to_owned())).collect()
+                    format!("D:/d{i}"), "Access is denied. (os error 5)".to_owned())).collect(),
+            warnings: Vec::new()
         }
     }
 

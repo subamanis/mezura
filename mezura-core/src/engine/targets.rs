@@ -82,29 +82,6 @@ pub(crate) fn remove_overlapping_targets(targets: Vec<Target>) -> Vec<Target> {
     keep_topmost(targets, |enclosing, target| enclosing.module == target.module)
 }
 
-/// Whether every exclude pattern parses, for refusing a bad one at the moment somebody typed it.
-// The matcher itself stays inside: its type belongs to a dependency, and putting it in the
-// signature would make a release of globset a breaking change of ours.
-pub fn validate_exclude_patterns(exclude_patterns: &[String]) -> Result<(), TargetError> {
-    build_exclude_matcher(exclude_patterns).map(|_| ())
-            .map_err(|x| TargetError::InvalidGlob(x.glob().unwrap_or("").to_owned()))
-}
-
-pub(crate) fn build_exclude_matcher(exclude_patterns: &[String]) -> Result<globset::GlobSet, globset::Error> {
-    let mut builder = globset::GlobSetBuilder::new();
-    for pattern in exclude_patterns {
-        let normalized = normalise_separators(pattern.trim());
-        let normalized = normalized.trim_end_matches('/');
-        let anchored = if normalized.starts_with("**/") {
-            normalized.to_owned()
-        } else {
-            format!("**/{normalized}")
-        };
-        builder.add(globset::GlobBuilder::new(&anchored).literal_separator(true).build()?);
-    }
-    builder.build()
-}
-
 // "Are these two the same place". Case-insensitive on Windows where the filesystem is, and with the
 // trailing separator gone, since 'D:/a' and 'D:/a/' are one directory: the containment test wants a
 // path strictly longer than its ancestor plus a separator, which 'D:/a/' is not against 'D:/a', so
@@ -734,49 +711,5 @@ mod target_path_tests {
         assert!(is_inside_or_at("D:/dev/proj", "D:/dev/proj/"));
         assert!(!is_inside_or_at("D:/dev/project", "D:/dev/proj"));
         assert!(!is_inside_or_at("D:/dev", "D:/dev/proj"));
-    }
-}
-
-#[cfg(test)]
-mod exclude_matcher_tests {
-    use super::*;
-
-    #[test]
-    fn an_exclusion_naming_one_word_matches_it_at_any_depth_and_never_half_a_name() {
-        let matcher = build_exclude_matcher(&["node_modules".to_owned(), "*.min.js".to_owned()]).unwrap();
-
-        assert!(matcher.is_match("node_modules"));
-        assert!(matcher.is_match("D:/proj/node_modules"));
-        assert!(!matcher.is_match("D:/proj/node_modules_2"));
-        assert!(matcher.is_match("D:/proj/app/bundle.min.js"));
-        assert!(!matcher.is_match("D:/proj/app/bundle.js"));
-        assert!(!matcher.is_match("D:/proj/appbundle.min.js/other.js"));
-    }
-
-    #[test]
-    fn an_exclusion_naming_a_path_is_anchored_on_whole_components() {
-        let matcher = build_exclude_matcher(&["Rusty/mezura".to_owned(), "D:/dev/bench".to_owned()]).unwrap();
-
-        assert!(matcher.is_match("D:/dev/Rusty/mezura"));
-        assert!(!matcher.is_match("D:/dev/aRusty/mezura"));
-        assert!(matcher.is_match("D:/dev/bench"));
-        assert!(!matcher.is_match("D:/dev/benchx"));
-    }
-
-    #[test]
-    fn an_exclusion_written_with_backslashes_or_a_trailing_slash_still_matches() {
-        let matcher = build_exclude_matcher(&["target/".to_owned()]).unwrap();
-        assert!(matcher.is_match("D:/dev/proj/target"));
-
-        if cfg!(windows) {
-            let matcher = build_exclude_matcher(&["Rusty\\mezura\\bench".to_owned()]).unwrap();
-            assert!(matcher.is_match("D:/dev/Rusty/mezura/bench"));
-        }
-    }
-
-    #[test]
-    fn an_exclusion_that_is_not_a_valid_glob_stops_the_run() {
-        assert!(build_exclude_matcher(&["[invalid".to_owned()]).is_err());
-        assert!(build_exclude_matcher(&["valid".to_owned(), "[invalid".to_owned()]).is_err());
     }
 }

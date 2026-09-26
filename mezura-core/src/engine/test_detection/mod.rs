@@ -652,7 +652,7 @@ mod tests {
         let root_str = root.to_str().unwrap().replace('\\', "/");
         let names_root = root_str.len() + 1;
         let patterns = PathPatternMatcher::compile(&["spec/".to_owned(), "!spec/helpers/".to_owned(), "!tests/fixtures/".to_owned(),
-                "!vendor/".to_owned(), "!*_test.go".to_owned()]).unwrap();
+                "!vendor/".to_owned(), "!*_test.go".to_owned()], crate::engine::path_patterns::TakingBack::Allowed).unwrap();
         let of = |path: &str| DirectoryScope::of_target(&root.join(path), names_root, &patterns);
         let child = |holder: DirectoryScope, path: &str, build_files: &[&str]| {
             let seen = build_files.iter().fold(BuildFilesSeen::default(), |mut seen, file| { seen.note(file.as_bytes()); seen });

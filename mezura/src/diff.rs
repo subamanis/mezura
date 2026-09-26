@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 
 use mezura_core::{EngineConfig, FileEntry, ForcedLanguages, Language, LanguageNames, Languages,
         ModuleResult, PathPatterns, RunResult, Stats, UNNAMED_MODULE_NAME, render};
+use mezura_core::engine::path_patterns::{is_a_path_pattern, is_on_disk};
 use mezura_core::language_file::ConflictRules;
 
 use super::config_manager::{ByFile, Configuration, Layout, SortCriterion};
@@ -303,7 +304,7 @@ pub enum Change {
 // Rendered by the screen and the document each in its own shape, from this one list
 #[derive(Debug,PartialEq)]
 pub enum Note {
-    SettingsAdopted { from: String, settings: Vec<&'static str> },
+    SettingsAdopted { from: String, settings: Vec<&'static str>, naming_nothing: Vec<String> },
     SettingsDiffer { baseline: String, subject: String, settings: Vec<&'static str> },
     VersionsDiffer { baseline: String, baseline_version: String, subject: String, subject_version: String },
     CountsInDoubt { about: String, doubts: Vec<String> },
@@ -481,7 +482,7 @@ pub fn format_module_names(result: &RunResult) -> Option<String> {
 // records whether the file was obeyed, the command line records whether it was not.
 pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::CountingModel) -> Scope {
     Scope {
-        exclude: engine.exclude_dirs.clone(),
+        exclude: engine.exclude_patterns.patterns.clone(),
         tests: engine.test_patterns.patterns.clone(),
         languages: engine.languages_of_interest.to_written_form(),
         excluded_languages: engine.excluded_languages.to_written_form(),
@@ -533,8 +534,8 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
 
     let typed = config.typed_explicitly;
     let mut adopted = Vec::new();
-    if !typed.exclude && different(&document.exclude, &config.engine.exclude_dirs) {
-        config.engine.exclude_dirs = document.exclude.clone();
+    if !typed.exclude && different(&document.exclude, &config.engine.exclude_patterns.patterns) {
+        config.engine.exclude_patterns = PathPatterns::of(&document.exclude);
         adopted.push(EXCLUDE);
     }
     if !typed.tests && document.tests != config.engine.test_patterns.patterns {
@@ -673,7 +674,18 @@ fn prepare_sides<const N: usize>(sides: [DiffSide; N], engine: &EngineConfig)
 
 fn adopt_settings_from(document: &Reading, config: &mut Configuration) -> Option<Note> {
     let settings = resolve_settings(&document.scope, config);
-    (!settings.is_empty()).then(|| Note::SettingsAdopted { from: document.determine_display_name(), settings })
+    if settings.is_empty() {
+        return None;
+    }
+    let adopted_patterns = settings.iter().flat_map(|setting| match *setting {
+        EXCLUDE => config.engine.exclude_patterns.patterns.iter(),
+        TESTS => config.engine.test_patterns.patterns.iter(),
+        _ => [].iter()
+    });
+    let naming_nothing = adopted_patterns.filter(|pattern| is_a_path_pattern(pattern) && !is_on_disk(pattern))
+            .cloned().collect();
+
+    Some(Note::SettingsAdopted { from: document.determine_display_name(), settings, naming_nothing })
 }
 
 // Splits '--diff a.json..b.json' into the two readings it names, and answers None for the second
@@ -1014,7 +1026,7 @@ mod tests {
 
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         config.view.layout = crate::config_manager::Layout::List;
-        let adopted = Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"] };
+        let adopted = Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"], naming_nothing: Vec::new() };
 
         let mut baseline = reading("old.json", "2.9.0", vec![module("api")]);
         baseline.scope.search_in_dotted = true;
@@ -1027,7 +1039,7 @@ mod tests {
 
         let notes = determine_comparison_notes(&baseline, &subject, &config, vec![adopted], true);
         assert_eq!(vec![
-            Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"] },
+            Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"], naming_nothing: Vec::new() },
             Note::SettingsDiffer { baseline: "old.json".to_owned(), subject: "new.json".to_owned(),
                     settings: vec!["search-in-dotted"] },
             Note::VersionsDiffer { baseline: "old.json".to_owned(), baseline_version: "2.9.0".to_owned(),
@@ -1116,7 +1128,7 @@ mod tests {
         for operand in [with_region.clone(), format!("{with_region}..HEAD"), format!("HEAD..{with_region}")] {
             let (notes, counting) = adopted_by(&operand);
             assert_eq!(vec![Note::SettingsAdopted { from: "with-region.json".to_owned(),
-                    settings: vec!["counting"] }], notes, "nothing was adopted for '{operand}'");
+                    settings: vec!["counting"], naming_nothing: Vec::new() }], notes, "nothing was adopted for '{operand}'");
             assert_eq!(mezura_core::CountingModel::Region, counting,
                     "the value was reported as adopted and not applied, for '{operand}'");
         }
@@ -1181,10 +1193,10 @@ mod tests {
         let content = mezura_core::CountingModel::Content;
         assert!(find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)).is_empty());
 
-        config.engine.exclude_dirs = vec!["target".to_owned()];
+        config.engine.exclude_patterns = PathPatterns::of(["target"]);
         assert_eq!(vec!["exclude"], find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)));
 
-        config.engine.exclude_dirs = Vec::new();
+        config.engine.exclude_patterns = PathPatterns::default();
         config.engine.test_patterns = PathPatterns::of(["spec/", "!spec/fixtures"]);
         assert_eq!(vec!["tests"], find_settings_that_differ(&document.scope, &scope_of(&config.engine, content)));
         let reordered = Scope { tests: vec!["!spec/fixtures".to_owned(), "spec/".to_owned()], ..document.scope.clone() };
@@ -1243,7 +1255,7 @@ mod tests {
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let adopted = resolve_settings(&document, &mut config);
         assert_eq!(vec!["exclude", "counting", "no-gitignore"], adopted);
-        assert_eq!(vec!["target".to_owned()], config.engine.exclude_dirs);
+        assert_eq!(PathPatterns::of(["target"]), config.engine.exclude_patterns);
         assert_eq!(mezura_core::CountingModel::Region, config.view.counting);
         // recorded as "the file was not obeyed", so the flag turns on
         assert!(config.engine.no_gitignore);
@@ -1255,7 +1267,7 @@ mod tests {
         config.typed_explicitly.exclude = true;
         assert_eq!(vec!["no-gitignore"], resolve_settings(&document, &mut config));
         assert_eq!(mezura_core::CountingModel::Content, config.view.counting);
-        assert!(config.engine.exclude_dirs.is_empty());
+        assert!(config.engine.exclude_patterns.is_empty());
 
         // A model this build does not have, which a document of a later version can name, cannot be
         // imitated, so this run keeps the one it has
@@ -1267,7 +1279,7 @@ mod tests {
 
         // The order two lists were written in is not a difference
         let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
-        config.engine.exclude_dirs = vec!["target".to_owned()];
+        config.engine.exclude_patterns = PathPatterns::of(["target"]);
         config.engine.no_gitignore = true;
         config.view.counting = mezura_core::CountingModel::Region;
         assert!(resolve_settings(&document, &mut config).is_empty());

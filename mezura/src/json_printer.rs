@@ -397,9 +397,11 @@ fn create_note_entries(note: &super::diff::Note) -> Vec<WarningEntry> {
         // The other half of 'setting-differs': one says the two disagreed, this says they were made
         // to agree. Without it both scopes read alike and nothing tells a value the command line
         // gave apart from one it borrowed.
-        Note::SettingsAdopted { from, settings } => settings.iter()
+        Note::SettingsAdopted { from, settings, naming_nothing } => settings.iter()
                 .map(|setting| entry("setting-adopted", Affects::Settings, (*setting).to_owned(),
                     format!("'{setting}' was taken from '{from}', which this run had not set itself, so both readings are counted the same way.")))
+                .chain(naming_nothing.iter().map(|pattern| entry("setting-adopted", Affects::Settings, pattern.clone(),
+                    format!("'{pattern}' was taken from '{from}' and names nothing on this machine."))))
                 .collect(),
         Note::SettingsDiffer { settings, .. } => settings.iter()
                 .map(|setting| entry("setting-differs", Affects::Counts, (*setting).to_owned(),
@@ -464,7 +466,7 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
         // The resolved list off the result, not the declared one off the configuration: the same
         // './src' over two different trees is two different measurements
         format!("\"targets\":{}", create_targets_array(targets)),
-        format!("\"exclude\":{}", create_string_array(&config.engine.exclude_dirs)),
+        format!("\"exclude\":{}", create_string_array(&config.engine.exclude_patterns.patterns)),
         format!("\"tests\":{}", create_string_array(&config.engine.test_patterns.patterns)),
         format!("\"languages\":{}", create_string_array(&config.engine.languages_of_interest.to_written_form())),
         format!("\"excluded_languages\":{}", create_string_array(&config.engine.excluded_languages.to_written_form())),
@@ -792,6 +794,7 @@ mod tests {
     {
         RunResult {per_language, modules: Vec::new(), nested_languages: HashMap::new(), tests: HashMap::new(), total, faulty_files,
                 skipped_files: mezura_core::SkippedFiles::default(), files_present, targets: Vec::new(), unreadable_dirs: Vec::new(),
+                warnings: Vec::new(),
                 performance: mezura_core::Performance { duration_millis: 1180, threads: mezura_core::Threads::new(2, 8) }}
     }
 
@@ -1302,12 +1305,14 @@ mod tests {
 
         // After an adoption the two scopes read alike, so without this entry nothing tells a value
         // the command line gave apart from one it borrowed
-        let adopted = crate::diff::Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"] };
+        let adopted = crate::diff::Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec!["exclude"],
+                naming_nothing: vec!["D:/elsewhere/gen".to_owned()] };
         let borrowed = create_comparison_document(&crate::diff::Comparison::of(from(),
                 reading_of(crate::diff::Source::Run, HashMap::new()), &config, vec![adopted]), &datetime, &config);
         assert!(borrowed.contains("\"code\":\"setting-adopted\""), "{borrowed}");
         assert!(borrowed.contains("\"subject\":\"exclude\""));
         assert!(borrowed.contains("was taken from 'old.json'"), "{borrowed}");
+        assert!(borrowed.contains("\"subject\":\"D:/elsewhere/gen\"") && borrowed.contains("names nothing on this machine"), "{borrowed}");
 
         let document = create_comparison_document(&crate::diff::Comparison::of(from(), to, &config, Vec::new()), &datetime, &config);
         assert!(document.contains("\"code\":\"setting-differs\""), "{document}");
