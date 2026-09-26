@@ -977,7 +977,8 @@ impl ConfigurationBuilder {
                 // The three flags that answer what is counted and what is shown alike
                 count_keywords: !hidden.keywords,
                 detect_tests: !hidden.tests,
-                collect_files: self.by_file.is_some()
+                collect_files: self.by_file.is_some(),
+                test_patterns: mezura_core::PathPatterns::default()
             },
             view: ViewConfig {
                 version: VERSION_ID,

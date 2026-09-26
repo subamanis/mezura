@@ -242,9 +242,39 @@ pub fn format_module_scope(module: Option<&str>, value: &str) -> String {
     }
 }
 
+/// Glob patterns over paths, and the folder their names are read from.
+///
+/// A pattern starting with `./` or `../`, or carrying a root or a drive, names one place and
+/// everything below it, a relative one from the working directory. Any other pattern is a name,
+/// matched at any depth below the folder that holds what the target names, so it sees the
+/// target's own name and never a folder above it. A trailing `/` means a folder only, `x/**` means
+/// the folder `x`, `**` alone a whole target, and a `!` in front takes back what an earlier pattern
+/// or a rule gave, the last match winning.
+#[derive(Debug, PartialEq, Eq, Clone, Default)]
+pub struct PathPatterns {
+    /// The patterns, as written.
+    pub patterns: Vec<String>,
+    /// The project directory whose own configuration supplied the patterns. Every target inside
+    /// it then reads names from that directory's parent, the way `mezura ./` typed there would.
+    /// `None` reads them from each target's own parent.
+    pub read_from: Option<String>
+}
+
+impl PathPatterns {
+    /// Patterns read from each target's own parent.
+    pub fn of(patterns: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        PathPatterns { patterns: patterns.into_iter().map(|x| x.as_ref().to_owned()).collect(), read_from: None }
+    }
+
+    /// Whether it holds no pattern at all.
+    pub fn is_empty(&self) -> bool {
+        self.patterns.is_empty()
+    }
+}
+
 /// How many threads scan directories and how many count files.
 ///
-/// The two numbers are private so that one the run cannot work with has no way in: zero scanning
+/// The two numbers are private so that one the run cannot work with has no way in. Zero scanning
 /// threads leaves every directory in the queue and answers "nothing found" over a real tree, and
 /// zero counting threads returns a result claiming files and zero of everything else.
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
@@ -344,7 +374,12 @@ pub struct EngineConfig {
     /// Whether test code is told apart from the rest, which is the lines a language's markers
     /// open, the files its toolchain names as tests, and the files under the test directory of a
     /// build tool. True by default.
-    pub detect_tests: bool
+    pub detect_tests: bool,
+    /// Patterns declaring which files and directories are test code whole, beside what
+    /// [`Self::detect_tests`] finds on its own. A `!` pattern takes a file or a directory back
+    /// from a rule or an earlier pattern and switches the toolchain's file names off for it, while
+    /// what a language's markers say stays. Nothing while detection is off.
+    pub test_patterns: PathPatterns
 }
 
 // Written out rather than derived, because a derived 'count_keywords' would be false and anyone
@@ -368,7 +403,8 @@ impl Default for EngineConfig {
             collect_files: false,
             use_heuristics: true,
             detect_shebangs: true,
-            detect_tests: true
+            detect_tests: true,
+            test_patterns: PathPatterns::default()
         }
     }
 }

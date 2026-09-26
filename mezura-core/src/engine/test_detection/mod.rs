@@ -9,6 +9,7 @@ use memchr::memmem;
 
 use crate::{Language, LineClass, TestFileName};
 use crate::engine::is_the_same_name;
+use crate::engine::path_patterns::{PathPatternMatcher, PatternMatch};
 
 const ELSE : &[u8] = b"else";
 // Every file of a row has to be present, since an Octave package carries a DESCRIPTION too.
@@ -251,19 +252,21 @@ impl<'a> TestWalk<'a> {
     }
 }
 
-// A directory a build tool compiles for tests alone makes every file under it a test file
+// A directory a build tool compiles for tests alone makes every file under it a test file. What a
+// '!' pattern leaves is 'DeclaredNotTests', which also switches the toolchain's file names off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum TestScope {
     #[default]
     Ordinary,
     Tests,
     JvmSources,
+    DeclaredNotTests,
 }
 
 impl TestScope {
     pub(crate) fn of_child(self, dir_name: &str, build_files: BuildFilesSeen, inside_jvm_build: bool) -> TestScope {
-        if self == TestScope::Tests {
-            return TestScope::Tests;
+        if matches!(self, TestScope::Tests | TestScope::DeclaredNotTests) {
+            return self;
         }
         let name = dir_name.as_bytes();
         if self == TestScope::JvmSources && is_the_jvm_test_directory(name) {
@@ -287,7 +290,7 @@ impl TestScope {
 
     // The components are read by name, and the disk is asked only at one named like a test
     // directory, plus the three root files at every directory above the target.
-    pub(crate) fn of_target(path: &Path) -> TargetScope {
+    pub(crate) fn of_target(path: &Path) -> DirectoryScope {
         let mut directories = path.ancestors().collect::<Vec<_>>();
         directories.reverse();
         let mut inside_jvm_build = false;
@@ -297,7 +300,7 @@ impl TestScope {
                 let under_a_declared_build = inside_jvm_build && is_the_jvm_test_directory(name)
                         && parent.file_name().is_some_and(|above| is_the_jvm_sources_directory(above.as_encoded_bytes()));
                 if under_a_declared_build || is_a_test_directory(name, parent) {
-                    return TargetScope { scope: TestScope::Tests, inside_jvm_build };
+                    return DirectoryScope { scope: TestScope::Tests, inside_jvm_build, ..DirectoryScope::default() };
                 }
             }
             if directory != path && opens_a_jvm_build(directory) {
@@ -309,19 +312,70 @@ impl TestScope {
             (inside_jvm_build && is_the_jvm_sources_directory(name)) || is_jvm_sources(name, parent)
         });
         let scope = if is_jvm_sources { TestScope::JvmSources } else { TestScope::Ordinary };
-        TargetScope { scope, inside_jvm_build }
+        DirectoryScope { scope, inside_jvm_build, ..DirectoryScope::default() }
+    }
+
+    // A pattern overrules a build tool, and among patterns the one written last does
+    pub(crate) fn overruled_by(self, decided_by: Option<usize>, found: Option<PatternMatch>) -> (TestScope, Option<usize>) {
+        match found {
+            Some(found) if decided_by.is_none_or(|earlier| found.written_at > earlier) => {
+                let scope = if found.negated { TestScope::DeclaredNotTests } else { TestScope::Tests };
+                (scope, Some(found.written_at))
+            },
+            _ => (self, decided_by)
+        }
     }
 
     pub(crate) fn is_test_file(self, file_name: &str, names: &[TestFileName]) -> bool {
-        self == TestScope::Tests || names.iter().any(|name| name.matches(file_name))
+        match self {
+            TestScope::Tests => true,
+            TestScope::DeclaredNotTests => false,
+            TestScope::Ordinary | TestScope::JvmSources => names.iter().any(|name| name.matches(file_name))
+        }
     }
 }
 
 // The target's own listing is read by the walk, so a build file in it is not asked for here
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct TargetScope {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct DirectoryScope {
     pub scope: TestScope,
     pub inside_jvm_build: bool,
+    pub decided_by: Option<usize>,
+    // The offset into the absolute path that a name pattern reads from
+    pub names_root: usize,
+}
+
+impl DirectoryScope {
+    pub(crate) fn of_target(path: &Path, names_root: usize, patterns: &PathPatternMatcher) -> DirectoryScope {
+        let mut found = TestScope::of_target(path);
+        found.names_root = names_root;
+        if !patterns.is_empty() && let Some(absolute) = path.to_str() {
+            let declared = patterns.find_last_match_along(absolute, names_root, false, &mut Vec::new());
+            (found.scope, found.decided_by) = found.scope.overruled_by(None, declared);
+        }
+        found
+    }
+
+    pub(crate) fn of_child(self, dir_name: &str, build_files: BuildFilesSeen, child_path: &Path,
+            patterns: &PathPatternMatcher, found: &mut Vec<usize>) -> DirectoryScope
+    {
+        let inside_jvm_build = self.inside_jvm_build || build_files.opens_a_jvm_build();
+        let scope = self.scope.of_child(dir_name, build_files, inside_jvm_build);
+        let declared = match patterns.is_empty() {
+            true => None,
+            false => child_path.to_str().and_then(|absolute| patterns.find_last_match(absolute, self.names_root, true, found))
+        };
+        let (scope, decided_by) = scope.overruled_by(self.decided_by, declared);
+        DirectoryScope { scope, inside_jvm_build, decided_by, names_root: self.names_root }
+    }
+
+    pub(crate) fn of_file(self, file_path: &Path, patterns: &PathPatternMatcher, found: &mut Vec<usize>) -> TestScope {
+        if patterns.is_empty() {
+            return self.scope;
+        }
+        let declared = file_path.to_str().and_then(|absolute| patterns.find_last_match(absolute, self.names_root, false, found));
+        self.scope.overruled_by(self.decided_by, declared).0
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -568,6 +622,70 @@ mod tests {
         assert!(JvmSources.is_test_file("parser_test.go", &names));
         assert!(!Ordinary.is_test_file("parser.go", &names));
         assert!(!Ordinary.is_test_file("parser_test.go", &[]));
+        assert!(!TestScope::DeclaredNotTests.is_test_file("parser_test.go", &names), "a '!' left the toolchain's name on");
+        assert_eq!(TestScope::DeclaredNotTests.of_child("tests", seen(&["Cargo.toml"]), false), TestScope::DeclaredNotTests,
+                "a Cargo.toml below a '!' turned it back");
+        assert_eq!(TestScope::DeclaredNotTests.of_child("src", nothing, true), TestScope::DeclaredNotTests);
+    }
+
+    #[test]
+    fn a_pattern_overrules_a_build_tool_and_a_later_pattern_overrules_an_earlier_one() {
+        use TestScope::{DeclaredNotTests, Ordinary, Tests};
+        let declares = |written_at: usize| Some(PatternMatch { written_at, negated: false });
+        let takes_back = |written_at: usize| Some(PatternMatch { written_at, negated: true });
+
+        assert_eq!((Tests, Some(0)), Ordinary.overruled_by(None, declares(0)));
+        assert_eq!((DeclaredNotTests, Some(2)), Tests.overruled_by(None, takes_back(2)), "a build tool's answer survived a '!'");
+        assert_eq!((Tests, None), Tests.overruled_by(None, None));
+        assert_eq!((DeclaredNotTests, Some(3)), Tests.overruled_by(Some(1), takes_back(3)));
+        assert_eq!((Tests, Some(3)), Tests.overruled_by(Some(3), takes_back(1)), "an earlier pattern overruled a later one below it");
+        assert_eq!((DeclaredNotTests, Some(1)), DeclaredNotTests.overruled_by(Some(1), None));
+
+        let root = std::env::temp_dir().join("mezura_declared_scope");
+        let _ = std::fs::remove_dir_all(&root);
+        for dir in ["proj/tests/fixtures", "proj/spec/helpers", "proj/vendor/tests"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in ["proj/Cargo.toml", "proj/vendor/Cargo.toml"] {
+            std::fs::write(root.join(file), "").unwrap();
+        }
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+        let names_root = root_str.len() + 1;
+        let patterns = PathPatternMatcher::compile(&["spec/".to_owned(), "!spec/helpers/".to_owned(), "!tests/fixtures/".to_owned(),
+                "!vendor/".to_owned(), "!*_test.go".to_owned()]).unwrap();
+        let of = |path: &str| DirectoryScope::of_target(&root.join(path), names_root, &patterns);
+        let child = |holder: DirectoryScope, path: &str, build_files: &[&str]| {
+            let seen = build_files.iter().fold(BuildFilesSeen::default(), |mut seen, file| { seen.note(file.as_bytes()); seen });
+            let name = Path::new(path).file_name().unwrap().to_str().unwrap().to_owned();
+            holder.of_child(&name, seen, &root.join(path), &patterns, &mut Vec::new())
+        };
+        let file = |holder: DirectoryScope, path: &str| holder.of_file(&root.join(path), &patterns, &mut Vec::new());
+
+        let proj = of("proj");
+        assert_eq!((Ordinary, None, names_root), (proj.scope, proj.decided_by, proj.names_root));
+        assert_eq!((Tests, Some(0)), { let x = of("proj/spec"); (x.scope, x.decided_by) });
+        assert_eq!((DeclaredNotTests, Some(1)), { let x = of("proj/spec/helpers"); (x.scope, x.decided_by) },
+                "the folders above the target were not read in order");
+        assert_eq!((DeclaredNotTests, Some(2)), { let x = of("proj/tests/fixtures"); (x.scope, x.decided_by) });
+        assert_eq!(Tests, of("proj/tests").scope);
+        assert_eq!((DeclaredNotTests, Some(3)), { let x = of("proj/vendor/tests"); (x.scope, x.decided_by) },
+                "a Cargo.toml below a '!' turned the folder back");
+
+        let tests = child(proj, "proj/tests", &["Cargo.toml"]);
+        assert_eq!((Tests, None), (tests.scope, tests.decided_by));
+        assert_eq!(Tests, file(tests, "proj/tests/a.rs"));
+        assert_eq!(DeclaredNotTests, child(tests, "proj/tests/fixtures", &[]).scope);
+        let spec = child(proj, "proj/spec", &["Cargo.toml"]);
+        assert_eq!((Tests, Some(0)), (spec.scope, spec.decided_by));
+        assert_eq!(Tests, child(spec, "proj/spec/unit", &[]).scope);
+        assert_eq!(DeclaredNotTests, child(spec, "proj/spec/helpers", &[]).scope);
+        let vendor = child(proj, "proj/vendor", &["Cargo.toml"]);
+        assert_eq!(DeclaredNotTests, child(vendor, "proj/vendor/tests", &["Cargo.toml"]).scope);
+        assert_eq!(DeclaredNotTests, file(proj, "proj/parser_test.go"), "a '!' on a file name left the toolchain's name on");
+        assert_eq!(Ordinary, file(proj, "proj/parser.go"));
+        assert_eq!(DeclaredNotTests, file(spec, "proj/spec/parser_test.go"), "the later pattern on the file lost to the folder above");
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

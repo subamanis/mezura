@@ -55,9 +55,10 @@ pub mod warnings;
 pub use domain::{Bucket, CountingModel, Keyword, Language, LeveledPair, LineClass, LineClasses,
         LineContinuation, MultilineString, NestedLanguage, Span, SpanKind, Stats, StringRules,
         TestFileName};
-pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, ScopedByModule, Target,
+pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, PathPatterns, ScopedByModule, Target,
         Threads, format_module_scope, split_off_module_scope};
 pub use engine::identity::{Claim, ClaimKind, SettledBy};
+pub use engine::path_patterns::PatternError;
 pub use engine::targets::TargetError;
 pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, explain_file};
 pub use languages::{LanguageClaims, Languages};
@@ -78,7 +79,8 @@ use std::time::Instant;
 use crossbeam_deque::{Injector, Worker};
 
 use engine::modules::{ModuleId, Modules};
-use engine::test_detection::{TargetScope, TestScope};
+use engine::path_patterns::PathPatternMatcher;
+use engine::test_detection::{DirectoryScope, TestScope};
 
 /// The name of the file that decides which language gets an extension or a file name two of them
 /// claim.
@@ -172,7 +174,9 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
                         .cloned().unwrap_or_default();
                 RunError::InvalidExcludePattern(culprit)
             })?);
-    queue_the_targets(&config, &targets, &dirs_injector, &files_injector, &mut files_present,
+    let test_patterns = Arc::new(PathPatternMatcher::compile(&config.test_patterns.patterns)
+            .map_err(RunError::InvalidTestPattern)?);
+    queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector, &mut files_present,
             &language_lookups, &modules, &progress);
 
     let files_stats = Arc::new(Mutex::new(files_present));
@@ -198,7 +202,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     for (i, worker) in workers.into_iter().enumerate() {
         match engine::producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), worker,
                 stealers.clone(), idle_producers.clone(), language_lookups.clone(), exclude_matcher.clone(),
-                config.clone(), files_stats.clone(), modules.clone(), unreadable_dirs.clone(),
+                test_patterns.clone(), config.clone(), files_stats.clone(), modules.clone(), unreadable_dirs.clone(),
                 producers_total.clone(), worker_panics.clone(), progress.clone()) {
             Ok(handle) => producer_handles.push(handle),
             Err(x) => last_refusal = Some(x)
@@ -380,7 +384,7 @@ impl Drop for WalkDoneGuard {
 // Only the outermost targets are queued. One that sits inside another is reached by the scan of the
 // one around it, and queueing both would count its files twice; the name it was given is not lost
 // with it, the module table still hands it back on the way down.
-pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets::Targets,
+pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets::Targets, test_patterns: &PathPatternMatcher,
         dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
         files_present: &mut FilesPresent, language_lookups: &engine::identity::ModuleLookups, modules: &Modules,
         progress: &ScanProgress)
@@ -389,6 +393,7 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
     for target in crate::engine::targets::topmost_targets(targets) {
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(&target);
+        let names_root = find_names_root_of_target(config, &target.path, || targets.find_names_root_of(&target.path));
         if dir_path.is_file() {
             let lookup = language_lookups.get_of_module(module);
             let Some(lang_name) = lookup.of_path_or_shebang(dir_path) else {
@@ -399,30 +404,45 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
                 true => ParsableFile::written_by_hand(dir_path.to_path_buf(), lang_name, module, size),
                 false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module, size)
             };
-            let test_scope = find_test_scope_of_target(config, dir_path.parent().unwrap_or(dir_path), &mut scopes_of_directories);
+            let holder = find_test_scope_of_target(config, test_patterns, dir_path.parent().unwrap_or(dir_path), names_root,
+                    &mut scopes_of_directories);
+            let test_scope = match config.detect_tests {
+                true => holder.of_file(dir_path, test_patterns, &mut Vec::new()),
+                false => TestScope::Ordinary
+            };
             files_injector.push(queued.with_extension_rules(lookup.find_extension_rules(dir_path))
-                    .with_test_scope(test_scope.scope));
+                    .with_test_scope(test_scope));
             files_present.total_files += 1;
             files_present.relevant_files += 1;
             progress.record_file_found();
         } else if dir_path.is_dir() {
             let gitignore_stack = GitignoreStack::for_root_dir(dir_path, ObeyedIgnoreFiles::of(config));
-            let test_scope = find_test_scope_of_target(config, dir_path, &mut scopes_of_directories);
-            dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module, test_scope.scope,
-                    test_scope.inside_jvm_build));
+            let scope = find_test_scope_of_target(config, test_patterns, dir_path, names_root, &mut scopes_of_directories);
+            dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module, scope));
         }
     }
 }
 
-fn find_test_scope_of_target(config: &EngineConfig, directory: &Path, known: &mut HashMap<PathBuf, TargetScope>) -> TargetScope {
-    if !config.detect_tests {
-        return TargetScope { scope: TestScope::Ordinary, inside_jvm_build: false };
+// A target inside the project reads names from the project folder's parent, as 'mezura ./' typed there would
+pub(crate) fn find_names_root_of_target(config: &EngineConfig, path: &str, own: impl FnOnce() -> usize) -> usize {
+    match &config.test_patterns.read_from {
+        Some(project) if engine::targets::is_inside_or_at(path, project) =>
+                engine::targets::find_names_root_of_path(project, false),
+        _ => own()
     }
-    if let Some(scope) = known.get(directory) {
+}
+
+fn find_test_scope_of_target(config: &EngineConfig, test_patterns: &PathPatternMatcher, directory: &Path, names_root: usize,
+        known: &mut HashMap<(PathBuf, usize), DirectoryScope>) -> DirectoryScope
+{
+    if !config.detect_tests {
+        return DirectoryScope::default();
+    }
+    if let Some(scope) = known.get(&(directory.to_path_buf(), names_root)) {
         return *scope;
     }
-    let scope = TestScope::of_target(directory);
-    known.insert(directory.to_path_buf(), scope);
+    let scope = DirectoryScope::of_target(directory, names_root, test_patterns);
+    known.insert((directory.to_path_buf(), names_root), scope);
     scope
 }
 
@@ -487,20 +507,18 @@ pub(crate) struct TraversedDir {
     pub path: PathBuf,
     pub gitignore_stack: Option<Arc<GitignoreStack>>,
     pub module: ModuleId,
-    pub test_scope: TestScope,
-    pub inside_jvm_build: bool
+    pub scope: DirectoryScope
 }
 
 impl TraversedDir {
     pub(crate) fn new(path: PathBuf, gitignore_stack: Option<Arc<GitignoreStack>>, module: ModuleId,
-        test_scope: TestScope, inside_jvm_build: bool) -> Self
+        scope: DirectoryScope) -> Self
     {
         TraversedDir {
             path,
             gitignore_stack,
             module,
-            test_scope,
-            inside_jvm_build
+            scope
         }
     }
 }

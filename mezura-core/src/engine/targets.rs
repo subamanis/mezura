@@ -2,6 +2,7 @@
 //! ones lying inside other ones taken out.
 
 use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path};
 
 use crate::GitignoreStack;
@@ -12,14 +13,20 @@ use crate::engine::config::Target;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct Targets {
     resolved: Vec<Target>,
-    // The paths somebody wrote out, which a pattern's matches are not: a file named by hand is
+    // The paths somebody wrote out, which a pattern's matches are not. A file named by hand is
     // counted whatever it holds, and one the program found obeys every rule the walk obeys.
-    written_by_hand: std::collections::HashSet<String>
+    written_by_hand: HashSet<String>,
+    // The matches of one pattern share the root of the pattern, which is gone once they are expanded
+    names_roots: HashMap<String, usize>
 }
 
 impl Targets {
     pub(crate) fn was_written_by_hand(&self, path: &Path) -> bool {
         path.to_str().is_some_and(|path| self.written_by_hand.contains(path))
+    }
+
+    pub(crate) fn find_names_root_of(&self, path: &str) -> usize {
+        self.names_roots.get(path).copied().unwrap_or(0)
     }
 }
 
@@ -117,9 +124,18 @@ pub(crate) fn resolve(declared: &[Target], obeyed: crate::ObeyedIgnoreFiles, sea
 {
     let prepared = validate_and_absolutize(declared)?;
     // Taken before the expansion, which is what turns one pattern into paths nobody typed
-    let written_by_hand = prepared.iter().filter(|target| is_valid_path(&target.path))
-            .map(|target| target.path.clone()).collect();
-    Ok(Targets { resolved: expand_patterns(prepared, obeyed, search_in_dotted)?, written_by_hand })
+    let mut written_by_hand = HashSet::new();
+    let mut names_roots = HashMap::new();
+    for target in &prepared {
+        let path = Path::new(&target.path);
+        let is_dir = path.is_dir();
+        if is_dir || path.is_file() {
+            written_by_hand.insert(target.path.clone());
+            names_roots.insert(target.path.clone(), find_names_root_of_path(&target.path, !is_dir));
+        }
+    }
+    let resolved = expand_patterns(prepared, obeyed, search_in_dotted, &mut names_roots)?;
+    Ok(Targets { resolved, written_by_hand, names_roots })
 }
 
 /// Checks that every target names something and joins the relative ones to the working directory,
@@ -196,6 +212,46 @@ pub(crate) fn normalise_separators(path: &str) -> Cow<'_, str> {
     if cfg!(windows) {Cow::Owned(path.replace('\\', "/"))} else {Cow::Borrowed(path)}
 }
 
+// 'convert_to_absolute' asks the filesystem, and a pattern is not a path that exists. Joined to the
+// working directory, the pattern still means the same thing read back from somewhere else.
+pub(crate) fn absolutize_pattern(pattern: &str) -> String {
+    let normalized = normalise_separators(pattern);
+    if Path::new(normalized.as_ref()).is_absolute() {
+        return normalized.into_owned();
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => format!("{}/{}", normalise_separators(&cwd.to_string_lossy()).trim_end_matches('/'),
+                normalized.trim_start_matches("./")),
+        Err(_) => normalized.into_owned()
+    }
+}
+
+// A directory is read from the folder that holds it and a file from the folder that holds its own
+pub(crate) fn find_names_root_of_path(path: &str, is_file: bool) -> usize {
+    let mut end = path.trim_end_matches('/').len();
+    for _ in 0..if is_file { 2 } else { 1 } {
+        match path[..end].rfind('/') {
+            Some(at) => end = at,
+            None => return 0
+        }
+    }
+    end + 1
+}
+
+// The matches read from the parent of the last folder written before the first wildcard
+pub(crate) fn find_names_root_of_pattern(pattern: &str) -> usize {
+    let wildcard = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
+    match pattern[..wildcard].rfind('/') {
+        Some(slash) => find_names_root_of_path(&pattern[..slash], false),
+        None => 0
+    }
+}
+
+pub(crate) fn is_inside_or_at(path: &str, folder: &str) -> bool {
+    let (path, folder) = (path_comparison_key(path), path_comparison_key(folder));
+    path == folder || is_ancestor_of(&folder, &path)
+}
+
 // Sorted by path with the duplicates gone, so the nearest enclosing target of any entry is the last
 // one kept before it. 'covered' decides what "enclosing" is allowed to remove.
 //
@@ -227,7 +283,8 @@ fn is_ancestor_of(ancestor: &str, path: &str) -> bool {
             && path.as_bytes()[ancestor.len()] == b'/'
 }
 
-fn expand_patterns(targets: Vec<Target>, obeyed: crate::ObeyedIgnoreFiles, search_in_dotted: bool)
+fn expand_patterns(targets: Vec<Target>, obeyed: crate::ObeyedIgnoreFiles, search_in_dotted: bool,
+        names_roots: &mut HashMap<String, usize>)
 -> Result<Vec<Target>, TargetError>
 {
     fn is_dotted(path: &Path) -> bool {
@@ -247,6 +304,7 @@ fn expand_patterns(targets: Vec<Target>, obeyed: crate::ObeyedIgnoreFiles, searc
                 return Err(TargetError::NoGlobMatches(target.path));
             }
 
+            let names_root = find_names_root_of_pattern(&target.path);
             let relevant = matches.iter()
                     .filter(|x| search_in_dotted || !is_dotted(x))
                     .filter(|x| !GitignoreStack::is_path_ignored(x, obeyed))
@@ -259,6 +317,9 @@ fn expand_patterns(targets: Vec<Target>, obeyed: crate::ObeyedIgnoreFiles, searc
             if relevant.is_empty() {
                 return Err(TargetError::AllGlobMatchesIgnored(target.path));
             }
+            for found in &relevant {
+                names_roots.entry(found.path.clone()).or_insert(names_root);
+            }
             resolved.extend(relevant);
         } else {
             resolved.push(target);
@@ -270,22 +331,6 @@ fn expand_patterns(targets: Vec<Target>, obeyed: crate::ObeyedIgnoreFiles, searc
     find_contested_target(&resolved)?;
 
     Ok(remove_overlapping_targets(resolved))
-}
-
-// 'convert_to_absolute' cannot do this one: it asks the filesystem, and a pattern is not a path that
-// exists. Joining the working directory changes nothing about what the pattern matches, since a
-// relative one is expanded against that directory anyway; what it buys is that the pattern still
-// means the same thing written into a configuration and read back from somewhere else.
-fn absolutize_pattern(pattern: &str) -> String {
-    let normalized = normalise_separators(pattern);
-    if Path::new(normalized.as_ref()).is_absolute() {
-        return normalized.into_owned();
-    }
-    match std::env::current_dir() {
-        Ok(cwd) => format!("{}/{}", normalise_separators(&cwd.to_string_lossy()).trim_end_matches('/'),
-                normalized.trim_start_matches("./")),
-        Err(_) => normalized.into_owned()
-    }
 }
 
 fn name_or_rest(module: &Option<String>) -> String {
@@ -650,6 +695,45 @@ mod target_path_tests {
         let targets = vec![Target::named("backend", "D:/api"),
                 Target::named("tests", "D:/api/tests")];
         assert_eq!(vec!["backend=D:/api"], kept_paths(topmost_targets(&targets)));
+    }
+
+    #[test]
+    fn a_name_pattern_reads_a_target_from_the_folder_that_holds_what_it_names() {
+        assert_eq!("proj".len(), "D:/dev/proj".len() - find_names_root_of_path("D:/dev/proj", false));
+        assert_eq!("src/main.rs".len(), "D:/dev/proj/src/main.rs".len() - find_names_root_of_path("D:/dev/proj/src/main.rs", true),
+                "a file is read from the folder above its own");
+        assert_eq!("b".len(), "D:/b".len() - find_names_root_of_path("D:/b", false));
+        assert_eq!("x".len(), "/x".len() - find_names_root_of_path("/x", false));
+        assert_eq!(0, find_names_root_of_path("D:/f.rs", true), "a file at a root has no folder above its own");
+        assert_eq!(0, find_names_root_of_path("D:", false));
+        assert_eq!("proj/a/src".len(), "D:/dev/proj/a/src".len() - find_names_root_of_pattern("D:/dev/proj/*/src"));
+        assert_eq!("dev/proj/src".len(), "D:/dev/proj/src".len() - find_names_root_of_pattern("D:/dev/pro*/src"),
+                "a folder half written before the wildcard is not the folder");
+        assert_eq!(0, find_names_root_of_pattern("D:/*"));
+        assert_eq!(0, find_names_root_of_pattern("*.rs"));
+
+        let root = std::env::temp_dir().join("mezura-names-root");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a").join("src")).unwrap();
+        std::fs::create_dir_all(root.join("b").join("src")).unwrap();
+        std::fs::write(root.join("a").join("src").join("one.rs"), "fn main() {}").unwrap();
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+        let declared = [Target::of(format!("{root_str}/a")), Target::of(format!("{root_str}/b/src/../src")),
+                Target::of(format!("{root_str}/*/src")), Target::of(format!("{root_str}/a/src/one.rs"))];
+        let resolved = resolve(&declared, obey_every_ignore_file(), false).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+
+        let below_root = |path: &str| path[resolved.find_names_root_of(path)..].to_owned();
+        assert_eq!("a", below_root(&format!("{root_str}/a")));
+        assert_eq!("src", below_root(&convert_to_absolute(&format!("{root_str}/b/src"))), "a path written by hand keeps its own root");
+        assert_eq!(format!("{}/a/src", root.file_name().unwrap().to_str().unwrap()), below_root(&format!("{root_str}/a/src")),
+                "the matches of a pattern read from the parent of its last folder");
+        assert_eq!("src/one.rs", below_root(&format!("{root_str}/a/src/one.rs")), "a file reads from the folder above its own");
+
+        assert!(is_inside_or_at("D:/dev/proj/src", "D:/dev/proj"));
+        assert!(is_inside_or_at("D:/dev/proj", "D:/dev/proj/"));
+        assert!(!is_inside_or_at("D:/dev/project", "D:/dev/proj"));
+        assert!(!is_inside_or_at("D:/dev", "D:/dev/proj"));
     }
 }
 

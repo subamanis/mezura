@@ -3,6 +3,9 @@ use std::path::Path;
 use crate::{EngineConfig, Language, LineClass, LineClasses, ScanSkip, Span};
 use crate::domain::CommentPair;
 use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file, find_scan_skip};
+use crate::engine::path_patterns::PathPatternMatcher;
+use crate::engine::targets::{find_names_root_of_path, normalise_separators};
+use crate::engine::test_detection::{DirectoryScope, TestScope};
 use crate::languages::Languages;
 
 /// One file read line by line, as [`explain_file`] answers it.
@@ -88,6 +91,8 @@ pub enum ExplainError {
     UnclaimedFile,
     /// The file could not be read, with what went wrong.
     UnreadableFile(String),
+    /// A pattern of [`crate::EngineConfig::test_patterns`] could not be read.
+    InvalidTestPattern(crate::engine::path_patterns::PatternError),
 }
 
 impl std::fmt::Display for ExplainError {
@@ -95,7 +100,8 @@ impl std::fmt::Display for ExplainError {
         match self {
             Self::LanguagesFromAnotherConfig => write!(f, "The languages were resolved against a configuration that selects a different set of them than the one this explanation was given, so the file would be read with the wrong symbols. Resolve them against the same configuration."),
             Self::UnclaimedFile => write!(f, "No language in play claims this file, so there is nothing to read it with."),
-            Self::UnreadableFile(x) => write!(f, "The file could not be read: {x}")
+            Self::UnreadableFile(x) => write!(f, "The file could not be read: {x}"),
+            Self::InvalidTestPattern(x) => write!(f, "{x}")
         }
     }
 }
@@ -142,10 +148,8 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
         extension_to_name: &nested_definitions.extension_to_name,
         set_aside: &nested_definitions.set_aside,
     };
-    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    let whole_file_is_tests = config.detect_tests && crate::engine::file_parser::is_a_test_file(path,
-            crate::engine::test_detection::TestScope::of_target(absolute.parent().unwrap_or(&absolute)).scope,
-            by_name.get(lang_name.as_ref()).unwrap());
+    let whole_file_is_tests = config.detect_tests
+            && crate::engine::file_parser::is_a_test_file(path, find_test_scope_of(path, config)?, by_name.get(lang_name.as_ref()).unwrap());
     let (contents, report, log) = explain_parsed_file(contents, &lang_name, &nested_lookup, config, whole_file_is_tests);
 
     let language = lang_name.to_string();
@@ -168,7 +172,18 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
             classes: whole.classes })
 }
 
-// The record holds symbol numbers; what a reader gets is the symbol as the file spells it. The
+// The file is its own target, so a name pattern reads it from the folder above its own
+fn find_test_scope_of(path: &Path, config: &EngineConfig) -> Result<TestScope, ExplainError> {
+    let patterns = PathPatternMatcher::compile(&config.test_patterns.patterns).map_err(ExplainError::InvalidTestPattern)?;
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let absolute = normalise_separators(&absolute.to_string_lossy()).into_owned();
+    let names_root = crate::find_names_root_of_target(config, &absolute, || find_names_root_of_path(&absolute, true));
+    let file = Path::new(&absolute);
+    let holder = DirectoryScope::of_target(file.parent().unwrap_or(file), names_root, &patterns);
+    Ok(holder.of_file(file, &patterns, &mut Vec::new()))
+}
+
+// The record holds symbol numbers, and what a reader gets is the symbol as the file spells it. The
 // language is the one that read the line, and a record's language always resolves, so the fallback
 // arm is never the answer.
 fn spell_out_carried(carried: CarriedRecord, language: Option<&Language>) -> Carried {

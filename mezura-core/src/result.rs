@@ -388,6 +388,8 @@ pub enum RunError {
     InvalidTargets(crate::engine::targets::TargetError),
     /// An exclude pattern does not parse, quoted as the caller wrote it.
     InvalidExcludePattern(String),
+    /// A pattern of [`crate::EngineConfig::test_patterns`] could not be read.
+    InvalidTestPattern(crate::engine::path_patterns::PatternError),
     /// The operating system refused every thread of one side. Refusing some but not all is not an
     /// error: fewer threads is the same answer arriving slower.
     NoThreadsAvailable {
@@ -412,6 +414,7 @@ impl std::fmt::Display for RunError {
             Self::LanguagesFromAnotherConfig => write!(f, "The languages were resolved against a configuration that selects a different set of them than the one this run was given, so the counts would not be the ones the settings describe. Resolve them against the same configuration you are counting with."),
             Self::InvalidTargets(x) => write!(f, "{x} Nothing was counted."),
             Self::InvalidExcludePattern(x) => write!(f, "'{x}' is not a valid exclude pattern, so nothing was counted."),
+            Self::InvalidTestPattern(x) => write!(f, "{x} Nothing was counted."),
             Self::NoThreadsAvailable { side, error } => write!(f, "The operating system refused every {side} thread, so the run could not start: {error}"),
             Self::IncompleteRun { worker_panic } => write!(f, "A worker thread died mid-run, so the counts would have been incomplete and were discarded: {worker_panic}")
         }

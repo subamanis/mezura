@@ -1,6 +1,7 @@
 //! The machinery that turns a set of targets into a result.
 
 pub mod config;
+pub mod path_patterns;
 pub mod targets;
 
 pub(crate) mod consumer;

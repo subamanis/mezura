@@ -14,7 +14,8 @@ use crate::{EngineConfig, FilesPresent, GitignoreStack, ObeyedIgnoreFiles, Parsa
 use crate::engine::identity::ModuleLookups;
 use crate::engine::is_the_same_name;
 use crate::engine::modules::{ModuleId, Modules};
-use crate::engine::test_detection::{BuildFilesSeen, TestScope};
+use crate::engine::path_patterns::PathPatternMatcher;
+use crate::engine::test_detection::{BuildFilesSeen, DirectoryScope};
 
 // A panic is caught here rather than read back from 'join', because these threads stop by counting
 // how many of them have gone idle against how many started: one that dies without ever going idle
@@ -22,7 +23,7 @@ use crate::engine::test_detection::{BuildFilesSeen, TestScope};
 // its way out and records what killed it, which 'run' turns into an error after the joins.
 pub(crate) fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>,
         stealers: Arc<Vec<Stealer<TraversedDir>>>, idle_producers: Arc<AtomicUsize>, language_lookups: SharedModuleLookups,
-        exclude_matcher: Arc<globset::GlobSet>,
+        exclude_matcher: Arc<globset::GlobSet>, test_patterns: Arc<PathPatternMatcher>,
         config: Arc<EngineConfig>, files_stats: Arc<Mutex<FilesPresent>>, modules: Arc<Modules>,
         unreadable_dirs: Arc<Mutex<Vec<UnreadableDirDetails>>>, producers_total: Arc<AtomicUsize>,
         worker_panics: Arc<Mutex<Vec<String>>>, progress: Arc<ScanProgress>)
@@ -31,7 +32,7 @@ pub(crate) fn start_producer_thread(id: usize, files_injector: Arc<Injector<Pars
     thread::Builder::new().name(format!("producer-{id}")).spawn(move || {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||
                 search_for_files(id, files_injector, dirs_injector, worker, &stealers, idle_producers.clone(),
-                        language_lookups, exclude_matcher, config, modules, &producers_total, &progress)));
+                        language_lookups, exclude_matcher, test_patterns, config, modules, &producers_total, &progress)));
         match outcome {
             Ok((found, unreadable)) => {
                 if !unreadable.is_empty() {
@@ -52,13 +53,14 @@ pub(crate) fn start_producer_thread(id: usize, files_injector: Arc<Injector<Pars
 
 fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>,
         stealers: &[Stealer<TraversedDir>], idle_producers: Arc<AtomicUsize>,
-        language_lookups: SharedModuleLookups, exclude_matcher: Arc<globset::GlobSet>, config: Arc<EngineConfig>, modules: Arc<Modules>,
-        producers_total: &AtomicUsize, progress: &ScanProgress)
+        language_lookups: SharedModuleLookups, exclude_matcher: Arc<globset::GlobSet>, test_patterns: Arc<PathPatternMatcher>,
+        config: Arc<EngineConfig>, modules: Arc<Modules>, producers_total: &AtomicUsize, progress: &ScanProgress)
 -> (FilesPresent, Vec<UnreadableDirDetails>)
 {
     let mut files_present = FilesPresent::default();
     let mut unreadable_dirs = Vec::new();
     let mut should_terminate = false;
+    let mut patterns_found = Vec::new();
 
     loop {
         // Newest of its own subdirectories first, so a thread finishes the branch it is in before it
@@ -89,9 +91,9 @@ fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs
                             ObeyedIgnoreFiles::of(&config), config.detect_tests);
                     let gitignore_stack = GitignoreStack::extend_with_ignore_files(&dir.path,
                             dir.gitignore_stack.clone(), &present);
-                    traverse_dir(&files_injector, entries, &worker, &language_lookups, &exclude_matcher, &gitignore_stack,
-                            &config, &modules, dir.module, dir.test_scope, build_files, dir.inside_jvm_build, &dir.path,
-                            &mut files_present, progress)
+                    traverse_dir(&files_injector, entries, &worker, &language_lookups, &exclude_matcher, &test_patterns,
+                            &mut patterns_found, &gitignore_stack, &config, &modules, dir.module, dir.scope, build_files,
+                            &dir.path, &mut files_present, progress)
                 },
                 // Everything under it goes uncounted and reaches no total, not even the number of
                 // files looked at, and nothing else would say so. The reason travels with the path,
@@ -176,9 +178,10 @@ fn find_ignore_and_build_files_among(entries: &[DirEntry], obeyed: ObeyedIgnoreF
 // 'module' is decided when the directory is queued and its entries inherit it. The two lookups below
 // only happen in a run with a target inside another target.
 fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>, dirs_worker: &Worker<TraversedDir>,
-        language_lookups: &ModuleLookups, exclude_matcher: &globset::GlobSet, gitignore_stack: &Option<Arc<GitignoreStack>>,
-        config: &EngineConfig, modules: &Modules, module: ModuleId, test_scope: TestScope, build_files: BuildFilesSeen,
-        inside_jvm_build: bool, dir_path: &Path, files_present: &mut FilesPresent, progress: &ScanProgress)
+        language_lookups: &ModuleLookups, exclude_matcher: &globset::GlobSet, test_patterns: &PathPatternMatcher,
+        patterns_found: &mut Vec<usize>, gitignore_stack: &Option<Arc<GitignoreStack>>, config: &EngineConfig, modules: &Modules,
+        module: ModuleId, scope: DirectoryScope, build_files: BuildFilesSeen, dir_path: &Path, files_present: &mut FilesPresent,
+        progress: &ScanProgress)
 {
     let mut local_total_files = 0;
     let mut local_relevant_files = 0;
@@ -231,6 +234,10 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                 // Free on Windows, where the directory listing carries it. Elsewhere it would be one
                 // call per file, and the consumer learns the size from the read itself.
                 let size = if cfg!(windows) { e.metadata().map_or(0, |m| m.len()) } else { 0 };
+                let test_scope = match config.detect_tests {
+                    true => scope.of_file(&path_buf, test_patterns, patterns_found),
+                    false => scope.scope
+                };
                 files_injector.push(ParsableFile::new(path_buf, lang_name, module, size)
                         .with_extension_rules(language_lookup.find_extension_rules(name))
                         .with_test_scope(test_scope));
@@ -255,12 +262,11 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                     continue;
                 }
                 let module = if dir_boundaries {modules.at_dir(&pathbuf, module)} else {module};
-                let child_inside_jvm_build = config.detect_tests && (inside_jvm_build || build_files.opens_a_jvm_build());
                 let child_scope = match config.detect_tests {
-                    true => test_scope.of_child(&dir_name, build_files, child_inside_jvm_build),
-                    false => TestScope::Ordinary
+                    true => scope.of_child(&dir_name, build_files, &pathbuf, test_patterns, patterns_found),
+                    false => DirectoryScope::default()
                 };
-                dirs_worker.push(TraversedDir::new(pathbuf, gitignore_stack.clone(), module, child_scope, child_inside_jvm_build));
+                dirs_worker.push(TraversedDir::new(pathbuf, gitignore_stack.clone(), module, child_scope));
             }
         }
     }
@@ -308,6 +314,9 @@ mod tests {
                     Some((name, path)) => Target::named(name.trim(), path.trim()),
                     None => Target::of(piece)
                 }).collect::<Vec<_>>();
+        let test_patterns = extra_args.split_once("--tests ")
+                .map(|(_, rest)| rest.split_once(" --").map_or(rest, |(patterns, _)| patterns))
+                .map_or(Vec::new(), |patterns| patterns.split(',').map(str::to_owned).collect());
         let config = EngineConfig {
             targets: declared,
             threads: crate::Threads::new(1, 1),
@@ -315,6 +324,7 @@ mod tests {
             no_ignore_files: extra_args.contains("--no-ignore-files"),
             should_search_in_dotted: extra_args.contains("--search-in-dotted"),
             detect_tests: !extra_args.contains("--hide tests"),
+            test_patterns: crate::PathPatterns::of(test_patterns),
             ..Default::default()
         };
         // The same first step 'run' takes, with the flags the walk is about to obey
@@ -332,12 +342,13 @@ mod tests {
                         ..Default::default() }));
         let modules = Arc::new(Modules::of(&targets));
         let mut files_present = FilesPresent::default();
-        queue_the_targets(&config, &targets, &dirs_injector, &files_injector, &mut files_present, &language_lookups, &modules,
-                &ScanProgress::default());
+        let test_patterns = Arc::new(PathPatternMatcher::compile(&config.test_patterns.patterns).unwrap());
+        queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector, &mut files_present,
+                &language_lookups, &modules, &ScanProgress::default());
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
         let (found, _) = search_for_files(0, files_injector.clone(), dirs_injector,
-                Worker::new_lifo(), &[], idle_producers, language_lookups, exclude_matcher, config, modules.clone(),
+                Worker::new_lifo(), &[], idle_producers, language_lookups, exclude_matcher, test_patterns, config, modules.clone(),
                 &AtomicUsize::new(1), &ScanProgress::default());
 
         let mut found_files = Vec::new();
@@ -350,7 +361,7 @@ mod tests {
 
     #[test]
     fn the_directory_scan_marks_the_test_directory_of_a_build_tool_and_no_directory_by_its_name_alone() {
-        use TestScope::{JvmSources, Ordinary, Tests};
+        use crate::engine::test_detection::TestScope::{JvmSources, Ordinary, Tests};
         let root = std::env::temp_dir().join("mezura_test_scope_scan");
         let _ = fs::remove_dir_all(&root);
         for dir in ["cargo/tests/common", "cargo/src/tests", "cargo/examples", "bare/tests", "jvm/src/test/java",
@@ -407,6 +418,70 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
+    #[test]
+    fn the_directory_scan_declares_what_a_pattern_names_and_the_last_written_pattern_wins() {
+        use crate::engine::test_detection::TestScope::{DeclaredNotTests, Ordinary, Tests};
+        let root = std::env::temp_dir().join("mezura_test_pattern_scan");
+        let _ = fs::remove_dir_all(&root);
+        for dir in ["spec/proj/tests/fixtures", "spec/proj/spec/helpers", "spec/proj/vendor/tests", "spec/proj/src"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in ["spec/proj/Cargo.toml", "spec/proj/vendor/Cargo.toml"] {
+            fs::write(root.join(file), "").unwrap();
+        }
+        for file in ["spec/proj/tests/a.rs", "spec/proj/tests/fixtures/f.rs", "spec/proj/spec/s.rs", "spec/proj/spec/helpers/h.rs",
+                "spec/proj/vendor/tests/v.rs", "spec/proj/src/x.rs", "spec/proj/src/parser_test.go", "spec/proj/src/parser.go",
+                "spec/proj/spec.rs"] {
+            fs::write(root.join(file), "fn main() {}\n").unwrap();
+        }
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+        let proj = format!("{root_str}/spec/proj");
+        let scopes_of = |target: &str, patterns: &str| scan(target, &format!("--tests {patterns}")).3.into_iter()
+                .map(|f| (f.path.file_name().unwrap().to_str().unwrap().to_owned(), f.test_scope))
+                .collect::<std::collections::BTreeMap<_, _>>();
+
+        let folder = scopes_of(&proj, "spec/");
+        assert_eq!((Tests, Tests, Ordinary), (folder["s.rs"], folder["h.rs"], folder["spec.rs"]), "a trailing slash means a folder");
+        assert_eq!((Tests, Ordinary, Ordinary), (folder["a.rs"], folder["x.rs"], folder["parser_test.go"]));
+        let name = scopes_of(&proj, "spec,spec.rs");
+        assert_eq!((Tests, Tests, Ordinary), (name["s.rs"], name["spec.rs"], name["x.rs"]), "a name with no slash matches a file too");
+
+        let carved = scopes_of(&proj, "spec/,!spec/helpers/");
+        assert_eq!((Tests, DeclaredNotTests), (carved["s.rs"], carved["h.rs"]));
+        let taken_back = scopes_of(&proj, "!tests/fixtures/,!vendor/");
+        assert_eq!((Tests, DeclaredNotTests, DeclaredNotTests), (taken_back["a.rs"], taken_back["f.rs"], taken_back["v.rs"]),
+                "a '!' did not take back what a build file gave, or a Cargo.toml below it turned it back");
+        let later = scopes_of(&proj, "!vendor/,tests/");
+        assert_eq!(Tests, later["v.rs"], "a later pattern did not overrule the '!' above");
+        let earlier = scopes_of(&proj, "tests/,!vendor/");
+        assert_eq!(DeclaredNotTests, earlier["v.rs"]);
+        let by_name = scopes_of(&proj, "!*_test.go");
+        assert_eq!((DeclaredNotTests, Ordinary), (by_name["parser_test.go"], by_name["parser.go"]));
+
+        let whole = scopes_of(&proj, "**");
+        assert!(whole.values().all(|scope| *scope == Tests), "{whole:?}");
+        let own_name = scopes_of(&proj, "proj/src/");
+        assert_eq!((Tests, Ordinary), (own_name["x.rs"], own_name["s.rs"]), "a name does not see the target's own name");
+        let above = scopes_of(&proj, "spec/proj/");
+        assert_eq!((Tests, Ordinary, Ordinary), (above["a.rs"], above["x.rs"], above["s.rs"]), "a folder above the target took part in a match");
+        let place = scopes_of(&proj, &format!("{proj}/src"));
+        assert_eq!((Tests, Tests, Ordinary), (place["x.rs"], place["parser.go"], place["s.rs"]), "a path names everything below it");
+
+        let target_itself = scopes_of(&format!("{proj}/spec"), "spec/");
+        assert_eq!((Tests, Tests), (target_itself["s.rs"], target_itself["h.rs"]), "a pattern sees the target's own name");
+        let below = scopes_of(&format!("{proj}/spec/helpers"), "spec/");
+        assert_eq!(Ordinary, below["h.rs"], "a name matched a folder above the target");
+        let named_file = scopes_of(&format!("{proj}/spec/s.rs"), "spec/");
+        assert_eq!(Tests, named_file["s.rs"], "a file target did not read the folder above its own");
+        let named_file_taken_back = scopes_of(&format!("{proj}/tests/fixtures/f.rs"), "!fixtures/");
+        assert_eq!(DeclaredNotTests, named_file_taken_back["f.rs"]);
+
+        let off = scan(&proj, "--tests spec/ --hide tests").3;
+        assert!(off.iter().all(|f| f.test_scope == Ordinary));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     // Reproduced with a queued path that does not exist, which fails in 'read_dir' the same way a
     // directory deleted or made unreadable between being queued and being opened does.
     #[test]
@@ -430,13 +505,14 @@ mod tests {
         let modules = Arc::new(Modules::of(&targets));
         let (files_injector, dirs_injector) = (Arc::new(Injector::new()), Arc::new(Injector::new()));
         let mut files_present = FilesPresent::default();
-        queue_the_targets(&config, &targets, &dirs_injector, &files_injector,
+        let test_patterns = Arc::new(PathPatternMatcher::compile(&[]).unwrap());
+        queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector,
                 &mut files_present, &language_lookups, &modules, &ScanProgress::default());
-        dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0, TestScope::Ordinary, false));
+        dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0, DirectoryScope::default()));
 
         let exclude_matcher = Arc::new(build_exclude_matcher(&config.exclude_dirs).unwrap());
         let (found, unreadable) = search_for_files(0, files_injector, dirs_injector,
-                Worker::new_lifo(), &[], Arc::new(AtomicUsize::new(0)), language_lookups, exclude_matcher,
+                Worker::new_lifo(), &[], Arc::new(AtomicUsize::new(0)), language_lookups, exclude_matcher, test_patterns,
                 config, modules, &AtomicUsize::new(1), &ScanProgress::default());
 
         fs::remove_dir_all(&root).unwrap();
@@ -713,11 +789,11 @@ mod tests {
         let (mine, peer) = (Worker::new_lifo(), Worker::new_lifo());
         let stealers = [mine.stealer(), peer.stealer()];
         let peers_dir = PathBuf::from("mezura-a-peers-directory");
-        peer.push(TraversedDir::new(peers_dir.clone(), None, 0, TestScope::Ordinary, false));
+        peer.push(TraversedDir::new(peers_dir.clone(), None, 0, DirectoryScope::default()));
 
         assert_eq!(Some(peers_dir), steal_a_dir(0, &Injector::new(), &stealers, &mine).map(|dir| dir.path));
 
-        mine.push(TraversedDir::new(PathBuf::from("mezura-my-own-directory"), None, 0, TestScope::Ordinary, false));
+        mine.push(TraversedDir::new(PathBuf::from("mezura-my-own-directory"), None, 0, DirectoryScope::default()));
         assert!(steal_a_dir(0, &Injector::new(), &stealers, &mine).is_none(),
                 "a producer stole from its own queue");
     }

@@ -1276,3 +1276,85 @@ fn the_test_code_of_a_language_is_one_share_whichever_way_it_was_found() {
     assert_eq!((1, 3, 41, 1), share(&of_module("checks").tests["Rust"]));
     assert_eq!((2, 8, 95, 1), share(&split.tests["Rust"]));
 }
+
+#[test]
+fn a_pattern_declares_test_code_whole_and_a_later_negative_takes_it_back_while_the_markers_stay() {
+    let root = std::env::temp_dir().join("mezura-test-patterns");
+    let _ = std::fs::remove_dir_all(&root);
+    let proj = root.join("work").join("proj");
+    for dir in ["src", "tests/fixtures", "spec/helpers"] {
+        std::fs::create_dir_all(proj.join(dir)).unwrap();
+    }
+    std::fs::write(proj.join("Cargo.toml"), "[package]\n").unwrap();
+    std::fs::write(proj.join("src").join("lib.rs"),
+            "pub fn a() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn it() {}\n}\n").unwrap();
+    std::fs::write(proj.join("src").join("plain.rs"), "pub fn b() {}\n").unwrap();
+    std::fs::write(proj.join("tests").join("x.rs"), "// an integration test\n#[test]\nfn x() {}\n").unwrap();
+    std::fs::write(proj.join("tests").join("fixtures").join("f.rs"), "fn f() {}\n").unwrap();
+    std::fs::write(proj.join("spec").join("s.rs"), "fn s() {}\nfn t() {}\n").unwrap();
+    std::fs::write(proj.join("spec").join("helpers").join("h.rs"), "fn h() {}\n").unwrap();
+    let proj_str = proj.to_string_lossy().replace('\\', "/");
+
+    let from_project = |patterns: &[&str]| mezura_core::PathPatterns { patterns: patterns.iter().map(|x| (*x).to_owned()).collect(),
+            read_from: Some(proj_str.clone()) };
+    let config_of = |target: &str, test_patterns: mezura_core::PathPatterns, detect_tests: bool| EngineConfig { detect_tests,
+            collect_files: true, threads: Threads::new(1, 4), test_patterns, ..EngineConfig::new([target]) };
+    let config_with = |patterns: &[&str], detect_tests: bool| config_of(&proj_str, mezura_core::PathPatterns::of(patterns), detect_tests);
+    let counted_under = |config: EngineConfig| {
+        let (languages, _) = Languages::shipped(&config);
+        let result = run(&config, languages).unwrap();
+        let files = &result.modules[0].files["Rust"];
+        let test_lines_of = |name: &str| files.iter()
+                .find(|file| std::path::Path::new(&file.path).file_name() == Some(name.as_ref()))
+                .unwrap().tests.as_ref().map_or(0, |tests| tests.lines);
+        let per_file = ["lib.rs", "plain.rs", "x.rs", "f.rs", "s.rs", "h.rs"].map(test_lines_of);
+        let row = result.tests.get("Rust").map(|tests| (tests.stats.files, tests.stats.lines, tests.whole_files));
+        assert_eq!(15, result.per_language["Rust"].lines, "the lines of the language moved with the patterns {:?}",
+                config.test_patterns);
+        (per_file, row)
+    };
+    let counted = |patterns: &[&str], detect_tests: bool| counted_under(config_with(patterns, detect_tests));
+
+    assert_eq!(([5, 0, 3, 1, 0, 0], Some((3, 9, 2))), counted(&[], true));
+    assert_eq!(([5, 0, 3, 1, 2, 1], Some((5, 12, 4))), counted(&["spec/"], true), "a directory declared tests");
+    assert_eq!(([5, 1, 3, 1, 0, 0], Some((4, 10, 3))), counted(&["plain.rs"], true), "a file declared tests");
+    assert_eq!(([5, 0, 3, 1, 2, 0], Some((4, 11, 3))), counted(&["spec/", "!spec/helpers/"], true), "a negative carving a part out");
+    assert_eq!(([5, 0, 2, 0, 0, 0], Some((2, 7, 0))), counted(&["!tests/"], true),
+            "a negative taking back a build tool's directory, where the marker in 'x.rs' stays");
+    assert_eq!(([5, 0, 3, 1, 2, 1], Some((5, 12, 4))), counted(&["**", "!src/"], true), "a marker under a negative pattern");
+    assert_eq!(([7, 1, 3, 1, 2, 1], Some((6, 15, 6))), counted(&["**"], true), "two stars declare the whole target");
+    assert_eq!(([7, 1, 3, 1, 2, 1], Some((6, 15, 6))), counted(&["proj/"], true), "a pattern sees the target's own name");
+    assert_eq!(([5, 0, 3, 1, 0, 0], Some((3, 9, 2))), counted(&["work/"], true), "a folder above the target took part in a match");
+    assert_eq!(([0, 0, 0, 0, 0, 0], None), counted(&["spec/"], false), "the patterns outlived '--hide tests'");
+    assert_eq!(([7, 1, 3, 1, 2, 1], Some((6, 15, 6))), counted_under(config_of(&proj_str, from_project(&["proj/"]), true)));
+
+    let src = format!("{proj_str}/src");
+    let inside_the_project = |test_patterns| {
+        let config = config_of(&src, test_patterns, true);
+        let (languages, _) = Languages::shipped(&config);
+        let result = run(&config, languages).unwrap();
+        result.tests.get("Rust").map(|tests| (tests.stats.files, tests.stats.lines, tests.whole_files))
+    };
+    assert_eq!(Some((1, 5, 0)), inside_the_project(mezura_core::PathPatterns::of(["proj/"])), "a target below the project saw the project's name");
+    assert_eq!(Some((2, 8, 2)), inside_the_project(from_project(&["proj/"])),
+            "names from the project are read from the project folder's parent for a target inside it");
+
+    let explained = |test_patterns, file: &str| {
+        let config = config_of(&proj_str, test_patterns, true);
+        let (languages, _) = Languages::shipped(&config);
+        mezura_core::explain_file(&proj.join(file), &config, languages).unwrap()
+                .lines.iter().filter(|line| line.in_test).count()
+    };
+    let of = |patterns: &[&str]| mezura_core::PathPatterns::of(patterns);
+    assert_eq!(2, explained(of(&["spec/"]), "spec/s.rs"), "'--explain' disagrees with the run over the same file");
+    assert_eq!(0, explained(of(&["spec/", "!spec/helpers/"]), "spec/helpers/h.rs"));
+    assert_eq!(5, explained(of(&["!src/"]), "src/lib.rs"));
+    assert_eq!(2, explained(of(&["!tests/"]), "tests/x.rs"), "the marker in a file taken back by a '!' stays");
+    assert_eq!(0, explained(of(&["proj/"]), "src/plain.rs"), "a file on its own is read from the folder above its own");
+    assert_eq!(1, explained(from_project(&["proj/"]), "src/plain.rs"), "names from the project are read from the project folder's parent");
+
+    let refused = run(&config_with(&["spec/", "[bad"], true), Languages::shipped(&config_with(&[], true)).0);
+    std::fs::remove_dir_all(&root).unwrap();
+    assert!(matches!(refused, Err(mezura_core::RunError::InvalidTestPattern(mezura_core::PatternError::InvalidGlob(ref x))) if x == "[bad"),
+            "{refused:?}");
+}
