@@ -27,10 +27,6 @@ Multi line comment start
 Multi line comment end
 */
 
-Tests
-    FILE NAMES
-    *_test.cpp *_test.cc *_test.cxx *_unittest.cc
-
 Keyword
     NAME
     classes

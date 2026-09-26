@@ -1,6 +1,5 @@
 [Java]
-ParserTest.java whole
-ParserTests.java whole
-ParserTestCase.java whole
-Parser.java none
-Testament.java none
+src/test/java/ParserTest.java whole
+src/main/java/Parser.java none
+src/main/java/ParserTest.java none
+test/Runner.java none

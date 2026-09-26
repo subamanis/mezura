@@ -17,7 +17,3 @@ Escape character
 
 Comment symbols
 #
-
-Tests
-    FILE NAMES
-    test-* test_*

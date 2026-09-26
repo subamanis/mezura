@@ -15,22 +15,9 @@ src/attribute_on_an_arm.rs 3-7 # wrong, the arm alone is 3-4
 src/indented_inner_attribute.rs 2-5 # wrong, the whole module is 1-5
 src/inner_attribute_at_column_zero.rs 2-6 # wrong, the whole module is 1-4
 src/const_generic.rs 1-2 # wrong, the whole function is 1-4
+src/tests/unit.rs none
 tests/integration.rs whole
 tests/common/mod.rs whole
 tests/examples/inside_tests.rs whole
 examples/demo.rs 3-4
-examples/demo_test.rs none
 benches/speed.rs 3-6
-src/bin/tool_test.rs none
-src/foo_test.rs whole
-src/foo_tests.rs whole
-src/test_foo.rs whole
-src/tests.rs whole
-src/test.rs whole
-src/testing.rs none
-src/contest.rs none
-src/latest.rs none
-src/test/helpers.rs whole
-src/__tests__/spec.rs whole
-src/Tests/upper.rs whole
-src/Bar_Test.rs none

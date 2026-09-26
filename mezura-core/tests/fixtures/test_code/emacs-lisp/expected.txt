@@ -1,4 +1,0 @@
-[Emacs Lisp]
-parser-test.el whole
-parser-tests.el whole
-parser.el none

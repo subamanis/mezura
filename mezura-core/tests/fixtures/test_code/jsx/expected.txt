@@ -1,4 +1,0 @@
-[JSX]
-a.test.jsx whole
-a.spec.jsx whole
-a.jsx none

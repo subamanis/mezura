@@ -1,3 +1,0 @@
-[Lua]
-parser_spec.lua whole
-parser.lua none

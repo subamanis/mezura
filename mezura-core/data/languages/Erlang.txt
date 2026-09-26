@@ -19,10 +19,6 @@ Escape character
 Comment symbols
 %
 
-Tests
-    FILE NAMES
-    *_tests.erl *_SUITE.erl
-
 Keyword
 NAME
 modules

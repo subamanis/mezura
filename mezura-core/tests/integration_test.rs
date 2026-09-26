@@ -1225,6 +1225,7 @@ fn the_test_code_of_a_language_is_one_share_whichever_way_it_was_found() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::create_dir_all(root.join("tests")).unwrap();
+    std::fs::write(root.join("Cargo.toml"), "[package]\n").unwrap();
     std::fs::write(root.join("src").join("lib.rs"),
             "pub fn a() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn it() {}\n}\n").unwrap();
     std::fs::write(root.join("src").join("plain.rs"), "pub fn b() {}\n").unwrap();

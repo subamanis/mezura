@@ -1,3 +1,4 @@
 [Go]
 parser_test.go whole
 parser.go none
+testdata/input.go none

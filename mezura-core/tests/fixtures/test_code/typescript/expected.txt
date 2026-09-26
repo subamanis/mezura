@@ -1,8 +1,0 @@
-[TypeScript]
-a.test.ts whole
-a.spec.ts whole
-a.test.mts whole
-a.spec.mts whole
-a.test.cts whole
-a.spec.cts whole
-a.ts none

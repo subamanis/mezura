@@ -1,4 +1,0 @@
-[R]
-test-parser.r whole
-test_parser.r whole
-parser.r none

@@ -36,8 +36,7 @@ pub struct ExplainedLine {
     /// The line cut into its stretches of code, string and comment, in order and touching each
     /// other. Whitespace at either end of the line sits outside them, and a blank line has none.
     pub spans: Vec<Span>,
-    /// Whether the line is test code, which only a language that says how a test is spelled can
-    /// answer, and only while [`crate::EngineConfig::detect_tests`] is on.
+    /// Whether the line is test code, while [`crate::EngineConfig::detect_tests`] is on.
     pub in_test: bool,
 }
 
@@ -143,8 +142,9 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
         extension_to_name: &nested_definitions.extension_to_name,
         set_aside: &nested_definitions.set_aside,
     };
+    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let whole_file_is_tests = config.detect_tests && crate::engine::file_parser::is_a_test_file(path,
-            crate::engine::test_detection::TestScope::of_path(path.parent().unwrap_or(path)),
+            crate::engine::test_detection::TestScope::of_target(absolute.parent().unwrap_or(&absolute)),
             by_name.get(lang_name.as_ref()).unwrap());
     let (contents, report, log) = explain_parsed_file(contents, &lang_name, &nested_lookup, config, whole_file_is_tests);
 

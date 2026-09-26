@@ -1,3 +1,0 @@
-[Haskell]
-ParserSpec.hs whole
-Parser.hs none

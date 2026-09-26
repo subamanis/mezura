@@ -12,8 +12,9 @@ use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use crate::{EngineConfig, FilesPresent, GitignoreStack, ObeyedIgnoreFiles, ParsableFile, ScanProgress,
         SharedModuleLookups, TraversedDir, UnreadableDirDetails};
 use crate::engine::identity::ModuleLookups;
+use crate::engine::is_the_same_name;
 use crate::engine::modules::{ModuleId, Modules};
-use crate::engine::test_detection::TestScope;
+use crate::engine::test_detection::{BuildFilesSeen, TestScope};
 
 // A panic is caught here rather than read back from 'join', because these threads stop by counting
 // how many of them have gone idle against how many started: one that dies without ever going idle
@@ -80,12 +81,16 @@ fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs
 
             match fs::read_dir(&dir.path) {
                 Ok(entries) => {
+                    // The whole listing is read before a single child is pushed, so the build files
+                    // in it settle the scope of every child before anything under that child is
+                    // found. A listing made streaming would break that without a word.
                     let entries = entries.flatten().collect::<Vec<_>>();
-                    let present = find_ignore_files_among(&entries, ObeyedIgnoreFiles::of(&config));
+                    let (present, build_files) = find_ignore_and_build_files_among(&entries,
+                            ObeyedIgnoreFiles::of(&config), config.detect_tests);
                     let gitignore_stack = GitignoreStack::extend_with_ignore_files(&dir.path,
                             dir.gitignore_stack.clone(), &present);
                     traverse_dir(&files_injector, entries, &worker, &language_lookups, &exclude_matcher, &gitignore_stack,
-                            &config, &modules, dir.module, dir.test_scope, &dir.path, &mut files_present, progress)
+                            &config, &modules, dir.module, dir.test_scope, build_files, &dir.path, &mut files_present, progress)
                 },
                 // Everything under it goes uncounted and reaches no total, not even the number of
                 // files looked at, and nothing else would say so. The reason travels with the path,
@@ -133,37 +138,46 @@ fn steal_a_dir(id: usize, dirs_injector: &Injector<TraversedDir>, stealers: &[St
     None
 }
 
-fn find_ignore_files_among(entries: &[DirEntry], obeyed: ObeyedIgnoreFiles) -> Vec<&'static str> {
+fn find_ignore_and_build_files_among(entries: &[DirEntry], obeyed: ObeyedIgnoreFiles, note_build_files: bool)
+-> (Vec<&'static str>, BuildFilesSeen)
+{
     let mut present = Vec::new();
+    let mut build_files = BuildFilesSeen::default();
     for entry in entries {
         let file_name = entry.file_name();
-        // Matched without regard to case wherever the filesystem ignores it, since the name the
-        // listing spells is the same file there and the directory scan obeyed it above this level.
-        let Some(name) = obeyed.get_file_names().find(|name| match cfg!(any(windows, target_os = "macos")) {
-            true => file_name.as_encoded_bytes().eq_ignore_ascii_case(name.as_bytes()),
-            false => file_name == **name
-        }) else { continue };
+        let name = file_name.as_encoded_bytes();
+        let ignore_file = obeyed.get_file_names().find(|wanted| is_the_same_name(name, wanted.as_bytes()));
+        let is_a_build_file = note_build_files && BuildFilesSeen::is_a_build_file(name);
+        if ignore_file.is_none() && !is_a_build_file {
+            continue;
+        }
         // A listing says a symbolic link is a link and not what it points at, and an ignore file
         // reached through one is still read, so that case alone asks the disk.
         let is_a_file = entry.file_type().is_ok_and(|file_type| match file_type.is_symlink() {
             true => entry.path().is_file(),
             false => file_type.is_file()
         });
-        if is_a_file {
-            present.push(name);
+        if !is_a_file {
+            continue;
+        }
+        if let Some(wanted) = ignore_file {
+            present.push(wanted);
+        }
+        if is_a_build_file {
+            build_files.note(name);
         }
     }
 
     // Back into the order they overrule each other in, which a listing has no reason to hold them in
-    obeyed.get_file_names().filter(|name| present.contains(name)).collect()
+    (obeyed.get_file_names().filter(|name| present.contains(name)).collect(), build_files)
 }
 
 // 'module' is decided when the directory is queued and its entries inherit it. The two lookups below
 // only happen in a run with a target inside another target.
 fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>, dirs_worker: &Worker<TraversedDir>,
         language_lookups: &ModuleLookups, exclude_matcher: &globset::GlobSet, gitignore_stack: &Option<Arc<GitignoreStack>>,
-        config: &EngineConfig, modules: &Modules, module: ModuleId, test_scope: TestScope, dir_path: &Path,
-        files_present: &mut FilesPresent, progress: &ScanProgress)
+        config: &EngineConfig, modules: &Modules, module: ModuleId, test_scope: TestScope, build_files: BuildFilesSeen,
+        dir_path: &Path, files_present: &mut FilesPresent, progress: &ScanProgress)
 {
     let mut local_total_files = 0;
     let mut local_relevant_files = 0;
@@ -240,7 +254,7 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                     continue;
                 }
                 let module = if dir_boundaries {modules.at_dir(&pathbuf, module)} else {module};
-                let child_scope = if config.detect_tests { test_scope.of_child(&dir_name) } else { TestScope::Ordinary };
+                let child_scope = if config.detect_tests { test_scope.of_child(&dir_name, build_files) } else { TestScope::Ordinary };
                 dirs_worker.push(TraversedDir::new(pathbuf, gitignore_stack.clone(), module, child_scope));
             }
         }
@@ -330,13 +344,20 @@ mod tests {
     }
 
     #[test]
-    fn the_directory_scan_marks_directories_of_tests_and_of_other_targets() {
+    fn the_directory_scan_marks_the_test_directory_of_a_build_tool_and_no_directory_by_its_name_alone() {
+        use TestScope::{JvmSources, Ordinary, Tests};
         let root = std::env::temp_dir().join("mezura_test_scope_scan");
         let _ = fs::remove_dir_all(&root);
-        for dir in ["src/tests", "tests/examples", "examples", "src/bin"] {
+        for dir in ["cargo/tests/common", "cargo/src/tests", "cargo/examples", "bare/tests", "jvm/src/test/java",
+                "jvm/src/main/java", "jvm/test", "octave/tests", "cased/Tests"] {
             fs::create_dir_all(root.join(dir)).unwrap();
         }
-        for file in ["src/a.rs", "src/tests/b.rs", "tests/c.rs", "tests/examples/d.rs", "examples/e.rs", "src/bin/f.rs"] {
+        for file in ["cargo/Cargo.toml", "jvm/pom.xml", "octave/DESCRIPTION", "cased/Cargo.toml"] {
+            fs::write(root.join(file), "").unwrap();
+        }
+        for file in ["cargo/src/a.rs", "cargo/src/tests/b.rs", "cargo/tests/c.rs", "cargo/tests/common/d.rs", "cargo/examples/e.rs",
+                "bare/tests/f.rs", "jvm/src/test/java/T.java", "jvm/src/main/java/M.java", "jvm/src/S.java", "jvm/test/N.java",
+                "octave/tests/g.rs", "cased/Tests/h.rs"] {
             fs::write(root.join(file), "fn main() {}\n").unwrap();
         }
         let root_str = root.to_str().unwrap().replace('\\', "/");
@@ -345,20 +366,30 @@ mod tests {
                 .collect::<std::collections::BTreeMap<_, _>>();
 
         let scopes = scopes_of(scan(&root_str, "").3);
-        assert_eq!(scopes["a.rs"], TestScope::Ordinary);
-        assert_eq!(scopes["b.rs"], TestScope::Tests);
-        assert_eq!(scopes["c.rs"], TestScope::Tests);
-        assert_eq!(scopes["d.rs"], TestScope::Tests);
-        assert_eq!(scopes["e.rs"], TestScope::OtherTarget);
-        assert_eq!(scopes["f.rs"], TestScope::OtherTarget);
+        assert_eq!(scopes["a.rs"], Ordinary);
+        assert_eq!(scopes["b.rs"], Ordinary, "a 'tests' under 'src' is beside no Cargo.toml");
+        assert_eq!(scopes["c.rs"], Tests);
+        assert_eq!(scopes["d.rs"], Tests);
+        assert_eq!(scopes["e.rs"], Ordinary);
+        assert_eq!(scopes["f.rs"], Ordinary, "a 'tests' beside no build file");
+        assert_eq!(scopes["T.java"], Tests);
+        assert_eq!(scopes["M.java"], Ordinary);
+        assert_eq!(scopes["S.java"], JvmSources);
+        assert_eq!(scopes["N.java"], Ordinary, "a 'test' beside pom.xml with no 'src' above it");
+        assert_eq!(scopes["g.rs"], Ordinary, "an Octave package is not an R one");
+        assert_eq!(scopes["h.rs"], if cfg!(any(windows, target_os = "macos")) { Tests } else { Ordinary });
 
-        let inside = scopes_of(scan(&format!("{root_str}/tests/examples"), "").3);
-        assert_eq!(inside["d.rs"], TestScope::Tests);
-        let named = scopes_of(scan(&format!("{root_str}/examples/e.rs"), "").3);
-        assert_eq!(named["e.rs"], TestScope::OtherTarget);
+        let inside = scopes_of(scan(&format!("{root_str}/cargo/tests/common"), "").3);
+        assert_eq!(inside["d.rs"], Tests);
+        let sources = scopes_of(scan(&format!("{root_str}/jvm/src"), "").3);
+        assert_eq!((sources["T.java"], sources["M.java"], sources["S.java"]), (Tests, Ordinary, JvmSources));
+        let named = scopes_of(scan(&format!("{root_str}/cargo/tests/c.rs"), "").3);
+        assert_eq!(named["c.rs"], Tests);
+        let under = scopes_of(scan(&format!("{root_str}/cargo/src/tests"), "").3);
+        assert_eq!(under["b.rs"], Ordinary);
 
         let off = scopes_of(scan(&root_str, "--hide tests").3);
-        assert!(off.values().all(|scope| *scope == TestScope::Ordinary), "{off:?}");
+        assert!(off.values().all(|scope| *scope == Ordinary), "{off:?}");
 
         fs::remove_dir_all(&root).unwrap();
     }

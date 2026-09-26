@@ -1,4 +1,0 @@
-[Groovy]
-ParserSpec.groovy whole
-ParserTest.groovy whole
-Parser.groovy none

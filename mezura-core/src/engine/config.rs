@@ -341,8 +341,9 @@ pub struct EngineConfig {
     /// by default. Set to false, such a file is never opened and never counted, and no `#!` line
     /// decides anything, a contested extension included.
     pub detect_shebangs: bool,
-    /// Whether the lines of a file that are test code are told apart from the rest, for the
-    /// languages that say how a test is spelled. True by default.
+    /// Whether test code is told apart from the rest, which is the lines a language's markers
+    /// open, the files its toolchain names as tests, and the files under the test directory of a
+    /// build tool. True by default.
     pub detect_tests: bool
 }
 

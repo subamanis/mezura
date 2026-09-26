@@ -82,7 +82,11 @@ Each directory is a small project of one language, and its `expected.txt` says w
 file in it are test code. `tests/test_detection.rs` copies each tree to a temporary directory,
 counts it through `run` with one producer and four consumers and `collect_files` on, and compares
 every file and the language's own figure against that file. The copy is not optional: the fixtures
-sit under a directory named `tests`, and a target under one is test code whole.
+sit under the `tests` beside this crate's `Cargo.toml`, where every file is test code. Each tree
+is copied twice, under a folder named `tests` and under an ordinary one, and both copies have to
+answer the same. A build file that cargo would read as a package of its own, the Rust tree's
+`Cargo.toml`, is checked in as `Cargo.toml.fixture` and copied without the suffix, since
+`cargo package` leaves a directory holding a `Cargo.toml` out of the crate.
 
 The file is a `[Language]` heading and then one line per file, the path and then what is test code
 in it:
@@ -92,7 +96,7 @@ in it:
 src/inline_module.rs 3-11
 src/attributed_functions.rs 3-6,10-14,16-19
 tests/integration.rs whole
-src/latest.rs none
+src/markers_elsewhere.rs none
 src/attribute_on_a_field.rs 3-6 # wrong, the field alone is 3-4
 ```
 
@@ -107,8 +111,9 @@ not is in `TEST_DETECTION.md` at the repository root.
 
 The three languages with markers, Rust, D and Zig, carry every form the extent rule has to follow
 and every trap it is known to fall into, written adversarially: a test module that is the last thing
-in a file proves nothing about the rule. The other trees hold one file per declared test file name
-and one that matches none.
+in a file proves nothing about the rule. Go and Perl hold a file of the name their toolchain defines
+and one that matches none. The other trees hold a build file with the directory it makes test code,
+and `no-build-file` holds those directories with nothing beside them.
 
 ## The printed output, which is covered elsewhere
 

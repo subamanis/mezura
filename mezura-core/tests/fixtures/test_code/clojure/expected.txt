@@ -1,5 +1,0 @@
-[Clojure]
-parser_test.clj whole
-parser_test.cljs whole
-parser_test.cljc whole
-parser.clj none

@@ -1,4 +1,5 @@
 [Swift]
-ParserTests.swift whole
-ParserTest.swift whole
-Parser.swift none
+Tests/ParserTests.swift whole
+Sources/Parser.swift none
+Sources/ParserTests.swift none
+Package.swift none

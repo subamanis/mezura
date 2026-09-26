@@ -246,15 +246,20 @@ Everything that needs those lives inside the blocks and carries its own language
 ## Test code
 
 Some languages put tests in the same file as the code. Declare what a test starts with, and the
-lines from there to the end of that item go to a `tests` row under the language. Declare which
-file names are test files, and every line of those files goes to the same row.
+lines from there to the end of that item go to a `tests` row under the language. Where the
+toolchain itself gives test files a name, declare the name, and every line of those files goes to
+the same row.
 
 ```
 Tests
     MARKERS
     #[ #![
+```
+
+```
+Tests
     FILE NAMES
-    tests.rs test.rs *_test.rs *_tests.rs test_*
+    *_test.go
 ```
 
 Either line can be left out, and `MARKERS` comes first when both are there. A block with neither
@@ -266,9 +271,12 @@ refuses the file.
 like D's `unittest`. A test runs from the marker to the brace matching the first `{`, or to the
 first `;`, whichever comes first, and an `if` continues through its `else`.
 
-`FILE NAMES` takes three shapes only: `*suffix`, `prefix*` and a whole name, case-sensitive. The
-directory names `test`, `tests` and `__tests__` are built in and the same for every language, so
-file names are only checked outside them, and skipped inside `examples`, `benches` and `bin`.
+`FILE NAMES` takes three shapes only: `*suffix`, `prefix*` and a whole name, case-sensitive. It is
+for a name the toolchain defines, the way the go tool builds `*_test.go` only for `go test` and a
+Perl `.t` file is a test script and nothing else. A name a framework or a team merely favours is
+declared by whoever counts, with `--tests`. The directory a build tool compiles for tests alone,
+`tests` beside a `Cargo.toml` or `src/test` beside a `pom.xml`, is built in and the same for every
+language, so file names are only checked outside one.
 
 What each language gets right and what it misses is in `TEST_DETECTION.md`.
 

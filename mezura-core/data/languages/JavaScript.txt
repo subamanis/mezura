@@ -28,10 +28,6 @@ Multi line comment start
 Multi line comment end
 */
 
-Tests
-    FILE NAMES
-    *.test.js *.spec.js *.test.mjs *.spec.mjs *.test.cjs *.spec.cjs
-
 Keyword
     NAME
     classes

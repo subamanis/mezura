@@ -1,3 +1,0 @@
-[Shell]
-parser.bats whole
-parser.sh none

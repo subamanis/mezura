@@ -30,10 +30,6 @@ Multi line comment start
 Multi line comment end
 #>
 
-Tests
-    FILE NAMES
-    *.Tests.ps1
-
 Keyword
 NAME
 classes

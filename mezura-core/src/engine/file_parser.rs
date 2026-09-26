@@ -4797,7 +4797,7 @@ mod tests {
         assert_eq!(tests_of(&named_as_a_test, TestScope::Ordinary, &on), Some(whole.clone()));
         assert_eq!(tests_of(&named_plainly, TestScope::Ordinary, &on), None);
         assert_eq!(tests_of(&named_plainly, TestScope::Tests, &on), Some(whole.clone()));
-        assert_eq!(tests_of(&named_as_a_test, TestScope::OtherTarget, &on), None);
+        assert_eq!(tests_of(&named_as_a_test, TestScope::JvmSources, &on), Some(whole.clone()));
         let off = EngineConfig { detect_tests: false, ..EngineConfig::default() };
         assert_eq!(tests_of(&named_as_a_test, TestScope::Tests, &off), None);
 

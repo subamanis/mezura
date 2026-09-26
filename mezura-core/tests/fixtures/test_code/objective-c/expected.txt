@@ -1,4 +1,0 @@
-[Objective-C]
-ParserTests.m whole
-ParserTest.m whole
-Parser.m none

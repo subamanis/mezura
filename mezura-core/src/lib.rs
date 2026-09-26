@@ -385,6 +385,7 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
         files_present: &mut FilesPresent, language_lookups: &engine::identity::ModuleLookups, modules: &Modules,
         progress: &ScanProgress)
 {
+    let mut scopes_of_directories = HashMap::new();
     for target in crate::engine::targets::topmost_targets(targets) {
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(&target);
@@ -398,7 +399,7 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
                 true => ParsableFile::written_by_hand(dir_path.to_path_buf(), lang_name, module, size),
                 false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module, size)
             };
-            let test_scope = find_test_scope_of_target(config, dir_path.parent().unwrap_or(dir_path));
+            let test_scope = find_test_scope_of_target(config, dir_path.parent().unwrap_or(dir_path), &mut scopes_of_directories);
             files_injector.push(queued.with_extension_rules(lookup.find_extension_rules(dir_path))
                     .with_test_scope(test_scope));
             files_present.total_files += 1;
@@ -407,13 +408,21 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
         } else if dir_path.is_dir() {
             let gitignore_stack = GitignoreStack::for_root_dir(dir_path, ObeyedIgnoreFiles::of(config));
             dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module,
-                    find_test_scope_of_target(config, dir_path)));
+                    find_test_scope_of_target(config, dir_path, &mut scopes_of_directories)));
         }
     }
 }
 
-fn find_test_scope_of_target(config: &EngineConfig, path: &Path) -> TestScope {
-    if config.detect_tests { TestScope::of_path(path) } else { TestScope::Ordinary }
+fn find_test_scope_of_target(config: &EngineConfig, directory: &Path, known: &mut HashMap<PathBuf, TestScope>) -> TestScope {
+    if !config.detect_tests {
+        return TestScope::Ordinary;
+    }
+    if let Some(scope) = known.get(directory) {
+        return *scope;
+    }
+    let scope = TestScope::of_target(directory);
+    known.insert(directory.to_path_buf(), scope);
+    scope
 }
 
 // A language nobody wrote a file in would take a row in every report and add nothing to any figure.

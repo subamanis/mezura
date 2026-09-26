@@ -20,10 +20,6 @@ Self-nesting comment start
 Self-nesting comment end
 */
 
-Tests
-    FILE NAMES
-    *Spec.scala *Test.scala *Suite.scala
-
 Keyword
 NAME
 classes

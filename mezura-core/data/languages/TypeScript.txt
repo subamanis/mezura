@@ -25,10 +25,6 @@ Multi line comment start
 Multi line comment end
 */
 
-Tests
-    FILE NAMES
-    *.test.ts *.spec.ts *.test.mts *.spec.mts *.test.cts *.spec.cts
-
 Keyword
     NAME
     classes

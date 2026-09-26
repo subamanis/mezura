@@ -5,19 +5,16 @@ use mezura_core::{EngineConfig, Languages, Threads, run};
 
 const FIXTURES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/test_code");
 const EXPECTED_FILE_NAME : &str = "expected.txt";
-const TEST_DIRECTORY_NAMES : [&str; 3] = ["test", "tests", "__tests__"];
+// A Cargo.toml checked in under its own name makes 'cargo package' leave the whole tree out of the
+// crate, so it is checked in with this suffix and copied without it.
+const HELD_BACK_SUFFIX : &str = ".fixture";
 const CONSUMER_THREADS : usize = 4;
 
-// Each tree is copied out of 'tests/' before it is counted. A target under a directory of that
-// name is test code whole, and every file in it would come back that way.
+// Each tree is copied out before it is counted, since the fixtures sit under the 'tests' beside
+// this crate's Cargo.toml, where every file is test code.
 #[test]
 fn every_tree_of_test_code_is_counted_as_its_expected_file_says() {
     let scratch = std::env::temp_dir().join("mezura-test-code-trees");
-    for component in scratch.components() {
-        let name = component.as_os_str().to_string_lossy().to_lowercase();
-        assert!(!TEST_DIRECTORY_NAMES.contains(&name.as_str()),
-                "{} sits under a directory of tests and cannot hold the trees", scratch.display());
-    }
     let _ = std::fs::remove_dir_all(&scratch);
 
     let mut trees = std::fs::read_dir(FIXTURES_DIR).unwrap()
@@ -26,9 +23,12 @@ fn every_tree_of_test_code_is_counted_as_its_expected_file_says() {
     assert!(!trees.is_empty());
     let mut failures = Vec::new();
     for tree in &trees {
-        let root = scratch.join(tree.file_name().unwrap());
-        copy_tree(tree, &root);
-        failures.extend(compare_tree(&root, &read_expectations(tree)));
+        let expected = read_expectations(tree);
+        for holder in ["tests", "work"] {
+            let root = scratch.join(holder).join(tree.file_name().unwrap());
+            copy_tree(tree, &root);
+            failures.extend(compare_tree(&root, &expected));
+        }
     }
     std::fs::remove_dir_all(&scratch).unwrap();
     assert!(failures.is_empty(), "\n{}\n", failures.join("\n"));
@@ -91,7 +91,8 @@ fn parse_expectation(spec: &str, contents: &[u8], at: &str) -> Expectation {
 
 fn compare_tree(root: &Path, expected: &BTreeMap<(String, String), Expectation>) -> Vec<String> {
     let root_str = root.to_string_lossy().replace('\\', "/");
-    let tree = root.file_name().unwrap().to_string_lossy().into_owned();
+    let tree = format!("{}/{}", root.parent().unwrap().file_name().unwrap().to_string_lossy(),
+            root.file_name().unwrap().to_string_lossy());
     let counted = |detect_tests: bool| {
         let config = EngineConfig { detect_tests, collect_files: true,
                 threads: Threads::new(1, CONSUMER_THREADS), ..EngineConfig::new([root_str.clone()]) };
@@ -166,10 +167,12 @@ fn copy_tree(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap() {
         let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let target = to.join(name.strip_suffix(HELD_BACK_SUFFIX).unwrap_or(&name));
         if entry.path().is_dir() {
             copy_tree(&entry.path(), &target);
-        } else if entry.file_name() != EXPECTED_FILE_NAME {
+        } else if name != EXPECTED_FILE_NAME {
             std::fs::copy(entry.path(), target).unwrap();
         }
     }

@@ -1,3 +1,0 @@
-[PHP]
-ParserTest.php whole
-Parser.php none

@@ -1,3 +1,0 @@
-[Solidity]
-Parser.t.sol whole
-Parser.sol none

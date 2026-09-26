@@ -1,3 +1,5 @@
 [Dart]
-parser_test.dart whole
-parser.dart none
+test/parser_test.dart whole
+integration_test/app_test.dart whole
+lib/parser.dart none
+lib/parser_test.dart none

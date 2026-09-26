@@ -419,9 +419,10 @@ pub const HIDE_HELP  :  &str =
                       run faster
       nested-languages  the rows that break a container file down, so a '.vue' weighs whole on
                       the Vue row with no sign of the TypeScript and CSS inside it
-      tests           the rows that split a language into its test code and the rest, drawn for
-                      the languages that say how a test is spelled or named. This one also stops
-                      the detection, which is the other name that makes a run faster
+      tests           the rows that split a language into its test code and the rest. Test code
+                      is what a language's markers open, the files its toolchain names as tests,
+                      and the files under the test directory of a build tool. This one also
+                      stops the detection, which is the other name that makes a run faster
       files           the files column of the details rows
       comments        the comments column of the details rows
       extra           the third column of the details rows, which is what '--counting content'

@@ -1,3 +1,0 @@
-[PowerShell]
-Parser.Tests.ps1 whole
-Parser.ps1 none
