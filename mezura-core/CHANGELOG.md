@@ -1,5 +1,49 @@
 # Changelog
 
+## 2.0.0, unreleased
+
+New:
+
+- Test code can now be detected. `RunResult::tests`, `ModuleResult::tests` and
+  `FileEntry::tests` carry it per language, per module and per file, as a `TestCode` holding the
+  same `Stats` a language has plus `whole_files`. Without being asked the engine takes what a
+  language's markers open (Rust, D and Zig), the file names a toolchain defines (`_test.go`,
+  Perl's `.t`) and the directory a build tool compiles for tests alone beside its build file;
+  `EngineConfig::test_patterns` declares the rest, a `!` pattern takes a file or a directory back,
+  and `EngineConfig::detect_tests` turns the whole of it off. What each language gets right and
+  what it misses is in `TEST_DETECTION.md` beside the main README.
+- `Language::test_markers`, `Language::test_file_names` and `Language::with_tests`, read from the
+  `Tests` block of a language file, and `TestFileName` for the three shapes a name takes.
+- `PathPatterns`, the patterns of the exclusions and of the test code together with the directory
+  their names are read from, and `PatternError` for one that does not parse. The warning code
+  `pattern-matched-nothing` reports a pattern that names nothing on disk, a place outside every
+  target, or a name nothing matched.
+- `FileExplanation::test_file_rule` names the rule that made a whole file test code, as a
+  `TestFileRule`, and `ExplainedLine::in_test` marks each line of it.
+- `.t` files are counted as Perl.
+
+Changed:
+
+- `EngineConfig::exclude_dirs` is now `exclude_patterns`, a `PathPatterns`. A name pattern matches
+  at any depth below the folder that holds the target and no folder above it, a pattern starting
+  with `./` or `../` or written as a full path names one place, a trailing `/` means a folder
+  only, `x/**` means the folder `x`, and names are matched with their case.
+- `EngineConfig`, `Language`, `ExplainedLine`, `FileExplanation`, `RunResult`, `ModuleResult` and
+  `FileEntry` gained public fields, so a struct literal of any of them written outside the crate
+  stops compiling until it names them.
+
+Fixes:
+
+- An absolute target holding `..`, `D:/proj/tests/..`, is resolved to the folder it names, so
+  beside a target inside that folder it is counted once. A relative target on a network share,
+  `./src` from `\\server\share\proj`, no longer fails.
+- An exclusion no longer matches a folder above the counted tree, so `tests/**` no longer drops a
+  project that sits under a folder named `tests`, and a pattern starting with `./` excludes what
+  it names. A full path pattern works under a folder with brackets in its name and in any letter
+  case.
+
+-----------------------------------------------------------------------------------------------------------
+
 ## 1.1.2, 2026-09-19
 
 14,826 Total lines  -  8,564 Code lines

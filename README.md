@@ -26,6 +26,7 @@ The whole Linux kernel, in five of the bundled themes:
 * [What is counted](#what-is-counted)
   * [The counting model](#the-counting-model)
   * [What is skipped](#what-is-skipped)
+  * [Test code](#test-code)
 * [Taking the result elsewhere](#taking-the-result-elsewhere)
   * [Markdown output](#markdown-output)
   * [JSON output](#json-output)
@@ -59,6 +60,11 @@ Things it does that most counters do not:
   anything, counted only where they appear as code and never inside a string or a comment.
 - **Nested languages.** The `<script>` and `<style>` blocks of HTML, Vue, Svelte and Astro files are
   counted as the distinct languages they hold.
+- **Test code, counted apart.** Each language's tests are a row under it and under the total: what
+  the code itself marks (Rust's `#[cfg(test)]`, D's `unittest`, Zig's `test`), what the toolchain
+  names (`_test.go`, Perl's `.t`), what a build tool compiles for tests alone (`tests/` beside a
+  `Cargo.toml`, `src/test/` beside a `pom.xml`), and what you declare with `--tests`. See
+  [Test code](#test-code).
 - **Modules.** Give a name to parts of a project and the report is grouped by these parts as well as by
   language. This way you can split your project into e.g. Frontend and Backend and Tests and see distinct reports for each module in the same table in the same run. See [Modules](#modules).
 - **Track the history of your codebase.** Log runs and compare against earlier ones, or diff against a git revision.   See [Tracking growth](#tracking-growth).
@@ -296,6 +302,30 @@ The reasoning behind the tests is in [Accuracy and limitations](#accuracy-and-li
 A path you write out yourself is always counted, even if it is ignored, dotted, a link, minified,
 generated or not code. The matches of a glob pattern were found by mezura rather than named by
 you, so those are skipped like any other found path.
+
+### Test code
+
+The test code of each language is counted apart from the rest, as a `tests` row under the language
+and one under the total. Without being asked, mezura takes only what is certain: the tests a
+language marks in the source (`#[cfg(test)]` and `#[test]` in Rust, `unittest` in D, `test` in
+Zig), the file names a toolchain itself defines (`_test.go`, Perl's `.t`), and the directory a
+build tool compiles for tests alone (`tests/` beside a `Cargo.toml`, `src/test/` beside a `pom.xml`
+or a `build.gradle`, `Tests/` beside a `Package.swift`, `test/` beside a `mix.exs`, and the rest of
+that table). A folder named `tests` with no build file beside it is a folder. Everything that is a
+convention, `test_*.py`, `*.spec.ts`, `spec/`, is declared with `--tests`, which takes glob
+patterns and a `!` to take one back, and lives in the project's own configuration once saved:
+
+```bash
+mezura ./ --tests "spec/,!spec/fixtures/"
+mezura ./ --tests "__tests__/,*.test.ts,*.test.tsx"
+```
+
+`--tests-breakdown split` draws the rest of the language as a `production` row beside the tests,
+`--hide tests` turns the whole thing off, and `--explain` marks each line of test code and says
+which rule made a whole file one. What is found for each language, what is refused (doc tests,
+tests a macro writes, a framework's names) and every known limitation with its example are in
+**[Test detection](https://github.com/subamanis/mezura/blob/HEAD/TEST_DETECTION.md)**, with ready
+patterns for pytest, jest, RSpec, PHPUnit and the `.Tests` projects of .NET.
 
 
 

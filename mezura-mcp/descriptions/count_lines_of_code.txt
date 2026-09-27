@@ -1,8 +1,9 @@
 Count the code in a directory or a single file and return mezura's report, as text to read.
 
 For each language: how many files, how many lines, how many of those lines are code, how many are
-comments, the share of the project it holds, and its size on disk. Then a total, and the counts of
-what each language declares (classes, structs, functions).
+comments, the share of the project it holds, and its size on disk. A language's test code is a row
+of its own under it, and under the total. Then the counts of what each language declares (classes,
+structs, functions).
 
 Answers questions like: how big is this project, what is it written in, how much of it is comments,
 which language holds most of the code, which files are the longest.
