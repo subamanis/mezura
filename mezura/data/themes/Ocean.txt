@@ -45,6 +45,21 @@ nested-extra = 8b9db0
 nested-size = 8b9db0
 nested-size-unit = 5b7688
 
+production-branch = 64798c
+production-percent = 74899c
+production-size-unit = 5b7688
+
+tests-name = 91beaa bold
+tests-branch = 64798c
+tests-percent = 647d72
+tests-files = 7aa694
+tests-lines = 93bfac
+tests-code = 7aa694
+tests-comments = 7aa694
+tests-extra = 7aa694
+tests-size = 7aa694
+tests-size-unit = 5b7688
+
 file-name = 92a3b5
 file-branch = 64798c
 file-percent = 64798c

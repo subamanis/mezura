@@ -20,3 +20,16 @@ nested-comments = 9399b2
 nested-extra = 9399b2
 nested-size = 9399b2
 nested-size-unit = 6f8a92
+
+production-branch = 6c7086
+
+tests-name = c6a1bb bold
+tests-branch = 6c7086
+tests-percent = 7f6a79
+tests-files = b18ea7
+tests-lines = cba6c1
+tests-code = b18ea7
+tests-comments = b18ea7
+tests-extra = b18ea7
+tests-size = b18ea7
+tests-size-unit = 6f8a92

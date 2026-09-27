@@ -35,6 +35,8 @@ Bugfixes:
   -> A full-path pattern works under a folder with brackets in its name and in any letter case.
   -> The note of '--diff' that took 'hide keywords' from a document no longer asks for a value to be
       typed that no command can type.
+  -> In the table, the boxed table and a comparison, the branch before a nested language or a file
+      takes the theme's 'nested-branch' or 'file-branch' color, as it already did in the list.
 
 Change in commands:
   -> A name pattern that reaches above a target no longer matches: 'services/api/gen' with the
@@ -53,6 +55,8 @@ Other:
       became 'exclude_patterns', and 'RunResult', 'ModuleResult', 'FileEntry', 'Language',
       'ExplainedLine' and 'FileExplanation' gained the fields the above need. Its own CHANGELOG has
       the whole of it.
+  -> The theme editor opens on the Mezura theme, and its preview is shorter, so more of the tokens
+      under it fit on the same screen.
 
 -----------------------------------------------------------------------------------------------------------
 

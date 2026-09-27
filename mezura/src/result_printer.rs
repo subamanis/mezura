@@ -168,12 +168,14 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
 // run uses, and follows the layout and the counting model in effect, since the third column is
 // labelled by the model. The figures are constants, so every theme is judged against the same row.
 pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingModel) -> Vec<String> {
-    const NAME    : &str   = "Rust";
-    const FILES   : usize  = 1_284;
-    const BYTES   : usize  = 3_412_500;
+    const NAME       : &str   = "Rust";
+    const FILES      : usize  = 1_284;
+    const BYTES      : usize  = 3_412_500;
+    const TEST_FILES : usize  = 402;
+    const TEST_BYTES : usize  = 1_047_300;
 
-    // Given as classes and not as three columns: the columns are folds of these, and a hand written
-    // pair that disagreed would print a third column no class of it accounts for.
+    // Given as classes, since the three columns are folds of them. A hand written pair that
+    // disagreed would print a third column no class of it accounts for.
     let classes = mezura_core::LineClasses {
         words_in_code: 68_004, string_content: 2_800, comment_words_beside_code: 200,
         words_in_comment: 12_638, punctuation_in_code: 9_100, punctuation_in_comment: 190,
@@ -181,12 +183,19 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
     };
     let (lines, code, comments) = (classes.calculate_lines(),
             model.calculate_code_lines(&classes), model.calculate_comment_lines(&classes));
+    let test_classes = mezura_core::LineClasses {
+        words_in_code: 21_470, string_content: 1_310, comment_words_beside_code: 40,
+        words_in_comment: 2_150, punctuation_in_code: 2_880, punctuation_in_comment: 30,
+        blank: 1_020, blank_in_comment: 20, blank_in_string: 60
+    };
 
     let keywords = hashmap!("structs".to_owned() => 284usize, "traits".to_owned() => 31);
     let per_language = hashmap!(NAME.to_owned() => Stats::new(FILES, BYTES, lines, classes, keywords.clone()));
+    let tests = hashmap!(NAME.to_owned() => TestCode { whole_files: 118,
+            stats: Stats::new(TEST_FILES, TEST_BYTES, test_classes.calculate_lines(), test_classes, HashMap::new()) });
     let total = Stats::total_of(&per_language);
     let groups = vec![Group {name: None, languages: vec![NAME.to_owned()], hidden: 0,
-            per_language: &per_language, nested: &NO_NESTED, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share, files: HashMap::new(),
+            per_language: &per_language, nested: &NO_NESTED, tests: &tests, tests_breakdown: TestsBreakdown::Share, files: HashMap::new(),
             total: &total, baseline: None}];
 
     // The two tables keep their keywords in a block of their own, so the sample has to ask for it
@@ -210,8 +219,13 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
             let width = columns.width(theme);
             let row = columns.format_breakdown_row(theme, &theme.details_language_name.paint(NAME).to_string(),
                     NAME.len(), FILES, lines, code, comments);
-            vec![columns.append_size(&theme.arrow, &row, &format_size(theme, BYTES), width),
-                 get_keywords_as_str(theme, &keywords, None, columns.calculate_words_start(), width)]
+            let mut rows = vec![columns.append_size(&theme.arrow, &row, &format_size(theme, BYTES), width)];
+            let parts = find_parts_of(&groups[0], NAME, &per_language[NAME]);
+            for (at, (part, stats, kind)) in parts.iter().enumerate() {
+                rows.push(format_list_sub_row(theme, &columns, "", part, stats, *kind, at + 1 == parts.len(), width));
+            }
+            rows.push(get_keywords_as_str(theme, &keywords, None, columns.calculate_words_start(), width));
+            rows
         }
     }
 }
@@ -3540,6 +3554,17 @@ mod tests {
                 format_and_print_results(&of_modules(single()), &None, &Local::now(), &config);
                 format_and_print_results(&of_modules(sample_modules()), &None, &Local::now(), &config);
             }
+        }
+    }
+
+    #[test]
+    fn the_theme_preview_draws_a_tests_row_in_every_layout() {
+        colored::control::set_override(false);
+
+        for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
+            let rows = create_theme_sample_rows(&Theme::default(), layout, CountingModel::default());
+            assert_eq!(rows.iter().filter(|row| row.contains(TESTS_NAME)).count(), 1,
+                    "the {layout:?} preview has no tests row:\n{}", rows.join("\n"));
         }
     }
 

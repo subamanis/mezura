@@ -31,7 +31,8 @@
   #add-chip { border-style: dashed; color: #555; font-size: 1.05rem; padding: 0.45rem 0.85rem; }
   #add-chip:hover { color: #999; }
 
-  #run { background: var(--term-bg); border-radius: 6px; padding: 1.1rem 1.3rem; font-size: 0.84rem; line-height: 1.8; overflow-x: auto; white-space: pre; margin-bottom: 1.3rem; color: #c8c8c8; }
+  #run { background: var(--term-bg); border-radius: 6px; padding: 1.1rem 1.3rem; font-size: 0.84rem; line-height: 1.6; overflow-x: auto; white-space: pre; margin-bottom: 1.3rem; color: #c8c8c8; }
+  #run .gap { height: 1em; }
   #run .tok { cursor: pointer; }
   #run .tok.lit { outline: 1px solid #6a6a6a; outline-offset: 1px; border-radius: 2px; }
 
@@ -136,37 +137,39 @@ const NAMED_COLORS = {
   "bright-cyan": "#61D6D6", "bright-white": "#F2F2F2"
 };
 
-// One real run of 'mezura ./ --languages rust,html,c,vue', with the token that paints each stretch
-// beside it. Four languages and nothing folded, which is the one shape where all four language
-// slots are drawn. Regenerate it from a real run rather than editing the numbers by hand: every
-// figure here is a measurement and the column widths are the renderer's arithmetic.
+// One real run of 'mezura' over a web project with '--tests "*.spec.ts,test/" --tests-breakdown split --exclude "*.sql"',
+// with the token that paints each stretch beside it. Regenerate it from a real run and leave the
+// numbers alone, since every figure here is a measurement and the column widths are the renderer's arithmetic.
 const SAMPLE = [
   [["heading","Details"],["","."]],
   [],
-  [["details-language-header","Language"],["","     "],["files-label","Files"],[""," "],["percent","%"],["","       "],["sort-marker","⌄"],[""," "],["lines-label","Lines"],[""," "],["percent","%"],["","         "],["code-label","Code"],[""," "],["percent","%"],["","       "],["comments-label","Comments"],[""," "],["percent","%"],["","       "],["extra-label","Extra"],["","       "],["total-size-label","Size"]],
-  [["separator-header","───────────────────────────────────────────────────────────────────────────────────────────"]],
-  [["details-language-name","TSX"],["","             "],["files-number","54"],[""," "],["percent","38.6%"],["","     "],["lines-number","5,626"],[""," "],["percent","36.5%"],["","    "],["code-number","4,118"],[""," "],["percent","73.2%"],["","        "],["comments-number","136"],[""," "],["percent","2.42%"],["","   "],["extra-number","1,372"],["","   "],["total-size-number","186.3 "],["size-unit","KB"]],
-  [["details-language-name","SCSS"],["","            "],["files-number","52"],[""," "],["percent","37.1%"],["","     "],["lines-number","5,261"],[""," "],["percent","34.1%"],["","    "],["code-number","3,554"],[""," "],["percent","67.6%"],["","         "],["comments-number","40"],[""," "],["percent","0.76%"],["","   "],["extra-number","1,667"],["","    "],["total-size-number","98.9 "],["size-unit","KB"]],
-  [["details-language-name","TypeScript"],["","      "],["files-number","24"],[""," "],["percent","17.1%"],["","     "],["lines-number","3,408"],[""," "],["percent","22.1%"],["","    "],["code-number","2,132"],[""," "],["percent","62.6%"],["","        "],["comments-number","451"],[""," "],["percent","13.2%"],["","     "],["extra-number","825"],["","   "],["total-size-number","156.8 "],["size-unit","KB"]],
-  [["details-language-name","Shell"],["","            "],["files-number","6"],[""," "],["percent","4.29%"],["","       "],["lines-number","948"],[""," "],["percent","6.15%"],["","      "],["code-number","660"],[""," "],["percent","69.6%"],["","        "],["comments-number","102"],[""," "],["percent","10.8%"],["","     "],["extra-number","186"],["","    "],["total-size-number","25.0 "],["size-unit","KB"]],
-  [["details-language-name","JavaScript"],["","       "],["files-number","2"],[""," "],["percent","1.43%"],["","       "],["lines-number","136"],[""," "],["percent","0.88%"],["","       "],["code-number","98"],[""," "],["percent","72.1%"],["","          "],["comments-number","0"],["","            "],["extra-number","38"],["","     "],["total-size-number","4.4 "],["size-unit","KB"]],
-  [["details-language-name","HTML"],["","             "],["files-number","1"],[""," "],["percent","0.71%"],["","        "],["lines-number","23"],[""," "],["percent","0.15%"],["","       "],["code-number","21"],[""," "],["percent","91.3%"],["","          "],["comments-number","1"],[""," "],["percent","4.35%"],["","       "],["extra-number","1"],["","     "],["total-size-number","1.2 "],["size-unit","KB"]],
-  [["details-language-name","SQL"],["","              "],["files-number","1"],[""," "],["percent","0.71%"],["","         "],["lines-number","7"],[""," "],["percent","0.05%"],["","        "],["code-number","6"],[""," "],["percent","85.7%"],["","          "],["comments-number","0"],["","             "],["extra-number","1"],["","      "],["total-size-number","479 "],["size-unit","B"]],
-  [["separator-total","───────────────────────────────────────────────────────────────────────────────────────────"]],
-  [["details-total","Total"],["","          "],["files-number","140"],[""," "],["percent","100%"],["","     "],["lines-number","15,409"],[""," "],["percent","100%"],["","    "],["code-number","10,589"],[""," "],["percent","68.7%"],["","        "],["comments-number","730"],[""," "],["percent","4.74%"],["","   "],["extra-number","4,090"],["","   "],["total-size-number","473.2 "],["size-unit","KB"]],
+  [["details-language-header","Language"],["","         "],["files-label","Files"],[""," "],["percent","%"],["","       "],["sort-marker","⌄"],[""," "],["lines-label","Lines"],[""," "],["percent","%"],["","         "],["code-label","Code"],[""," "],["percent","%"],["","       "],["comments-label","Comments"],[""," "],["percent","%"],["","       "],["extra-label","Extra"],["","       "],["total-size-label","Size"]],
+  [["separator-header","───────────────────────────────────────────────────────────────────────────────────────────────"]],
+  [["details-language-name","TSX"],["","                 "],["files-number","54"],[""," "],["percent","38.8%"],["","     "],["lines-number","5,626"],[""," "],["percent","36.5%"],["","    "],["code-number","4,118"],[""," "],["percent","73.2%"],["","        "],["comments-number","136"],[""," "],["percent","2.42%"],["","   "],["extra-number","1,372"],["","   "],["total-size-number","186.3 "],["size-unit","KB"]],
+  [["details-language-name","SCSS"],["","                "],["files-number","52"],[""," "],["percent","37.4%"],["","     "],["lines-number","5,261"],[""," "],["percent","34.2%"],["","    "],["code-number","3,554"],[""," "],["percent","67.6%"],["","         "],["comments-number","40"],[""," "],["percent","0.76%"],["","   "],["extra-number","1,667"],["","    "],["total-size-number","98.9 "],["size-unit","KB"]],
+  [],
+  [["details-language-name","TypeScript"],["","          "],["files-number","24"],[""," "],["percent","17.3%"],["","     "],["lines-number","3,408"],[""," "],["percent","22.1%"],["","    "],["code-number","2,132"],[""," "],["percent","62.6%"],["","        "],["comments-number","451"],[""," "],["percent","13.2%"],["","     "],["extra-number","825"],["","   "],["total-size-number","156.8 "],["size-unit","KB"]],
+  [["production-branch"," ├─ "],["production-name","production"],["","      "],["production-files","23"],[""," "],["production-percent","95.8%"],["","     "],["production-lines","3,383"],[""," "],["production-percent","99.3%"],["","    "],["production-code","2,118"],[""," "],["production-percent","62.6%"],["","        "],["production-comments","446"],[""," "],["production-percent","13.2%"],["","     "],["production-extra","819"],["","   "],["production-size","155.7 "],["production-size-unit","KB"]],
+  [["tests-branch"," └─ "],["tests-name","tests"],["","            "],["tests-files","1"],[""," "],["tests-percent","4.17%"],["","        "],["tests-lines","25"],[""," "],["tests-percent","0.73%"],["","       "],["tests-code","14"],[""," "],["tests-percent","56.0%"],["","          "],["tests-comments","5"],[""," "],["tests-percent","20.0%"],["","       "],["tests-extra","6"],["","     "],["tests-size","1.2 "],["tests-size-unit","KB"]],
+  [],
+  [["details-language-name","Shell"],["","                "],["files-number","6"],[""," "],["percent","4.32%"],["","       "],["lines-number","948"],[""," "],["percent","6.16%"],["","      "],["code-number","660"],[""," "],["percent","69.6%"],["","        "],["comments-number","102"],[""," "],["percent","10.8%"],["","     "],["extra-number","186"],["","    "],["total-size-number","25.0 "],["size-unit","KB"]],
+  [["details-language-name","JavaScript"],["","           "],["files-number","2"],[""," "],["percent","1.44%"],["","       "],["lines-number","136"],[""," "],["percent","0.88%"],["","       "],["code-number","98"],[""," "],["percent","72.1%"],["","          "],["comments-number","0"],["","            "],["extra-number","38"],["","     "],["total-size-number","4.4 "],["size-unit","KB"]],
+  [["details-language-name","HTML"],["","                 "],["files-number","1"],[""," "],["percent","0.72%"],["","        "],["lines-number","23"],[""," "],["percent","0.15%"],["","       "],["code-number","21"],[""," "],["percent","91.3%"],["","          "],["comments-number","1"],[""," "],["percent","4.35%"],["","       "],["extra-number","1"],["","     "],["total-size-number","1.2 "],["size-unit","KB"]],
+  [["separator-total","───────────────────────────────────────────────────────────────────────────────────────────────"]],
+  [["details-total","Total"],["","              "],["files-number","139"],[""," "],["percent","100%"],["","     "],["lines-number","15,402"],[""," "],["percent","100%"],["","    "],["code-number","10,583"],[""," "],["percent","68.7%"],["","        "],["comments-number","730"],[""," "],["percent","4.74%"],["","   "],["extra-number","4,089"],["","   "],["total-size-number","472.7 "],["size-unit","KB"]],
+  [["tests-branch"," └─ "],["tests-name","tests"],["","            "],["tests-files","1"],[""," "],["tests-percent","0.72%"],["","        "],["tests-lines","25"],[""," "],["tests-percent","0.16%"],["","       "],["tests-code","14"],[""," "],["tests-percent","56.0%"],["","          "],["tests-comments","5"],[""," "],["tests-percent","20.0%"],["","       "],["tests-extra","6"],["","     "],["tests-size","1.2 "],["tests-size-unit","KB"]],
   [],
   [["heading","Keywords"],["","."]],
   [],
   [["details-language-name","TSX"],["","   "],["keyword-label","interfaces"],["",": "],["keyword-number","33"]],
-  [["details-language-name","SQL"],["","   "],["keyword-label","tables"],["",": "],["keyword-number","4"]],
   [],
   [["heading","Overview"],["","."]],
   [],
-  [["overview-label","Files:"],["","   "],["overview-percent","38.6%"],[""," "],["language-1","TSX"],["","   "],["overview-percent","37.1%"],[""," "],["language-2","SCSS"],["","   "],["overview-percent","17.1%"],[""," "],["language-3","TypeScript"],["","   "],["overview-percent","7.15%"],[""," "],["language-others","others"],["","   "],["bar-frame","["],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-3","┃┃┃┃┃┃┃┃"],["language-others","┃┃┃"],["bar-frame","]"]],
+  [["overview-label","Files:"],["","   "],["overview-percent","38.9%"],[""," "],["language-1","TSX"],["","   "],["overview-percent","37.4%"],[""," "],["language-2","SCSS"],["","   "],["overview-percent","17.3%"],[""," "],["language-3","TypeScript"],["","   "],["overview-percent","6.47%"],[""," "],["language-others","others"],["","   "],["bar-frame","["],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-3","┃┃┃┃┃┃┃┃"],["language-others","┃┃┃"],["bar-frame","]"]],
   [],
-  [["overview-label","Lines:"],["","   "],["overview-percent","36.5%"],[""," "],["language-1","TSX"],["","   "],["overview-percent","34.1%"],[""," "],["language-2","SCSS"],["","   "],["overview-percent","22.1%"],[""," "],["language-3","TypeScript"],["","   "],["overview-percent","7.23%"],[""," "],["language-others","others"],["","   "],["bar-frame","["],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-3","┃┃┃┃┃┃┃┃┃┃"],["language-others","┃┃┃"],["bar-frame","]"]],
+  [["overview-label","Lines:"],["","   "],["overview-percent","36.5%"],[""," "],["language-1","TSX"],["","   "],["overview-percent","34.2%"],[""," "],["language-2","SCSS"],["","   "],["overview-percent","22.1%"],[""," "],["language-3","TypeScript"],["","   "],["overview-percent","7.18%"],[""," "],["language-others","others"],["","   "],["bar-frame","["],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-3","┃┃┃┃┃┃┃┃┃┃"],["language-others","┃┃┃"],["bar-frame","]"]],
   [],
-  [["overview-label","Size: "],["","   "],["overview-percent","39.4%"],[""," "],["language-1","TSX"],["","   "],["overview-percent","20.9%"],[""," "],["language-2","SCSS"],["","   "],["overview-percent","33.1%"],[""," "],["language-3","TypeScript"],["","   "],["overview-percent","6.56%"],[""," "],["language-others","others"],["","   "],["bar-frame","["],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃┃┃┃┃┃┃┃┃"],["language-3","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-others","┃┃┃"],["bar-frame","]"]]
+  [["overview-label","Size: "],["","   "],["overview-percent","39.4%"],[""," "],["language-1","TSX"],["","   "],["overview-percent","20.9%"],[""," "],["language-2","SCSS"],["","   "],["overview-percent","33.2%"],[""," "],["language-3","TypeScript"],["","   "],["overview-percent","6.47%"],[""," "],["language-others","others"],["","   "],["bar-frame","["],["language-1","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-2","┃┃┃┃┃┃┃┃┃┃"],["language-3","┃┃┃┃┃┃┃┃┃┃┃┃┃┃┃"],["language-others","┃┃┃"],["bar-frame","]"]]
 ];
 
 // Grouped by what the eye sees rather than by where the token lives in the program. Each value is
@@ -194,6 +197,30 @@ const GROUPS = [
     ["total-size-number",       "default"],
     ["percent",                 "969696"],
     ["size-unit",               "7d7769"]
+  ]],
+  ["The production row", [
+    ["production-name",         "default"],
+    ["production-branch",       "aaaaaa"],
+    ["production-files",        "default"],
+    ["production-lines",        "white bold"],
+    ["production-code",         "default"],
+    ["production-comments",     "default"],
+    ["production-extra",        "default"],
+    ["production-size",         "default"],
+    ["production-percent",      "969696"],
+    ["production-size-unit",    "7d7769"]
+  ]],
+  ["The tests row", [
+    ["tests-name",              "ae98b8"],
+    ["tests-branch",            "aaaaaa"],
+    ["tests-files",             "ae98b8"],
+    ["tests-lines",             "a088ad"],
+    ["tests-code",              "ae98b8"],
+    ["tests-comments",          "ae98b8"],
+    ["tests-extra",             "ae98b8"],
+    ["tests-size",              "ae98b8"],
+    ["tests-percent",           "74697a"],
+    ["tests-size-unit",         "7d7769"]
   ]],
   ["The frame", [
     ["heading",                 "default bold underline"],
@@ -386,11 +413,11 @@ function cssOf(style) {
 
 function runHtml() {
   const values = current().values;
-  return SAMPLE.map(line => line.map(([token, text]) => {
+  return SAMPLE.map(line => line.length === 0 ? '<div class="gap"></div>' : "<div>" + line.map(([token, text]) => {
     if (!token) return escapeHtml(text);
     return '<span class="tok" data-tok="' + token + '" style="' + cssOf(values[token]) + '">' +
         escapeHtml(text) + "</span>";
-  }).join("")).join("\n");
+  }).join("") + "</div>").join("");
 }
 
 // Only what the theme moved. A theme file names the tokens it changes and lets mezura answer for the
@@ -769,6 +796,7 @@ document.getElementById("bg-text").addEventListener("input", e => {
 });
 
 themes = (SYSTEM_THEMES || SHIPPED_THEMES).map(p => themeOf(p.name, p.styles));
+selected = Math.max(0, themes.findIndex(theme => theme.name.toLowerCase() === "mezura"));
 // A path built by joining what the system gave to what this program appends comes out with both
 // kinds of separator in it, which reads as broken even though Windows opens it
 const themesDir = THEMES_DIR && THEMES_DIR.includes("\\") ? THEMES_DIR.replace(/\//g, "\\") : THEMES_DIR;
