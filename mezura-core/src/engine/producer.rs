@@ -235,7 +235,7 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                 // call per file, and the consumer learns the size from the read itself.
                 let size = if cfg!(windows) { e.metadata().map_or(0, |m| m.len()) } else { 0 };
                 let test_scope = match config.detect_tests {
-                    true => scope.of_file(&path_buf, test_patterns, patterns_found),
+                    true => scope.of_file(&path_buf, test_patterns, patterns_found).0,
                     false => scope.scope
                 };
                 files_injector.push(ParsableFile::new(path_buf, lang_name, module, size)

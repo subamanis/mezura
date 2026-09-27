@@ -3,7 +3,7 @@
 // brace inside a string or a comment is absent by construction.
 mod attribute;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use memchr::memmem;
 
@@ -288,24 +288,10 @@ impl TestScope {
         scope
     }
 
-    // The components are read by name, and the disk is asked only at one named like a test
-    // directory, plus the three root files at every directory above the target.
     pub(crate) fn of_target(path: &Path) -> DirectoryScope {
-        let mut directories = path.ancestors().collect::<Vec<_>>();
-        directories.reverse();
-        let mut inside_jvm_build = false;
-        for directory in directories {
-            if let (Some(name), Some(parent)) = (directory.file_name(), directory.parent()) {
-                let name = name.as_encoded_bytes();
-                let under_a_declared_build = inside_jvm_build && is_the_jvm_test_directory(name)
-                        && parent.file_name().is_some_and(|above| is_the_jvm_sources_directory(above.as_encoded_bytes()));
-                if under_a_declared_build || is_a_test_directory(name, parent) {
-                    return DirectoryScope { scope: TestScope::Tests, inside_jvm_build, ..DirectoryScope::default() };
-                }
-            }
-            if directory != path && opens_a_jvm_build(directory) {
-                inside_jvm_build = true;
-            }
+        let (test_directory, inside_jvm_build) = find_test_directory_along(path);
+        if test_directory.is_some() {
+            return DirectoryScope { scope: TestScope::Tests, inside_jvm_build, ..DirectoryScope::default() };
         }
         let is_jvm_sources = path.file_name().zip(path.parent()).is_some_and(|(name, parent)| {
             let name = name.as_encoded_bytes();
@@ -369,12 +355,12 @@ impl DirectoryScope {
         DirectoryScope { scope, inside_jvm_build, decided_by, names_root: self.names_root }
     }
 
-    pub(crate) fn of_file(self, file_path: &Path, patterns: &PathPatternMatcher, found: &mut Vec<usize>) -> TestScope {
+    pub(crate) fn of_file(self, file_path: &Path, patterns: &PathPatternMatcher, found: &mut Vec<usize>) -> (TestScope, Option<usize>) {
         if patterns.is_empty() {
-            return self.scope;
+            return (self.scope, self.decided_by);
         }
         let declared = file_path.to_str().and_then(|absolute| patterns.find_last_match(absolute, self.names_root, false, found));
-        self.scope.overruled_by(self.decided_by, declared).0
+        self.scope.overruled_by(self.decided_by, declared)
     }
 }
 
@@ -411,6 +397,36 @@ impl BuildFilesSeen {
     fn find_index_of(name: &[u8]) -> Option<usize> {
         BUILD_TOOLS.iter().flat_map(|tool| tool.files).position(|file| is_the_same_name(name, file.as_bytes()))
     }
+}
+
+pub(crate) struct TestDirectory<'a> {
+    pub directory: &'a Path,
+    pub build_files: Vec<PathBuf>,
+}
+
+// The components are read by name, and the disk is asked only at one named like a test
+// directory, plus the three root files at every directory above the path.
+pub(crate) fn find_test_directory_along(path: &Path) -> (Option<TestDirectory<'_>>, bool) {
+    let mut directories = path.ancestors().collect::<Vec<_>>();
+    directories.reverse();
+    let mut jvm_build_root = None;
+    for directory in directories {
+        if let (Some(name), Some(parent)) = (directory.file_name(), directory.parent()) {
+            let name = name.as_encoded_bytes();
+            if let Some(root) = &jvm_build_root && is_the_jvm_test_directory(name)
+                    && parent.file_name().is_some_and(|above| is_the_jvm_sources_directory(above.as_encoded_bytes())) {
+                return (Some(TestDirectory { directory, build_files: vec![PathBuf::clone(root)] }), true);
+            }
+            if let Some((holder, files)) = find_build_of_test_directory(name, parent) {
+                let build_files = files.iter().map(|file| holder.join(file)).collect();
+                return (Some(TestDirectory { directory, build_files }), jvm_build_root.is_some());
+            }
+        }
+        if directory != path && let Some(file) = find_jvm_build_root(directory) {
+            jvm_build_root = Some(directory.join(file));
+        }
+    }
+    (None, jvm_build_root.is_some())
 }
 
 pub(super) enum Marker {
@@ -485,14 +501,14 @@ struct BuildTool {
     test_directories: &'static [&'static str],
 }
 
-fn is_a_test_directory(name: &[u8], parent: &Path) -> bool {
-    BUILD_TOOLS.iter().any(|tool| tool.test_directories.iter().any(|directory| {
+fn find_build_of_test_directory<'a>(name: &[u8], parent: &'a Path) -> Option<(&'a Path, &'static [&'static str])> {
+    BUILD_TOOLS.iter().find_map(|tool| tool.test_directories.iter().find_map(|directory| {
         let (above, last) = match directory.rsplit_once('/') {
             Some((above, last)) => (Some(above), last),
             None => (None, *directory)
         };
         if !is_the_same_name(name, last.as_bytes()) {
-            return false;
+            return None;
         }
         let holder = match above {
             None => Some(parent),
@@ -500,7 +516,7 @@ fn is_a_test_directory(name: &[u8], parent: &Path) -> bool {
                     .filter(|parent_name| is_the_same_name(parent_name.as_encoded_bytes(), above.as_bytes()))
                     .and_then(|_| parent.parent())
         };
-        holder.is_some_and(|holder| tool.files.iter().all(|file| holder.join(file).is_file()))
+        holder.filter(|holder| tool.files.iter().all(|file| holder.join(file).is_file())).map(|holder| (holder, tool.files))
     }))
 }
 
@@ -511,8 +527,8 @@ fn is_jvm_sources(name: &[u8], parent: &Path) -> bool {
                     && tool.files.iter().all(|file| parent.join(file).is_file())))
 }
 
-fn opens_a_jvm_build(directory: &Path) -> bool {
-    JVM_BUILD_ROOTS.iter().any(|file| directory.join(file).is_file())
+fn find_jvm_build_root(directory: &Path) -> Option<&'static str> {
+    JVM_BUILD_ROOTS.into_iter().find(|file| directory.join(file).is_file())
 }
 
 fn is_the_jvm_sources_directory(name: &[u8]) -> bool {
@@ -659,7 +675,7 @@ mod tests {
             let name = Path::new(path).file_name().unwrap().to_str().unwrap().to_owned();
             holder.of_child(&name, seen, &root.join(path), &patterns, &mut Vec::new())
         };
-        let file = |holder: DirectoryScope, path: &str| holder.of_file(&root.join(path), &patterns, &mut Vec::new());
+        let file = |holder: DirectoryScope, path: &str| holder.of_file(&root.join(path), &patterns, &mut Vec::new()).0;
 
         let proj = of("proj");
         assert_eq!((Ordinary, None, names_root), (proj.scope, proj.decided_by, proj.names_root));

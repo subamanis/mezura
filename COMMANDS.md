@@ -1180,7 +1180,11 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     A file whose extension two languages claim also says what identified it, the line and the
     evidence found there, and the JSON document carries the same under 'identified_by'. A file that
     a directory scan would leave out as minified, generated or not code says so in a note, and in
-    the document under 'left_out_of_a_scan'; the named file itself is always counted.
+    the document under 'left_out_of_a_scan'; the named file itself is always counted. A line of
+    test code is marked 'test code' and counted below the totals, and a file that is test code as a
+    whole, or that a '!' pattern of '--tests' took back, names the rule that decided it: a build
+    tool's test directory, its name, or the pattern. The document carries 'in_test' on those lines
+    and the rule under 'test_file'.
 
       mezura src/main.rs --explain
       mezura src/page.vue --explain --counting region

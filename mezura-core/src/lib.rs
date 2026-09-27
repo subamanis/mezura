@@ -60,7 +60,7 @@ pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, PathPatte
 pub use engine::identity::{Claim, ClaimKind, SettledBy};
 pub use engine::path_patterns::PatternError;
 pub use engine::targets::TargetError;
-pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, explain_file};
+pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, TestFileRule, explain_file};
 pub use languages::{LanguageClaims, Languages};
 pub use progress::ScanProgress;
 pub use result::{FaultyFileDetails, FileEntry, FilesPresent, ModuleResult, Performance, RunError,
@@ -406,7 +406,7 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
             let holder = find_test_scope_of_target(config, test_patterns, dir_path.parent().unwrap_or(dir_path), names_root,
                     &mut scopes_of_directories);
             let test_scope = match config.detect_tests {
-                true => holder.of_file(dir_path, test_patterns, &mut Vec::new()),
+                true => holder.of_file(dir_path, test_patterns, &mut Vec::new()).0,
                 false => TestScope::Ordinary
             };
             files_injector.push(queued.with_extension_rules(lookup.find_extension_rules(dir_path))

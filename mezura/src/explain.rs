@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use mezura_core::{Bucket, Carried, CountingModel, EngineConfig, ExplainError, FileExplanation, Languages,
-        LineClasses, PathPatterns, ScanSkip, Span, SpanKind};
+        LineClasses, PathPatterns, ScanSkip, Span, SpanKind, TestFileRule};
 
 use crate::config_manager::{Configuration, ExplainedLines, get_command_that_counts};
 use crate::json_printer::escape;
@@ -44,7 +44,7 @@ pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
             if config.view.prints_text() {
                 print_text(&target.path, &explanation, config.view.counting, asked_for);
             } else {
-                print_json(&target.path, &explanation, config.view.counting);
+                outln!("{}", build_json_document(&target.path, &explanation, config.view.counting));
             }
             ExitCode::SUCCESS
         },
@@ -106,6 +106,9 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
                 {reason}. It is counted here because you named it. '--{}' stops leaving it out for that reason.",
                 get_command_that_counts(skip))));
     }
+    if let Some(sentence) = explanation.test_file_rule.as_ref().and_then(|rule| describe_test_file_rule(rule, &explanation.language)) {
+        outln!("{}", theme.note.paint(&sentence));
+    }
     outln!();
     if explanation.lines.is_empty() {
         outln!("{}", theme.note.paint("The file has no lines."));
@@ -138,8 +141,8 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
         outln!("{:>width$}  {}", at + 1, paint_by_spans(source, &line.spans));
         let mut verdict = format!("{}  {}", bucket_style.paint(model.get_bucket_name(bucket)),
                 theme.explain_detail.paint(line.class.name()));
-        let mut notes = line.read_as.as_ref().map(|name| format!("read as {name}"))
-                .into_iter().collect::<Vec<_>>();
+        let mut notes = line.in_test.then(|| "test code".to_owned()).into_iter().collect::<Vec<_>>();
+        notes.extend(line.read_as.as_ref().map(|name| format!("read as {name}")));
         notes.extend(describe_carried(&line.carried));
         if !notes.is_empty() {
             verdict = format!("{verdict}  {}", theme.note.paint(&format!("({})", notes.join("; "))));
@@ -151,17 +154,19 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
     // alone says nothing about the count somebody opened '--explain' to check, and the file's alone
     // does not answer how much of the range is comment.
     outln!();
+    let tests_in_the_file = count_test_lines(explanation, ExplainedLines::WHOLE_FILE);
     if whole_file {
-        print_totals(&explanation.classes, explanation.lines.len(), model, "");
+        print_totals(&explanation.classes, explanation.lines.len(), tests_in_the_file, model, "");
     } else {
-        print_totals(&collect_classes_of(explanation, asked_for), printed, model, " shown");
-        print_totals(&explanation.classes, explanation.lines.len(), model, " in the file");
+        print_totals(&collect_classes_of(explanation, asked_for), printed, count_test_lines(explanation, asked_for),
+                model, " shown");
+        print_totals(&explanation.classes, explanation.lines.len(), tests_in_the_file, model, " in the file");
     }
 }
 
 // The document linejudge reads: 'format', 'lines', 'buckets' and one 'per_line' entry per physical
 // line are the contract, everything else is mezura's own and a reader is free to skip it.
-fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
+fn build_json_document(path: &str, explanation: &FileExplanation, model: CountingModel) -> String {
     let (code, comments, third) = fold_totals(&explanation.classes, explanation.lines.len(), model);
     let mut document = String::with_capacity(120 + 70 * explanation.lines.len());
     document.push_str(&format!("{{\"format\":1,\"counter\":\"mezura\",\"file\":\"{}\",",
@@ -175,6 +180,9 @@ fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
     if let Some(skip) = explanation.left_out_of_a_scan {
         document.push_str(&format!("\"left_out_of_a_scan\":\"{}\",", skip.name()));
     }
+    if let Some(entry) = explanation.test_file_rule.as_ref().and_then(build_test_file_entry) {
+        document.push_str(&format!("\"test_file\":{entry},"));
+    }
     document.push_str(&format!("\"buckets\":{{\"code\":{code},\"comments\":{comments},\"{}\":{third}}},",
             model.get_third_quantity_name()));
     document.push_str("\"per_line\":[");
@@ -185,6 +193,9 @@ fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
         let bucket = model.get_bucket_name(model.fold(line.class));
         document.push_str(&format!("{{\"line\":{},\"bucket\":\"{bucket}\",\"class\":\"{}\"",
                 at + 1, line.class.name()));
+        if line.in_test {
+            document.push_str(",\"in_test\":true");
+        }
         if let Some(name) = &line.read_as {
             document.push_str(&format!(",\"read_as\":\"{}\"", escape(name)));
         }
@@ -203,10 +214,10 @@ fn print_json(path: &str, explanation: &FileExplanation, model: CountingModel) {
             explanation.classes.to_array().iter().zip(mezura_core::LineClasses::NAMES)
                     .map(|(count, name)| format!("\"{name}\":{count}"))
                     .collect::<Vec<_>>().join(",")));
-    outln!("{document}");
+    document
 }
 
-fn print_totals(classes: &LineClasses, lines: usize, model: CountingModel, of_what: &str) {
+fn print_totals(classes: &LineClasses, lines: usize, tests: usize, model: CountingModel, of_what: &str) {
     let theme = get_active();
     let (code, comments, third) = fold_totals(classes, lines, model);
     let label = format!("{}{of_what}", if lines == 1 {"line"} else {"lines"});
@@ -215,6 +226,19 @@ fn print_totals(classes: &LineClasses, lines: usize, model: CountingModel, of_wh
             theme.code_number.paint(&code.to_string()), theme.explain_code.paint("code"),
             theme.comments_number.paint(&comments.to_string()), theme.explain_comments.paint("comments"),
             theme.extra_number.paint(&third.to_string()), theme.explain_extra.paint(model.get_third_quantity_name()));
+    if let Some(line) = format_test_count(tests) {
+        outln!("{line}");
+    }
+}
+
+fn format_test_count(tests: usize) -> Option<String> {
+    let theme = get_active();
+    (tests > 0).then(|| format!("{} {}", theme.tests_lines.paint(&tests.to_string()),
+            theme.tests_name.paint(if tests == 1 {"of them is test code"} else {"of them are test code"})))
+}
+
+fn count_test_lines(explanation: &FileExplanation, asked_for: ExplainedLines) -> usize {
+    explanation.lines.iter().enumerate().filter(|(at, line)| line.in_test && asked_for.holds(at + 1)).count()
 }
 
 // The nine counts of the lines that were printed, built the way the parser builds the file's own,
@@ -282,8 +306,48 @@ fn describe_carried(carried: &Carried) -> Option<String> {
     }
 }
 
+// The rules are non_exhaustive, so a rule the library adds later is silently left out here and in
+// the document until it is given its words
+fn describe_test_file_rule(rule: &TestFileRule, language: &str) -> Option<String> {
+    match rule {
+        TestFileRule::TestDirectory { directory, build_files } => Some(format!("The whole file is test code: it \
+                is inside '{directory}', the test folder of {}.",
+                build_files.iter().map(|file| format!("'{file}'")).collect::<Vec<_>>().join(" and "))),
+        TestFileRule::FileName(shape) => Some(format!("The whole file is test code: {language} names its test \
+                files '{shape}'.")),
+        TestFileRule::Declared { pattern, matched_folder: Some(folder) } => Some(format!("The whole file is test \
+                code: the '--tests' pattern '{pattern}' matches the folder '{folder}'.")),
+        TestFileRule::Declared { pattern, matched_folder: None } => Some(format!("The whole file is test code: the \
+                '--tests' pattern '{pattern}' matches it.")),
+        TestFileRule::DeclaredNotTests { pattern, matched_folder } => Some(format!("The '--tests' pattern \
+                '{pattern}'{} says this file is not test code, even if its folder or its name would make it so. \
+                Lines inside a test marker still count as tests.", matched_folder.as_ref()
+                        .map(|folder| format!(" matches the folder '{folder}' and")).unwrap_or_default())),
+        _ => None
+    }
+}
+
+fn build_test_file_entry(rule: &TestFileRule) -> Option<String> {
+    let matched = |folder: &Option<String>| folder.as_ref()
+            .map(|folder| format!(",\"matched_folder\":\"{}\"", escape(folder))).unwrap_or_default();
+    match rule {
+        TestFileRule::TestDirectory { directory, build_files } => Some(format!(
+                "{{\"rule\":\"test_directory\",\"directory\":\"{}\",\"build_files\":[{}]}}", escape(directory),
+                build_files.iter().map(|file| format!("\"{}\"", escape(file))).collect::<Vec<_>>().join(","))),
+        TestFileRule::FileName(shape) => Some(format!("{{\"rule\":\"file_name\",\"shape\":\"{}\"}}",
+                escape(&shape.to_string()))),
+        TestFileRule::Declared { pattern, matched_folder } => Some(format!(
+                "{{\"rule\":\"declared\",\"pattern\":\"{}\"{}}}", escape(pattern), matched(matched_folder))),
+        TestFileRule::DeclaredNotTests { pattern, matched_folder } => Some(format!(
+                "{{\"rule\":\"declared_not_tests\",\"pattern\":\"{}\"{}}}", escape(pattern), matched(matched_folder))),
+        _ => None
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use mezura_core::{ExplainedLine, LineClass, TestFileName};
+
     use super::*;
 
     // The working directory of a test of this crate is the package root, so 'src/main.rs' is inside it
@@ -343,5 +407,63 @@ mod tests {
                         ends_on_this_line: true }));
         assert_eq!(Some("a continuation of the comment on line 2".to_owned()),
                 describe_carried(&Carried::CommentContinuation { since_line: 2 }));
+    }
+
+    #[test]
+    fn the_rule_of_a_whole_test_file_and_the_count_of_its_test_lines_read_as_sentences() {
+        colored::control::set_override(false);
+        let owned = |texts: &[&str]| texts.iter().map(|text| text.to_string()).collect::<Vec<_>>();
+        assert_eq!(Some("The whole file is test code: it is inside 'D:/proj/tests', the test folder of \
+                'D:/proj/DESCRIPTION' and 'D:/proj/NAMESPACE'.".to_owned()),
+                describe_test_file_rule(&TestFileRule::TestDirectory { directory: "D:/proj/tests".to_owned(),
+                        build_files: owned(&["D:/proj/DESCRIPTION", "D:/proj/NAMESPACE"]) }, "R"));
+        assert_eq!(Some("The whole file is test code: Go names its test files '*_test.go'.".to_owned()),
+                describe_test_file_rule(&TestFileRule::FileName(TestFileName::EndsWith("_test.go".to_owned())), "Go"));
+        assert_eq!(Some("The whole file is test code: the '--tests' pattern 'spec/' matches the folder 'D:/dev/proj/spec'.".to_owned()),
+                describe_test_file_rule(&TestFileRule::Declared { pattern: "spec/".to_owned(),
+                        matched_folder: Some("D:/dev/proj/spec".to_owned()) }, "Rust"));
+        assert_eq!(Some("The whole file is test code: the '--tests' pattern '*.spec.rs' matches it.".to_owned()),
+                describe_test_file_rule(&TestFileRule::Declared { pattern: "*.spec.rs".to_owned(), matched_folder: None }, "Rust"));
+        assert_eq!(Some("The '--tests' pattern '!spec/fixtures/' matches the folder 'D:/dev/proj/spec/fixtures' and says \
+                this file is not test code, even if its folder or its name would make it so. Lines inside a test marker \
+                still count as tests.".to_owned()),
+                describe_test_file_rule(&TestFileRule::DeclaredNotTests { pattern: "!spec/fixtures/".to_owned(),
+                        matched_folder: Some("D:/dev/proj/spec/fixtures".to_owned()) }, "Rust"));
+        assert_eq!(Some("The '--tests' pattern '!a.rs' says this file is not test code, even if its folder or its \
+                name would make it so. Lines inside a test marker still count as tests.".to_owned()),
+                describe_test_file_rule(&TestFileRule::DeclaredNotTests { pattern: "!a.rs".to_owned(), matched_folder: None }, "Rust"));
+
+        assert_eq!(None, format_test_count(0));
+        assert_eq!(Some("1 of them is test code".to_owned()), format_test_count(1));
+        assert_eq!(Some("5 of them are test code".to_owned()), format_test_count(5));
+    }
+
+    #[test]
+    fn a_test_line_carries_its_mark_and_the_rule_of_the_whole_file_is_a_key_of_the_document() {
+        let line = |in_test| ExplainedLine { class: LineClass::WordsInCode, read_as: None, carried: Carried::Nothing,
+                spans: Vec::new(), in_test };
+        let mut classes = LineClasses::default();
+        classes.bump(LineClass::WordsInCode);
+        classes.bump(LineClass::WordsInCode);
+        let mut explanation = FileExplanation { language: "Rust".to_owned(), identified_by: None, left_out_of_a_scan: None,
+                test_file_rule: Some(TestFileRule::DeclaredNotTests { pattern: "!spec/fixtures/".to_owned(),
+                        matched_folder: Some("D:/dev/proj/spec/fixtures".to_owned()) }),
+                contents: "fn f() {}\n#[cfg(test)] fn t() {}\n".to_owned(), lines: vec![line(false), line(true)], classes };
+
+        let document = build_json_document("D:/dev/proj/spec/fixtures/a.rs", &explanation, CountingModel::Content);
+        assert!(document.contains(r#""test_file":{"rule":"declared_not_tests","pattern":"!spec/fixtures/","matched_folder":"D:/dev/proj/spec/fixtures"},"buckets""#),
+                "{document}");
+        assert!(document.contains(r#"{"line":1,"bucket":"code","class":"words_in_code"}"#), "{document}");
+        assert!(document.contains(r#"{"line":2,"bucket":"code","class":"words_in_code","in_test":true}"#), "{document}");
+
+        explanation.test_file_rule = None;
+        assert!(!build_json_document("a.rs", &explanation, CountingModel::Content).contains("test_file"));
+        assert_eq!(Some(r#"{"rule":"test_directory","directory":"D:/proj/tests","build_files":["D:/proj/Cargo.toml"]}"#.to_owned()),
+                build_test_file_entry(&TestFileRule::TestDirectory { directory: "D:/proj/tests".to_owned(),
+                        build_files: vec!["D:/proj/Cargo.toml".to_owned()] }));
+        assert_eq!(Some(r#"{"rule":"file_name","shape":"*.t"}"#.to_owned()),
+                build_test_file_entry(&TestFileRule::FileName(TestFileName::EndsWith(".t".to_owned()))));
+        assert_eq!(Some(r#"{"rule":"declared","pattern":"*.spec.rs"}"#.to_owned()),
+                build_test_file_entry(&TestFileRule::Declared { pattern: "*.spec.rs".to_owned(), matched_folder: None }));
     }
 }

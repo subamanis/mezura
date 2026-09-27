@@ -445,6 +445,16 @@ impl TestFileName {
     }
 }
 
+impl std::fmt::Display for TestFileName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TestFileName::EndsWith(suffix) => write!(f, "*{suffix}"),
+            TestFileName::StartsWith(prefix) => write!(f, "{prefix}*"),
+            TestFileName::Exact(name) => write!(f, "{name}")
+        }
+    }
+}
+
 /// A line ending in this symbol is joined to the one after it, before anything is decided about
 /// either.
 #[derive(Debug, Clone, PartialEq)]
@@ -995,6 +1005,7 @@ mod tests {
         assert!(ends.matches("parser_test.go") && !ends.matches("parser_test.rs") && !ends.matches("_test.go.bak"));
         assert!(starts.matches("test_parser.rs") && !starts.matches("Test_parser.rs") && !starts.matches("mytest_x.rs"));
         assert!(whole.matches("tests.rs") && !whole.matches("mytests.rs") && !whole.matches("tests.rs.orig"));
+        assert_eq!(["*_test.go", "test_*", "tests.rs"], [ends.to_string(), starts.to_string(), whole.to_string()]);
 
         for wrong in ["", "*", "**", "a*b", "*a*", "test_*.rs*"] {
             assert_eq!(None, TestFileName::of(wrong), "'{wrong}' was read as a shape");

@@ -4,6 +4,7 @@ Every line is printed with the bucket it landed in, 'code', 'comments' or 'extra
 that put it there, 'words_in_code' or 'punctuation_in_comment', which is the raw count both counting
 models fold into those three. Where something was still open when the line began, it says what and
 where it started: 'in a comment opened by /* on line 23', 'in a string opened by " on line 7'. A
-line read as an embedded language names that language.
+line read as an embedded language names that language. A line of test code is marked as such, and a
+file that is test code as a whole names the rule that made it so.
 
 Use it when a count looks wrong, or to settle what one particular line is. One file per call.

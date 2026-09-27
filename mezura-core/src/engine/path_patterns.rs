@@ -216,11 +216,7 @@ impl PathPatternMatcher {
     -> Option<PatternMatch>
     {
         let mut best: Option<PatternMatch> = None;
-        let names_root = names_root.min(absolute.len());
-        let separators = absolute[names_root..].char_indices()
-                .filter(|(_, character)| *character == '/').map(|(at, _)| names_root + at);
-        let ends = separators.chain(std::iter::once(absolute.len())).filter(|end| *end > 0);
-        for end in ends {
+        for end in find_ends_along(absolute, names_root) {
             let is_folder = end < absolute.len() || !ends_with_a_file;
             if let Some(found) = self.find_last_match(&absolute[..end], names_root, is_folder, found)
                     && best.is_none_or(|earlier| found.written_at > earlier.written_at) {
@@ -228,6 +224,26 @@ impl PathPatternMatcher {
             }
         }
         best
+    }
+
+    // The pattern that decides only moves to a later one down the path, so the one that decided
+    // took over at the first place it matches
+    pub(crate) fn find_place_matched_by(&self, written_at: usize, absolute: &str, names_root: usize, ends_with_a_file: bool)
+    -> Option<String>
+    {
+        let rule = self.rules.get(written_at)?;
+        let mut found = Vec::new();
+        find_ends_along(absolute, names_root).find(|&end| {
+            let is_folder = end < absolute.len() || !ends_with_a_file;
+            let mut is_matched_in = |set: &GlobSet, set_written_at: &[usize], candidate: &str| {
+                set.matches_candidate_into(&Candidate::new(candidate), &mut found);
+                found.iter().any(|&in_set| set_written_at[in_set] == written_at)
+            };
+            (is_folder || !rule.folders_only) && match rule.kind {
+                Kind::Name { .. } => end > names_root && is_matched_in(&self.names, &self.names_written_at, &absolute[names_root..end]),
+                Kind::Path { .. } => is_matched_in(&self.paths, &self.paths_written_at, &absolute[..end])
+            }
+        }).map(|end| absolute[..end].to_owned())
     }
 
     fn take_best(&self, set: &GlobSet, written_at: &[usize], candidate: Candidate<'_>, is_folder: bool,
@@ -266,6 +282,13 @@ struct Rule {
 enum Kind {
     Name { reaches_into_a_path: bool },
     Path { place: String, on_disk: bool }
+}
+
+fn find_ends_along(absolute: &str, names_root: usize) -> impl Iterator<Item = usize> {
+    let names_root = names_root.min(absolute.len());
+    let separators = absolute[names_root..].char_indices()
+            .filter(|(_, character)| *character == '/').map(move |(at, _)| names_root + at);
+    separators.chain(std::iter::once(absolute.len())).filter(|end| *end > 0)
 }
 
 fn strip_folder_suffix(text: &str) -> (bool, &str) {
