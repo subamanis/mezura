@@ -36,7 +36,7 @@ pub(super) fn read(contents: &[u8], at: usize) -> Option<Marker> {
     Some(if inner { Marker::RestOfScope { after } } else { Marker::Extent { after } })
 }
 
-fn find_matching_bracket(bytes: &[u8], open: usize, closer: u8) -> Option<usize> {
+pub(super) fn find_matching_bracket(bytes: &[u8], open: usize, closer: u8) -> Option<usize> {
     let opener = bytes[open];
     let limit = bytes.len().min(open + MOST_ATTRIBUTE_BYTES);
     let mut depth = 0usize;

@@ -2,10 +2,11 @@ use std::path::Path;
 
 use crate::{EngineConfig, Language, LineClass, LineClasses, ScanSkip, Span, TestFileName};
 use crate::domain::CommentPair;
-use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file, find_scan_skip, is_a_test_file};
+use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file, find_scan_skip, is_a_test_file,
+        read_module_declarations};
 use crate::engine::path_patterns::{PathPatternMatcher, TakingBack};
 use crate::engine::targets::{find_names_root_of_path, normalise_separators};
-use crate::engine::test_detection::{DirectoryScope, TestScope, find_test_directory_along};
+use crate::engine::test_detection::{DirectoryScope, TestScope, find_declaring_chain, find_test_directory_along};
 use crate::languages::Languages;
 
 /// One file read line by line, as [`explain_file`] answers it.
@@ -57,6 +58,13 @@ pub enum TestFileRule {
         pattern: String,
         /// The folder above the file that the pattern matched. None where it matched the file itself.
         matched_folder: Option<String>
+    },
+    /// Another file declares it as a module on a line of test code, under a `#[cfg(test)]`,
+    /// directly or through the files between.
+    DeclaredModule {
+        /// The file that declares it, then the file declaring that one, up to the one whose
+        /// declaration sits under the marker.
+        declared_by: Vec<String>
     },
 }
 
@@ -182,7 +190,7 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
         set_aside: &nested_definitions.set_aside,
     };
     let (whole_file_is_tests, test_file_rule) = match config.detect_tests {
-        true => decide_whole_file(path, config, by_name.get(lang_name.as_ref()).unwrap())?,
+        true => decide_whole_file(path, config, by_name.get(lang_name.as_ref()).unwrap(), &nested_lookup)?,
         false => (false, None)
     };
     let (contents, report, log) = explain_parsed_file(contents, &lang_name, &nested_lookup, config, whole_file_is_tests);
@@ -208,7 +216,7 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
 }
 
 // The file is its own target, so a name pattern reads it from the folder above its own
-fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language)
+fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lookup: &NestedLanguageLookup)
     -> Result<(bool, Option<TestFileRule>), ExplainError>
 {
     let patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed)
@@ -219,6 +227,13 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language)
     let file = Path::new(&absolute);
     let folder = file.parent().unwrap_or(file);
     let (scope, decided_by) = DirectoryScope::of_target(folder, names_root, &patterns).of_file(file, &patterns, &mut Vec::new());
+    // Read the way a run reads it, so a file a pattern took back is still declared under the marker
+    if scope != TestScope::Tests && language.module_keyword.is_some()
+            && let Some(chain) = find_declaring_chain(file, &mut |candidate| std::fs::read_to_string(candidate).ok()
+                    .and_then(|contents| read_module_declarations(&contents, language, lookup, config))) {
+        let declared_by = chain.iter().map(|path| normalise_separators(&path.to_string_lossy()).into_owned()).collect();
+        return Ok((true, Some(TestFileRule::DeclaredModule { declared_by })));
+    }
     let rule = match (decided_by, scope) {
         (Some(at), _) => {
             let pattern = config.test_patterns.patterns[at].trim().to_owned();
@@ -499,6 +514,46 @@ mod tests {
         assert_eq!((Some(TestFileRule::DeclaredNotTests { pattern: "!spec/fixtures/".to_owned(),
                 matched_folder: Some(at("proj/spec/fixtures")) }), vec![false, true, true]), explain("proj/spec/fixtures/c.rs", &declared));
         assert_eq!((None, vec![false]), explain("proj/tests/a.rs", &detection_off));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_file_declared_as_a_module_under_a_marker_names_its_declarers() {
+        let root = std::env::temp_dir().join("mezura-explain-test-modules");
+        let _ = fs::remove_dir_all(&root);
+        for (file, contents) in [("proj/Cargo.toml", ""),
+                ("proj/src/lib.rs", "#[cfg(test)]\nmod tests;\nmod plain;\n"),
+                ("proj/src/tests/mod.rs", "mod all;\n"),
+                ("proj/src/tests/all.rs", "fn a() {}\n"),
+                ("proj/src/plain.rs", "fn p() {}\n"),
+                ("proj/src/bin/tool.rs", "fn main() {}\n#[cfg(test)]\nmod tool_tests;\n"),
+                ("proj/src/bin/tool_tests.rs", "fn t() {}\n")] {
+            let path = root.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, contents).unwrap();
+        }
+        let root_str = normalise_separators(&root.to_string_lossy()).into_owned();
+        let at = |path: &str| format!("{root_str}/{path}");
+        let explain = |file: &str, config: &EngineConfig| {
+            let explained = explain_file(&root.join(file), config, resolved_languages(config)).unwrap();
+            (explained.test_file_rule, explained.lines.iter().map(|line| line.in_test).collect::<Vec<_>>())
+        };
+        let declared_by = |files: &[&str]| Some(TestFileRule::DeclaredModule { declared_by: files.iter().map(|file| at(file)).collect() });
+        let default = EngineConfig::default();
+
+        assert_eq!((declared_by(&["proj/src/lib.rs"]), vec![true]), explain("proj/src/tests/mod.rs", &default));
+        assert_eq!((declared_by(&["proj/src/tests/mod.rs", "proj/src/lib.rs"]), vec![true]), explain("proj/src/tests/all.rs", &default));
+        assert_eq!((None, vec![false]), explain("proj/src/plain.rs", &default));
+        assert_eq!((declared_by(&["proj/src/bin/tool.rs"]), vec![true]), explain("proj/src/bin/tool_tests.rs", &default),
+                "the crate root beside the file was not read");
+        assert_eq!((None, vec![true, true, false]), explain("proj/src/lib.rs", &default));
+
+        let taken_back = EngineConfig { test_patterns: crate::PathPatterns { patterns: vec!["!src/tests/".to_owned()],
+                read_from: Some(at("proj")) }, ..EngineConfig::default() };
+        assert_eq!(declared_by(&["proj/src/lib.rs"]), explain("proj/src/tests/mod.rs", &taken_back).0, "a '!' pattern undid the declaration");
+        let detection_off = EngineConfig { detect_tests: false, ..EngineConfig::default() };
+        assert_eq!((None, vec![false]), explain("proj/src/tests/mod.rs", &detection_off));
 
         fs::remove_dir_all(&root).unwrap();
     }

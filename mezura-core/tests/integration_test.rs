@@ -1283,6 +1283,63 @@ fn the_test_code_of_a_language_is_one_share_whichever_way_it_was_found() {
 }
 
 #[test]
+fn a_module_declared_under_a_marker_is_test_code_whole_and_so_is_what_it_declares() {
+    let root = std::env::temp_dir().join("mezura-test-modules");
+    let _ = std::fs::remove_dir_all(&root);
+    for dir in ["src/tests", "src/nested"] {
+        std::fs::create_dir_all(root.join(dir)).unwrap();
+    }
+    std::fs::write(root.join("Cargo.toml"), "[package]\n").unwrap();
+    std::fs::write(root.join("src").join("lib.rs"),
+            "pub fn a() {}\n\nmod plain;\n\nmod nested {\n    #[cfg(test)]\n    mod deep;\n}\n\n#[cfg(test)]\nmod tests;\n").unwrap();
+    std::fs::write(root.join("src").join("plain.rs"), "pub fn b() {}\n").unwrap();
+    std::fs::write(root.join("src").join("nested").join("deep.rs"), "fn deep() {}\n").unwrap();
+    std::fs::write(root.join("src").join("tests").join("mod.rs"), "mod unit;\n\n#[test]\nfn here() {}\n").unwrap();
+    std::fs::write(root.join("src").join("tests").join("unit.rs"), "fn unit() {}\n").unwrap();
+    let root_str = root.to_string_lossy().replace('\\', "/");
+
+    let counted = |detect_tests: bool, targets: Vec<Target>, patterns: &[&str]| {
+        let test_patterns = mezura_core::PathPatterns { patterns: patterns.iter().map(|x| (*x).to_owned()).collect(),
+                read_from: Some(root_str.clone()) };
+        let config = EngineConfig { detect_tests, collect_files: true, threads: Threads::new(1, 4), targets, test_patterns,
+                ..EngineConfig::new([root_str.clone()]) };
+        let (languages, _) = Languages::shipped(&config);
+        run(&config, languages).unwrap()
+    };
+    let share = |tests: &mezura_core::TestCode| (tests.stats.files, tests.stats.lines, tests.stats.bytes, tests.whole_files);
+    let tests_of = |result: &mezura_core::RunResult, name: &str| result.modules.iter().flat_map(|module| module.files["Rust"].iter())
+            .find(|file| std::path::Path::new(&file.path).file_name() == Some(name.as_ref()))
+            .unwrap().tests.as_ref().map(|tests| (tests.files, tests.lines, tests.bytes));
+
+    let result = counted(true, vec![Target::of(&root_str)], &[]);
+    assert_eq!((5, 18), (result.per_language["Rust"].files, result.per_language["Rust"].lines));
+    // lib.rs holds four marked lines, deep.rs and unit.rs are whole through the declarations, and
+    // tests/mod.rs moves from its two marked lines to the whole of it
+    assert_eq!((4, 10, 113, 3), share(&result.tests["Rust"]));
+    assert_eq!(Some((1, 4, 55)), tests_of(&result, "lib.rs"));
+    assert_eq!(Some((1, 4, 32)), tests_of(&result, "mod.rs"));
+    assert_eq!(Some((1, 1, 13)), tests_of(&result, "unit.rs"));
+    assert_eq!(Some((1, 1, 13)), tests_of(&result, "deep.rs"));
+    assert_eq!(None, tests_of(&result, "plain.rs"));
+
+    let taken_back = counted(true, vec![Target::of(&root_str)], &["!src/tests/"]);
+    assert_eq!((4, 10, 113, 3), share(&taken_back.tests["Rust"]), "a '!' pattern undid the declaration");
+
+    let off = counted(false, vec![Target::of(&root_str)], &[]);
+    assert!(off.tests.is_empty() && off.modules[0].files["Rust"].iter().all(|file| file.tests.is_none()));
+    assert_eq!(18, off.per_language["Rust"].lines);
+
+    let split = counted(true, vec![Target::named("code", format!("{root_str}/src")),
+            Target::named("checks", format!("{root_str}/src/tests"))], &[]);
+    std::fs::remove_dir_all(&root).unwrap();
+    let of_module = |name: &str| split.modules.iter().find(|module| module.name.as_deref() == Some(name)).unwrap();
+    assert_eq!((2, 5, 68, 1), share(&of_module("code").tests["Rust"]), "the declaring file's module took the declared file");
+    assert_eq!((2, 5, 45, 2), share(&of_module("checks").tests["Rust"]));
+    assert_eq!((4, 10, 113, 3), share(&split.tests["Rust"]));
+    assert_eq!(Some((1, 4, 32)), tests_of(&split, "mod.rs"));
+}
+
+#[test]
 fn a_pattern_declares_test_code_whole_and_a_later_negative_takes_it_back_while_the_markers_stay() {
     let root = std::env::temp_dir().join("mezura-test-patterns");
     let _ = std::fs::remove_dir_all(&root);

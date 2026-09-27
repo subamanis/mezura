@@ -53,6 +53,9 @@ pub struct Language {
     pub test_markers : Vec<String>,
     /// Which file names are test files, `*_test.go` for Go.
     pub test_file_names : Vec<TestFileName>,
+    /// The word that declares a module living in another file, `mod` for Rust, so that a file
+    /// declared under a test marker is counted as test code whole.
+    pub module_keyword : Option<String>,
     // Worked out from the symbols above and reused for every file of this language.
     pub(crate) scan_plan : OnceLock<crate::engine::file_parser::ScanPlan>
 }
@@ -86,6 +89,7 @@ impl Language {
             identifying_line_contains : Vec::new(),
             test_markers : Vec::new(),
             test_file_names : Vec::new(),
+            module_keyword : None,
             scan_plan : OnceLock::new()
         }
     }
@@ -126,6 +130,12 @@ impl Language {
     {
         self.test_markers.extend(owned_strings(markers));
         self.test_file_names.extend(file_names.iter().cloned());
+        self
+    }
+
+    /// Declares the word that names a module living in another file, `mod` for Rust.
+    pub fn with_module_keyword(mut self, keyword: impl AsRef<str>) -> Self {
+        self.module_keyword = Some(keyword.as_ref().to_owned());
         self
     }
 

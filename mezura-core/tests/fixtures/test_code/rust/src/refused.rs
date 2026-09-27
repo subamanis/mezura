@@ -14,4 +14,4 @@ make_test!(generated);
 
 #[cfg(test)]
 #[path = "elsewhere.rs"]
-mod tests;
+mod aside;

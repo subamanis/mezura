@@ -169,6 +169,14 @@ project included. Where a project has a production folder of that name, write th
   `#[cfg_attr(test, derive(Debug))]` and `#![cfg_attr(test, allow(deref_nullptr))]` are settings.
 - `#![cfg(test)]`: the rest of its scope, which is the whole file at the top of one and the module
   it sits in.
+- `#[cfg(test)] mod tests;`, whose body is another file: that file is test code whole, and so is
+  every file it declares in turn, whatever attribute those declarations carry, since everything
+  under a `cfg(test)` module inherits it. The file is found where rustc finds it: `tests.rs` or
+  `tests/mod.rs` beside a `lib.rs`, `main.rs` or `mod.rs`, under a folder named after any other
+  file, and beside a crate root in `src/bin/`; a `mod x;` inside `mod outer { }` is under
+  `outer/`. Any `mod x;` on a line of test code counts, so one inside a `#[cfg(test)] mod tests {
+  }` or under a `#![cfg(test)]` does too. `--explain` on such a file names the file that declares
+  it and the one holding the marker.
 
 From the marker, further `#[...]` on the item are skipped, and the test code runs to the `}`
 matching the first `{`, or to the first `;`, whichever comes first, with brackets counted so that
@@ -185,11 +193,6 @@ decide, and a `tests` folder under `src/` is a folder.
 
 **Missed**, each with what mezura answers today:
 
-- `#[cfg(test)] mod tests;`, whose body is another file. That file carries no marker, so only what
-  the markers inside it catch is test code, its `#[test]` functions, while its `use` lines, its
-  helpers and any `mod` it declares in turn are production. Declare the file meanwhile,
-  `--tests "src/tests.rs"` or `--tests "*_tests.rs"`; following the declaration to the file is
-  planned.
 - A marker on a struct field, an enum variant, a match arm or a parameter counts to the `}` of the
   block around it, so the siblings after it come along:
   ```rust
@@ -208,7 +211,8 @@ decide, and a `tests` folder under `src/` is a folder.
 
 **Refused.** Doc tests, since a `///` fenced block is a comment. Tests a macro writes,
 `make_test!(a, b, c);` being one line of code that only a compiler can expand. Tests written at
-build time and pulled in with `include!`. `#[path = "..."]` on a module declaration.
+build time and pulled in with `include!`. A module declared under `#[path = "..."]`, which is not
+followed at all, since the file it names can sit anywhere; declare that file with `--tests`.
 
 ### D
 
@@ -336,5 +340,7 @@ that is a layout rule the parser has no business guessing. Refused.
   without it, so no row appears on either side, and says so.
 - **`--explain`.** Every line of test code is marked `test code`, the totals say how many, and a
   file that is test code whole names the rule that decided it: the test directory with its build
-  file, the name, or the pattern. The document carries `in_test` on those lines and the rule under
-  `test_file`.
+  file, the name, the pattern, or the file that declares it as a module under a marker. The
+  document carries `in_test` on those lines and the rule under `test_file`.
+- **Keywords** are counted over the whole language, its test code included, and shown once under
+  it.

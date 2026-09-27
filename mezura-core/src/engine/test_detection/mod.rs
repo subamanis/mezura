@@ -2,6 +2,7 @@
 // line loop. Each one's extent is followed inside the loop over the code ranges of every line, so a
 // brace inside a string or a comment is absent by construction.
 mod attribute;
+mod module_graph;
 
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,9 @@ use memchr::memmem;
 use crate::{Language, LineClass, TestFileName};
 use crate::engine::is_the_same_name;
 use crate::engine::path_patterns::{PathPatternMatcher, PatternMatch};
+
+pub(crate) use module_graph::{Declaration, ModuleDeclarations, ModuleRow, find_declaring_chain,
+        promote_declared_test_modules};
 
 const ELSE : &[u8] = b"else";
 // Every file of a row has to be present, since an Octave package carries a DESCRIPTION too.

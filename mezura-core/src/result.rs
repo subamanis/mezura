@@ -2,9 +2,10 @@
 // 'Language' exists before anything has been counted, a 'Stats' of it does not.
 use std::collections::HashMap;
 
-use crate::{CountingModel, Keyword, Stats};
+use crate::{CountingModel, Keyword, LineClasses, Stats};
 use crate::domain::FileStats;
 use crate::engine::config::{Target, Threads};
+use crate::engine::file_parser::TestReport;
 use crate::engine::modules::{ModuleId, Modules};
 use crate::warnings::Warning;
 
@@ -171,6 +172,28 @@ impl TestCode {
     pub(crate) fn add_file(&mut self, tests: &FileStats, bytes: usize, keywords: &[Keyword], is_whole: bool) {
         self.stats.add_file(tests, bytes, keywords);
         self.whole_files += usize::from(is_whole);
+    }
+
+    // False for a file that is whole already, so nothing moves twice
+    pub(crate) fn promote_to_whole_file(&mut self, lines: usize, classes: &LineClasses, bytes: usize,
+            partial: Option<&TestReport>) -> bool
+    {
+        let mut moved = classes.clone();
+        let (mut moved_lines, mut moved_bytes) = (lines, bytes);
+        match partial {
+            Some(partial) => {
+                if partial.stats.lines >= lines { return false; }
+                moved.subtract(&partial.stats.classes);
+                moved_lines -= partial.stats.lines;
+                moved_bytes = bytes.saturating_sub(partial.bytes);
+            },
+            None => self.stats.files += 1
+        }
+        self.stats.lines += moved_lines;
+        self.stats.classes.add(&moved);
+        self.stats.bytes += moved_bytes;
+        self.whole_files += 1;
+        true
     }
 }
 

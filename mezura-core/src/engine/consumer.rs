@@ -8,16 +8,17 @@ use std::time::{Duration, Instant};
 use crossbeam_deque::{Injector, Steal, Worker};
 
 use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, FileEntry, FilesPerModuleMut,
-        Language, NestedLanguageMapMut, ParsableFile, ScanProgress, ScanSkip, SkippedFiles, Stats,
+        Language, ModuleRowsMut, NestedLanguageMapMut, ParsableFile, ScanProgress, ScanSkip, SkippedFiles, Stats,
         StatsMapMut, TestCode, TestCodeMapMut, phase_timing};
 use crate::engine::file_parser;
+use crate::engine::test_detection::ModuleRow;
 use crate::languages::NestedLanguageDefinitions;
 
 const INITIAL_FILE_BUFFER_BYTES : usize = 150;
 
 pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
         stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, tests_per_module: TestCodeMapMut,
-        files_per_module: FilesPerModuleMut,
+        files_per_module: FilesPerModuleMut, module_rows: ModuleRowsMut,
         language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
         language_lookups: crate::SharedModuleLookups,
         config: Arc<EngineConfig>, started: Instant, counting_ended: Arc<AtomicU64>,
@@ -26,7 +27,7 @@ pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<Parsab
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
         start_parsing_files(files_injector, faulty_files, finish_condition, stats_per_module,
-                nested_per_module, tests_per_module, files_per_module, language_map, nested_definitions,
+                nested_per_module, tests_per_module, files_per_module, module_rows, language_map, nested_definitions,
                 language_lookups, config, &skipped_files, &progress);
         // The last thing this thread does, and the only honest answer to how long the counting took:
         // 'run' joins these threads after calling the caller's callback, so its own clock cannot tell
@@ -43,7 +44,7 @@ pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<Parsab
 
 fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
     stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, tests_per_module: TestCodeMapMut,
-    files_per_module: FilesPerModuleMut,
+    files_per_module: FilesPerModuleMut, module_rows: ModuleRowsMut,
     language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
     language_lookups: crate::SharedModuleLookups,
     config: Arc<EngineConfig>, skipped_files: &Mutex<SkippedFiles>, progress: &ScanProgress)
@@ -64,6 +65,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
             vec![HashMap::new(); modules];
     let mut local_tests: Vec<HashMap<String, TestCode>> = vec![HashMap::new(); modules];
     let mut local_files: Vec<HashMap<String, Vec<FileEntry>>> = vec![HashMap::new(); modules];
+    let mut local_rows: Vec<ModuleRow> = Vec::new();
     // A batch and not one file at a time. With several of these threads per core they all reach for the
     // same queue head between files, and a contended steal comes back as Retry, which the arm below
     // answers by yielding: a whole scheduling round per file. A batch is half of what is left, so
@@ -124,6 +126,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                             }
                         }
                         let tests = report.tests.take();
+                        let declarations = report.declarations.take();
                         // The whole file weighs on its own language's row, its nested lines included
                         let whole = report.into_whole();
                         // No keywords per file: a map each would cost real memory over a large tree,
@@ -154,6 +157,11 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                                 None => { local_tests[module].entry(lang_name.to_owned())
                                         .or_default().add_file(&tests.stats, tests.bytes, keywords, is_whole); }
                             }
+                        }
+                        if let Some(declarations) = declarations {
+                            local_rows.push(ModuleRow { path: parsable_file.path, module: parsable_file.module,
+                                    language_name: resolved.unwrap_or(parsable_file.language_name), lines: whole.lines,
+                                    classes: whole.classes, bytes, partial: tests.map(|share| *share), declarations });
                         }
                     },
                     Ok(file_parser::FileOutcome::Skipped(kind)) => {
@@ -248,6 +256,9 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                 global[module].entry(language).or_default().extend(files);
             }
         }
+    }
+    if !local_rows.is_empty() {
+        module_rows.lock().unwrap().append(&mut local_rows);
     }
 }
 

@@ -20,7 +20,7 @@ use crate::domain::{CommentPair, FileStats, LineContinuation};
 use crate::engine::masks::MaskFinder;
 use crate::engine::masks::is_ascii;
 use crate::engine::masks::BLOCK_BYTES;
-use crate::engine::test_detection::{TestScope, TestWalk};
+use crate::engine::test_detection::{Declaration, ModuleDeclarations, TestScope, TestWalk};
 
 pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
@@ -78,6 +78,8 @@ pub(crate) struct FileReport {
     pub bytes: usize,
     // The lines of the shell that are test code, already inside 'shell'
     pub tests: Option<Box<TestReport>>,
+    // None where no declaration was looked for, so a file that declares nothing still says it was read
+    pub declarations: Option<Vec<Declaration>>,
 }
 
 pub(crate) struct SectionReport {
@@ -189,6 +191,15 @@ pub(crate) fn explain_parsed_file(contents: String, lang_name: &str, lookup: &Ne
     let report = parse_lines::<true>(&contents, lookup.languages.get(lang_name).unwrap(), lookup,
             &mut KeywordMatchers::default(), &config, &mut ParseBuffers::default(), whole_file_is_tests, &mut log);
     (contents, report, log)
+}
+
+// What '--explain' reads a declaring file with, keywords off since they cannot move a declaration
+pub(crate) fn read_module_declarations(contents: &str, language: &Language, lookup: &NestedLanguageLookup,
+    config: &EngineConfig) -> Option<Vec<Declaration>>
+{
+    let config = EngineConfig { count_keywords: false, ..config.clone() };
+    parse_lines::<false>(contents, language, lookup, &mut KeywordMatchers::default(), &config,
+            &mut ParseBuffers::default(), false, &mut ExplainLog::default()).declarations
 }
 
 enum HeldFile {
@@ -554,6 +565,8 @@ pub(crate) struct ScanBuffers {
     consumed: Vec<usize>,
     // Offsets into the line, where 'ParseBuffers::code_spans' holds offsets into the whole file
     code_ranges: Vec<(usize, usize)>,
+    // How far into the raw line the trimmed line begins, written for every line that holds anything
+    lead: usize,
 }
 
 impl ScanBuffers {
@@ -1236,9 +1249,13 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     let collecting_spans = config.count_keywords && matchers.for_language(language).is_some();
     // A file that is tests from end to end needs no extent followed, since nothing can be more
     let mut test_walk = if whole_file_is_tests { None } else { TestWalk::of(language, contents, config.detect_tests) };
-    // The plain path writes a line's code range only where the nested language search or the test
-    // extent reads it
-    let ranges_wanted = !language.nested_languages.is_empty() || test_walk.is_some();
+    let mut declarations = match &language.module_keyword {
+        Some(keyword) if config.detect_tests && !whole_file_is_tests => Some(ModuleDeclarations::of(keyword, contents)),
+        _ => None
+    };
+    // The plain path writes a line's code range only where the nested language search, the test
+    // extent or the module declarations read it
+    let ranges_wanted = !language.nested_languages.is_empty() || test_walk.is_some() || declarations.is_some();
     let mut test_stats = FileStats::default();
     let mut test_bytes = 0;
 
@@ -1261,9 +1278,11 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
             walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted,
                     Candidates::At(lines.positions(), 0), scan, &mut shell, &mut shell_stats, code_spans, log)
         };
+        let mut is_test = false;
         if let Some(tests) = &mut test_walk {
             let bytes = end_of_line(contents, line_start, raw_line) - line_start;
             if tests.observe_line(line_start, raw_line, had_code, &scan.code_ranges, class, bytes) {
+                is_test = true;
                 let mut claimed = 1;
                 for (held_class, held_bytes) in tests.take_held() {
                     test_stats.lines += 1;
@@ -1276,6 +1295,9 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                 test_bytes += bytes;
                 if EXPLAIN { log.mark_last_lines_as_test(claimed); }
             }
+        }
+        if let Some(reader) = &mut declarations && had_code {
+            reader.observe_line(line_start, raw_line, scan.lead, &scan.code_ranges, is_test);
         }
 
         // A region opener only counts where the shell left it as code, so one sitting inside a
@@ -1354,7 +1376,8 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         sections: buckets.into_iter().map(|bucket| SectionReport {
             language: bucket.language.name.clone(), stats: bucket.stats, bytes: bucket.bytes }).collect(),
         bytes: contents.len(),
-        tests: (test_stats.lines > 0).then(|| Box::new(TestReport { stats: test_stats, bytes: test_bytes }))
+        tests: (test_stats.lines > 0).then(|| Box::new(TestReport { stats: test_stats, bytes: test_bytes })),
+        declarations: declarations.map(ModuleDeclarations::into_declarations)
     }
 }
 
@@ -1378,6 +1401,7 @@ fn walk_plain_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, langu
         return (LineClass::Blank, false);
     }
     let lead = raw_line.len() - from_start.len();
+    scan.lead = lead;
     let base = line_start + lead;
 
     let words = has_word_byte(line.as_bytes());
@@ -1434,6 +1458,7 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
         return (class, false);
     }
     let lead = raw_line.len() - from_start.len();
+    scan.lead = lead;
     let base = line_start + lead;
 
     // A line joined to the one before it by a continuation symbol is the tail of that line's

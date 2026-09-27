@@ -80,7 +80,7 @@ use crossbeam_deque::{Injector, Worker};
 
 use engine::modules::{ModuleId, Modules};
 use engine::path_patterns::{PathPatternMatcher, TakingBack, Unused, UnusedPattern};
-use engine::test_detection::{DirectoryScope, TestScope};
+use engine::test_detection::{DirectoryScope, TestScope, promote_declared_test_modules};
 
 /// The name of the file that decides which language gets an extension or a file name two of them
 /// claim.
@@ -104,6 +104,7 @@ pub(crate) type StatsMapMut = Arc<Mutex<Vec<HashMap<String,Stats>>>>;
 pub(crate) type NestedLanguageMapMut = Arc<Mutex<Vec<HashMap<String,HashMap<String,Stats>>>>>;
 pub(crate) type TestCodeMapMut = Arc<Mutex<Vec<HashMap<String, TestCode>>>>;
 pub(crate) type FilesPerModuleMut = Arc<Mutex<Vec<HashMap<String, Vec<FileEntry>>>>>;
+pub(crate) type ModuleRowsMut = Arc<Mutex<Vec<engine::test_detection::ModuleRow>>>;
 
 /// Counts the directories and files the configuration names, and gives back the figures.
 ///
@@ -162,6 +163,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
             Arc::new(Mutex::new(vec![HashMap::new(); modules.count()]));
     let files_per_module : FilesPerModuleMut =
             Arc::new(Mutex::new(vec![HashMap::new(); modules.count()]));
+    let module_rows : ModuleRowsMut = Arc::new(Mutex::new(Vec::new()));
 
     let mut files_present = FilesPresent::default();
     let idle_producers = Arc::new(AtomicUsize::new(0));
@@ -218,7 +220,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     for i in 0..config.threads.consumers() {
         match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
                 stats_per_module.clone(), nested_per_module.clone(), tests_per_module.clone(),
-                files_per_module.clone(),
+                files_per_module.clone(), module_rows.clone(),
                 language_map_ref.clone(), nested_definitions.clone(), language_lookups.clone(), config.clone(),
                 parsing_started_instant, counting_ended.clone(), consumer_exits.clone(), skipped_files.clone(),
                 progress.clone()) {
@@ -275,7 +277,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     //
     // The floor matters for a run whose consumers all died and recorded nothing. That is an error
     // two steps down and should stay one rather than becoming an underflow in the line below.
-    let parsing_duration_millis = u128::from(counting_ended.load(Ordering::Relaxed)).max(producers_done_millis);
+    let mut parsing_duration_millis = u128::from(counting_ended.load(Ordering::Relaxed)).max(producers_done_millis);
 
     if *phase_timing::ENABLED {
         eprintln!("[phase] producers alive: {} ms | drain after producers: {} ms | queue size at producer exit: {}",
@@ -317,6 +319,17 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let tests_by_module = tests_guard.as_deref_mut().unwrap();
     let mut files_guard = files_per_module.lock();
     let files_by_module = files_guard.as_deref_mut().unwrap();
+
+    // Inside the count, since the caller's callback ran before this
+    let promotion_started = Instant::now();
+    let module_rows = std::mem::take(&mut *module_rows.lock().unwrap());
+    let promotion = promote_declared_test_modules(&module_rows, tests_by_module, files_by_module);
+    parsing_duration_millis += promotion_started.elapsed().as_millis();
+    if *phase_timing::ENABLED && promotion.seeds > 0 {
+        eprintln!("[phase] test modules: {} declared under a marker, {} files counted whole, {:.1} ms",
+            promotion.seeds, promotion.promoted, promotion_started.elapsed().as_secs_f64() * 1000.0);
+    }
+    drop(module_rows);
 
     let mut per_language = merge_over_modules(per_module, Stats::add);
     // Dropped before the total is summed, or the total's keyword map would name the keywords of

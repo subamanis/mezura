@@ -254,6 +254,8 @@ the same row.
 Tests
     MARKERS
     #[ #![
+    MODULES
+    mod
 ```
 
 ```
@@ -262,8 +264,8 @@ Tests
     *_test.go
 ```
 
-Either line can be left out, and `MARKERS` comes first when both are there. A block with neither
-refuses the file.
+Any of the three can be left out, in the order `MARKERS`, `MODULES`, `FILE NAMES` when more than
+one is there. A block with none refuses the file.
 
 `MARKERS` is what is searched for. `#[` and `#![` are read as Rust attributes: any attribute with
 `test` in its name starts a test, `#[cfg(...)]` starts one when its predicate has `test` outside a
@@ -272,6 +274,13 @@ and the module it sits in. Any other marker is a plain word, like D's `unittest`
 by `):`, D's `version(unittest):`, covers the rest of its scope the same way. A test runs from the
 marker to the brace matching the first `{`, or to the first `;`, whichever comes first, and an
 `if` continues through its `else`.
+
+`MODULES` is the one word that declares a module living in another file, `mod` for Rust. Such a
+declaration on a line of test code, `#[cfg(test)] mod tests;`, makes the file it names test code
+whole, and so every file that one declares in turn. The file is found the way rustc finds it:
+`x.rs` or `x/mod.rs` beside a `lib.rs`, `main.rs` or `mod.rs`, under a folder named after any
+other file, and beside it for a crate root, with an inline `mod outer { }` adding `outer/`. A
+declaration under `#[path = "..."]` is not followed.
 
 `FILE NAMES` takes three shapes only: `*suffix`, `prefix*` and a whole name, case-sensitive. It is
 for a name the toolchain defines, the way the go tool builds `*_test.go` only for `go test` and a

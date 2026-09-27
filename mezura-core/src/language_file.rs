@@ -121,6 +121,7 @@ const NESTED_LANGUAGE_END      : &str = "Nested language end";
 const NESTED_LANGUAGE_DEFAULT  : &str = "Nested language default";
 const TESTS                    : &str = "Tests";
 const TEST_MARKERS             : &str = "MARKERS";
+const TEST_MODULES             : &str = "MODULES";
 const TEST_FILE_NAMES          : &str = "FILE NAMES";
 const KEYWORD                  : &str = "Keyword";
 const KEYWORD_NAME             : &str = "NAME";
@@ -517,8 +518,9 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines);
     }
 
-    // Either half may be absent, both may not. A name of any other shape refuses the file.
+    // Any of the three may be absent, all three may not. A name of any other shape refuses the file.
     let mut test_markers = Vec::new();
+    let mut module_keyword = None;
     let mut test_file_names = Vec::new();
     if header.as_deref() == Some(TESTS) {
         header = read_next_header(lines);
@@ -527,13 +529,19 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             if test_markers.is_empty() {return None;}
             header = read_next_header(lines);
         }
+        if header.as_deref() == Some(TEST_MODULES) {
+            let words = split_line_on_whitespace(&read_value_line(lines)?);
+            let [word] = words.as_slice() else {return None};
+            module_keyword = Some(word.clone());
+            header = read_next_header(lines);
+        }
         if header.as_deref() == Some(TEST_FILE_NAMES) {
             let written = split_line_on_whitespace(&read_value_line(lines)?);
             if written.is_empty() {return None;}
             test_file_names = written.iter().map(|name| TestFileName::of(name)).collect::<Option<Vec<_>>>()?;
             header = read_next_header(lines);
         }
-        if test_markers.is_empty() && test_file_names.is_empty() {return None;}
+        if test_markers.is_empty() && module_keyword.is_none() && test_file_names.is_empty() {return None;}
     }
 
     let mut keywords = Vec::new();
@@ -567,6 +575,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>(), keywords);
     language.line_continuation = line_continuation;
+    language.module_keyword = module_keyword;
 
     Some(language
             .with_nesting_comments(&nesting_comments)
@@ -1223,24 +1232,32 @@ pl      Perl, Prolog
     }
 
     #[test]
-    fn a_tests_block_declares_the_markers_and_the_file_names_and_needs_one_of_them() {
+    fn a_tests_block_declares_the_markers_the_module_word_and_the_file_names_and_needs_one_of_them() {
         let good = "Language\nRustlike\n\nExtensions\nrsl\n\nString symbols\n\n\nComment symbols\n//\n\n\
-                Tests\n    MARKERS\n    #[ #![\n    FILE NAMES\n    tests.rs *_test.rs test_*\n\n\
+                Tests\n    MARKERS\n    #[ #![\n    MODULES\n    mod\n    FILE NAMES\n    tests.rs *_test.rs test_*\n\n\
                 Keyword\n    NAME\n    structs\n    ALIASES\n    struct\n";
         let parsed = parse_language(good).expect("the declaration must parse");
         assert_eq!(vec!["#[".to_owned(), "#![".to_owned()], parsed.test_markers);
+        assert_eq!(Some("mod".to_owned()), parsed.module_keyword);
         assert_eq!(vec![TestFileName::Exact("tests.rs".to_owned()), TestFileName::EndsWith("_test.rs".to_owned()),
                 TestFileName::StartsWith("test_".to_owned())], parsed.test_file_names);
         assert_eq!(1, parsed.keywords.len(), "the keywords after the block were lost");
 
-        let markers_alone = good.replace("    FILE NAMES\n    tests.rs *_test.rs test_*\n", "");
-        assert!(parse_language(&markers_alone).expect("one half alone must parse").test_file_names.is_empty());
-        let names_alone = good.replace("    MARKERS\n    #[ #![\n", "");
-        assert!(parse_language(&names_alone).expect("one half alone must parse").test_markers.is_empty());
-        let neither = good.replace("    MARKERS\n    #[ #![\n    FILE NAMES\n    tests.rs *_test.rs test_*\n", "");
-        assert!(parse_language(&neither).is_none(), "a block holding nothing was accepted");
+        let markers_alone = good.replace("    MODULES\n    mod\n    FILE NAMES\n    tests.rs *_test.rs test_*\n", "");
+        let parsed = parse_language(&markers_alone).expect("one part alone must parse");
+        assert!(parsed.test_file_names.is_empty() && parsed.module_keyword.is_none());
+        let names_alone = good.replace("    MARKERS\n    #[ #![\n    MODULES\n    mod\n", "");
+        assert!(parse_language(&names_alone).expect("one part alone must parse").test_markers.is_empty());
+        let modules_alone = good.replace("    MARKERS\n    #[ #![\n", "").replace("    FILE NAMES\n    tests.rs *_test.rs test_*\n", "");
+        assert_eq!(Some("mod".to_owned()), parse_language(&modules_alone).expect("one part alone must parse").module_keyword);
+        let none = good.replace("    MARKERS\n    #[ #![\n    MODULES\n    mod\n    FILE NAMES\n    tests.rs *_test.rs test_*\n", "");
+        assert!(parse_language(&none).is_none(), "a block holding nothing was accepted");
         let empty_markers = good.replace("    #[ #![\n", "    \n");
         assert!(parse_language(&empty_markers).is_none());
+        let two_words = good.replace("    mod\n", "    mod module\n");
+        assert!(parse_language(&two_words).is_none(), "two module words were accepted");
+        let out_of_order = good.replace("    MARKERS\n    #[ #![\n    MODULES\n    mod\n", "    MODULES\n    mod\n    MARKERS\n    #[ #![\n");
+        assert!(parse_language(&out_of_order).is_none(), "MODULES before MARKERS was accepted");
         for wrong in ["a*b", "*", "**test", "test_*.rs*"] {
             let shape = good.replace("tests.rs *_test.rs test_*", wrong);
             assert!(parse_language(&shape).is_none(), "'{wrong}' is no shape a file name takes and was accepted");
@@ -1250,10 +1267,10 @@ pl      Perl, Prolog
                 String symbols\n\n\nComment symbols\n//\n";
         assert!(parse_language(misplaced).is_none());
 
-        assert_eq!(vec!["#[".to_owned(), "#![".to_owned()],
-                parse_language_file(LANGUAGES_DIR.to_owned() + "Rust.txt").unwrap().test_markers);
-        assert_eq!(vec!["unittest".to_owned()],
-                parse_language_file(LANGUAGES_DIR.to_owned() + "D.txt").unwrap().test_markers);
+        let rust = parse_language_file(LANGUAGES_DIR.to_owned() + "Rust.txt").unwrap();
+        assert_eq!((vec!["#[".to_owned(), "#![".to_owned()], Some("mod".to_owned())), (rust.test_markers, rust.module_keyword));
+        let d = parse_language_file(LANGUAGES_DIR.to_owned() + "D.txt").unwrap();
+        assert_eq!((vec!["unittest".to_owned()], None), (d.test_markers, d.module_keyword));
     }
 
     #[test]

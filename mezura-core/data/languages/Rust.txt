@@ -30,6 +30,8 @@ Self-nesting comment end
 Tests
     MARKERS
     #[ #![
+    MODULES
+    mod
 
 Keyword
     NAME

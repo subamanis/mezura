@@ -323,6 +323,13 @@ fn describe_test_file_rule(rule: &TestFileRule, language: &str) -> Option<String
                 '{pattern}'{} says this file is not test code, even if its folder or its name would make it so. \
                 Lines inside a test marker still count as tests.", matched_folder.as_ref()
                         .map(|folder| format!(" matches the folder '{folder}' and")).unwrap_or_default())),
+        TestFileRule::DeclaredModule { declared_by } => match declared_by.as_slice() {
+            [] => None,
+            [marked] => Some(format!("The whole file is test code: '{marked}' declares it as a module under a test marker.")),
+            [first, between @ .., marked] => Some(format!("The whole file is test code: '{first}' declares it as a module, {}and \
+                    '{marked}' declares that one under a test marker.", between.iter()
+                            .map(|file| format!("'{file}' declares that one, ")).collect::<String>()))
+        },
         _ => None
     }
 }
@@ -340,6 +347,8 @@ fn build_test_file_entry(rule: &TestFileRule) -> Option<String> {
                 "{{\"rule\":\"declared\",\"pattern\":\"{}\"{}}}", escape(pattern), matched(matched_folder))),
         TestFileRule::DeclaredNotTests { pattern, matched_folder } => Some(format!(
                 "{{\"rule\":\"declared_not_tests\",\"pattern\":\"{}\"{}}}", escape(pattern), matched(matched_folder))),
+        TestFileRule::DeclaredModule { declared_by } => Some(format!("{{\"rule\":\"declared_module\",\"declared_by\":[{}]}}",
+                declared_by.iter().map(|file| format!("\"{}\"", escape(file))).collect::<Vec<_>>().join(","))),
         _ => None
     }
 }
@@ -432,6 +441,16 @@ mod tests {
         assert_eq!(Some("The '--tests' pattern '!a.rs' says this file is not test code, even if its folder or its \
                 name would make it so. Lines inside a test marker still count as tests.".to_owned()),
                 describe_test_file_rule(&TestFileRule::DeclaredNotTests { pattern: "!a.rs".to_owned(), matched_folder: None }, "Rust"));
+        let declared_by = |files: &[&str]| TestFileRule::DeclaredModule { declared_by: owned(files) };
+        assert_eq!(Some("The whole file is test code: 'D:/proj/src/lib.rs' declares it as a module under a test marker.".to_owned()),
+                describe_test_file_rule(&declared_by(&["D:/proj/src/lib.rs"]), "Rust"));
+        assert_eq!(Some("The whole file is test code: 'D:/proj/src/tests.rs' declares it as a module, and 'D:/proj/src/lib.rs' \
+                declares that one under a test marker.".to_owned()),
+                describe_test_file_rule(&declared_by(&["D:/proj/src/tests.rs", "D:/proj/src/lib.rs"]), "Rust"));
+        assert_eq!(Some("The whole file is test code: 'a.rs' declares it as a module, 'b.rs' declares that one, 'c.rs' declares \
+                that one, and 'd.rs' declares that one under a test marker.".to_owned()),
+                describe_test_file_rule(&declared_by(&["a.rs", "b.rs", "c.rs", "d.rs"]), "Rust"));
+        assert_eq!(None, describe_test_file_rule(&declared_by(&[]), "Rust"));
 
         assert_eq!(None, format_test_count(0));
         assert_eq!(Some("1 of them is test code".to_owned()), format_test_count(1));
@@ -465,5 +484,8 @@ mod tests {
                 build_test_file_entry(&TestFileRule::FileName(TestFileName::EndsWith(".t".to_owned()))));
         assert_eq!(Some(r#"{"rule":"declared","pattern":"*.spec.rs"}"#.to_owned()),
                 build_test_file_entry(&TestFileRule::Declared { pattern: "*.spec.rs".to_owned(), matched_folder: None }));
+        assert_eq!(Some(r#"{"rule":"declared_module","declared_by":["D:/proj/src/tests.rs","D:/proj/src/lib.rs"]}"#.to_owned()),
+                build_test_file_entry(&TestFileRule::DeclaredModule { declared_by: vec!["D:/proj/src/tests.rs".to_owned(),
+                        "D:/proj/src/lib.rs".to_owned()] }));
     }
 }
