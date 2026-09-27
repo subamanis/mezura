@@ -13,7 +13,7 @@ use super::paths::LocalDir;
 use super::{message_printer, suggestions, theme::Theme};
 
 // Printed at startup and by '--version'. Also in mezura/Cargo.toml, and the two move together.
-pub const VERSION_ID : &str = "v3.2.0";
+pub const VERSION_ID : &str = "v3.3.0";
 
 // command flags
 pub const TARGETS            :&str   = "targets";

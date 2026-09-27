@@ -310,8 +310,9 @@ and one under the total. Without being asked, mezura takes only what is certain:
 language marks in the source (`#[cfg(test)]` and `#[test]` in Rust, `unittest` in D, `test` in
 Zig), the file names a toolchain itself defines (`_test.go`, Perl's `.t`), and the directory a
 build tool compiles for tests alone (`tests/` beside a `Cargo.toml`, `src/test/` beside a `pom.xml`
-or a `build.gradle`, `Tests/` beside a `Package.swift`, `test/` beside a `mix.exs`, and the rest of
-that table). A folder named `tests` with no build file beside it is a folder. Everything that is a
+or a `build.gradle`, `Tests/` beside a `Package.swift`, `test/` beside a `mix.exs`, and the same
+for Dart, Julia, Perl, Clojure, Erlang, Elm and R). A folder named `tests` with no build file
+beside it is a folder. Everything that is a
 convention, `test_*.py`, `*.spec.ts`, `spec/`, is declared with `--tests`, which takes glob
 patterns and a `!` to take one back, and lives in the project's own configuration once saved:
 

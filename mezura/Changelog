@@ -1,3 +1,61 @@
+v3.3.0 - unreleased
+
+Main changes:
+  -> The test code of each language is counted apart from the rest, as a 'tests' row under the
+      language and one under the total. By default mezura takes only what is certain: the
+      tests a language marks in the source ('#[cfg(test)]' and '#[test]' in Rust, 'unittest' in D,
+      'test' in Zig), the file names a toolchain defines ('_test.go', Perl's '.t'), and the
+      directory a build tool compiles for tests ('tests' beside a 'Cargo.toml', 'src/test'
+      beside a 'pom.xml', 'test' beside a 'mix.exs', and the same for Swift, Dart, Julia, Perl,
+      Clojure, Erlang, Elm and R). Everything else can be manually declared or exempted with the
+      new '--tests' flag. TEST_DETECTION.md says what is found for each language and what is missed.
+  -> New '--tests': glob patterns for the files and directories to count as test code, a '!' in
+      front of one taking back what an earlier pattern or a build tool declared, the last match
+      winning.
+  -> New '--tests-breakdown share|split': one 'tests' row under the language, or a more comprehensive
+     split between 'production' and 'tests' under the total for the language.
+  -> '--hide tests' hides the rows and turns the detection off.
+  -> '--explain' marks each line of test code, counts them under the totals, and names the rule
+      that made a whole file test code.
+  -> The JSON document carries 'scope.tests_detected', 'languages[].tests', 'total.tests' and
+      'by_file[].tests', and a comparison carries the same as 'from', 'to' and 'change'.
+      '--explain --output json' marks a line with 'in_test' and names the rule under 'test_file'.
+  -> Themes gained the 'tests-*' and 'production-*' families, one for each of the two rows.
+  -> '.t' files are counted as Perl.
+
+Bugfixes:
+  -> A target typed as an absolute path holding '..', 'D:/proj/tests/..', is resolved to the folder
+      it names, so beside a target inside that folder it is no longer counted twice.
+  -> A relative target typed on a network share, './src' from '\\server\share\proj', no longer fails
+      with "does not exist".
+  -> An '--exclude' pattern no longer matches folders above the counted tree, so
+      '--exclude "tests/**"' no longer drops a project that sits under a folder named 'tests'.
+  -> Under '--diff', a pattern no longer sees the checkout's own folder.
+  -> A pattern starting with './', '--exclude ./services/api/gen', excludes what it names.
+  -> A full-path pattern works under a folder with brackets in its name and in any letter case.
+  -> The note of '--diff' that took 'hide keywords' from a document no longer asks for a value to be
+      typed that no command can type.
+
+Change in commands:
+  -> A name pattern that reaches above a target no longer matches: 'services/api/gen' with the
+      target './services/api' is written 'api/gen' or './services/api/gen'. A name with a slash that
+      matched nothing, or a path that names nothing on disk or a place outside every target, is
+      reported, for '--exclude' and '--tests' alike.
+  -> 'x/**' means the folder 'x', which is skipped and leaves the excluded count.
+  -> A trailing '/' means a folder only, so '--exclude "test/"' leaves a script named 'test' alone.
+  -> '--exclude' refuses a pattern starting with '!'.
+  -> A path pattern in a project's configuration is read from the project directory, so './build'
+      in it means the project's 'build' from wherever inside the project the command is typed.
+
+Other:
+  -> mezura-core 2.0.0. New major release for the engine:
+     'EngineConfig' gained 'detect_tests' and 'test_patterns', 'exclude_dirs'
+      became 'exclude_patterns', and 'RunResult', 'ModuleResult', 'FileEntry', 'Language',
+      'ExplainedLine' and 'FileExplanation' gained the fields the above need. Its own CHANGELOG has
+      the whole of it.
+
+-----------------------------------------------------------------------------------------------------------
+
 v3.2.0 - 2026-09-19
 
   35,862 Total lines  -  22,276 Code lines

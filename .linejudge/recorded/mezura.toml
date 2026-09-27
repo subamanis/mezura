@@ -1,5 +1,5 @@
 counter = "mezura"
-version = "v3.2.0 (2026-09-19)"
+version = "v3.3.0 (unreleased)"
 measured-with = "linejudge 0.2.0"
 
 [answer.1010-code_then_comment_on_one_line.content]
