@@ -267,9 +267,11 @@ refuses the file.
 
 `MARKERS` is what is searched for. `#[` and `#![` are read as Rust attributes: any attribute with
 `test` in its name starts a test, `#[cfg(...)]` starts one when its predicate has `test` outside a
-`not(...)`, and `#![cfg(test)]` makes the rest of the file tests. Any other marker is a plain word,
-like D's `unittest`. A test runs from the marker to the brace matching the first `{`, or to the
-first `;`, whichever comes first, and an `if` continues through its `else`.
+`not(...)`, and `#![cfg(test)]` makes the rest of its scope tests, the whole file at the top of one
+and the module it sits in. Any other marker is a plain word, like D's `unittest`, and one followed
+by `):`, D's `version(unittest):`, covers the rest of its scope the same way. A test runs from the
+marker to the brace matching the first `{`, or to the first `;`, whichever comes first, and an
+`if` continues through its `else`.
 
 `FILE NAMES` takes three shapes only: `*suffix`, `prefix*` and a whole name, case-sensitive. It is
 for a name the toolchain defines, the way the go tool builds `*_test.go` only for `go test` and a

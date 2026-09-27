@@ -33,7 +33,7 @@ pub(super) fn read(contents: &[u8], at: usize) -> Option<Marker> {
             else { holds_test(name) || name == BENCH };
     if !is_test { return None; }
     let after = close + 1;
-    Some(if inner { Marker::WholeFile { after } } else { Marker::Extent { after } })
+    Some(if inner { Marker::RestOfScope { after } } else { Marker::Extent { after } })
 }
 
 fn find_matching_bracket(bytes: &[u8], open: usize, closer: u8) -> Option<usize> {
@@ -210,7 +210,7 @@ mod tests {
 
     fn read_marker_of(attribute: &str) -> Option<(bool, usize)> {
         read(attribute.as_bytes(), 0).map(|marker| match marker {
-            Marker::WholeFile { after } => (true, after),
+            Marker::RestOfScope { after } => (true, after),
             Marker::Extent { after } => (false, after)
         })
     }

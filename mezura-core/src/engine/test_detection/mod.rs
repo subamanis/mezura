@@ -91,10 +91,9 @@ impl<'a> TestWalk<'a> {
         let line = from_start.trim_ascii_end().as_bytes();
         let ranges: &[(usize, usize)] = if has_code { ranges } else { &[] };
 
-        let mut is_test = matches!(self.state, State::Seeking { .. } | State::Inside { .. } | State::WholeFile);
+        let mut is_test = matches!(self.state, State::Seeking { .. } | State::Inside { .. });
         loop {
             match self.state {
-                State::WholeFile => return true,
                 State::Idle => {
                     let floor = self.cursor.max(base);
                     while self.candidates.get(self.next).is_some_and(|(at, _)| *at < floor) {
@@ -107,13 +106,9 @@ impl<'a> TestWalk<'a> {
                     is_test = true;
                     self.else_continues = attribute::is_opener(&self.markers[marker as usize]);
                     match found {
-                        // An inner attribute at the start of a line covers the file. Indented, it
-                        // covers the block around it.
-                        Marker::WholeFile { after } => {
-                            if at == line_start {
-                                self.state = State::WholeFile;
-                                return true;
-                            }
+                        // A depth of one is the block around the marker, so a file with no such
+                        // block runs to its end
+                        Marker::RestOfScope { after } => {
                             self.cursor = after;
                             self.state = State::Inside { depth: 1 };
                         },
@@ -161,7 +156,11 @@ impl<'a> TestWalk<'a> {
         if before.is_some_and(is_word_byte) || after.is_some_and(is_word_byte) {
             return None;
         }
-        Some(Marker::Extent { after: at + width })
+        let end = at + width;
+        Some(match find_scope_colon(self.contents, end) {
+            Some(past_colon) => Marker::RestOfScope { after: past_colon },
+            None => Marker::Extent { after: end }
+        })
     }
 
     // Every bracket moves the depth, and an opener or a terminator counts only at depth zero. The
@@ -429,8 +428,9 @@ pub(crate) fn find_test_directory_along(path: &Path) -> (Option<TestDirectory<'_
     (None, jvm_build_root.is_some())
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(super) enum Marker {
-    WholeFile { after: usize },
+    RestOfScope { after: usize },
     Extent { after: usize },
 }
 
@@ -454,7 +454,6 @@ enum State {
     Seeking { depth: u32, ends: Terminator },
     Inside { depth: u32 },
     AfterClose,
-    WholeFile,
 }
 
 // What ends the item under a marker. A binding, an import, a type alias, a static, a const and an
@@ -543,6 +542,16 @@ fn find_two_level_directories() -> impl Iterator<Item = (&'static str, &'static 
     BUILD_TOOLS.iter().flat_map(|tool| tool.test_directories).filter_map(|directory| directory.split_once('/'))
 }
 
+// D's 'version(unittest)' with a colon after it, which covers the rest of its scope
+fn find_scope_colon(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut at = from;
+    while bytes.get(at).is_some_and(u8::is_ascii_whitespace) { at += 1; }
+    if bytes.get(at) != Some(&b')') { return None; }
+    at += 1;
+    while bytes.get(at).is_some_and(u8::is_ascii_whitespace) { at += 1; }
+    (bytes.get(at) == Some(&b':')).then_some(at + 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -578,6 +587,17 @@ mod tests {
         assert!(matches!(walk.read_marker(22, "unittest", 0, &ranges), Some(Marker::Extent { after: 30 })));
         assert!(walk.read_marker(39, "unittest", 0, &ranges).is_none());
         assert!(walk.read_marker(22, "unittest", 0, &[(0, 10)]).is_none());
+    }
+
+    #[test]
+    fn a_word_marker_closed_by_a_paren_and_a_colon_covers_the_rest_of_its_scope() {
+        let language = Language::new("D", ["d"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
+                .with_tests(["unittest"], &[]);
+        let source = "version(unittest) : int a; version(unittest) { }";
+        let walk = TestWalk::of(&language, source, true).unwrap();
+        let ranges = [(0, source.len())];
+        assert_eq!(walk.read_marker(8, "unittest", 0, &ranges), Some(Marker::RestOfScope { after: 19 }));
+        assert_eq!(walk.read_marker(35, "unittest", 0, &ranges), Some(Marker::Extent { after: 43 }));
     }
 
     #[test]

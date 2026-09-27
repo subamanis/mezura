@@ -1,3 +1,6 @@
 [D]
 src/app.d 3-5,7-9,13-16
+src/rest_of_the_file.d 3-5
+src/rest_of_the_struct.d 3-6
+src/attribute_above.d 2-5 # wrong, the attribute line belongs to the block, 1-5
 tests/runner.d none
