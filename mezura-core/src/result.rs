@@ -174,10 +174,12 @@ impl TestCode {
         self.whole_files += usize::from(is_whole);
     }
 
-    // False for a file that is whole already, so nothing moves twice
+    // False for a file that is whole already or that has no lines, so nothing moves twice and an
+    // empty file counts no file, as the consumer counts it
     pub(crate) fn promote_to_whole_file(&mut self, lines: usize, classes: &LineClasses, bytes: usize,
             partial: Option<&TestReport>) -> bool
     {
+        if lines == 0 { return false; }
         let mut moved = classes.clone();
         let (mut moved_lines, mut moved_bytes) = (lines, bytes);
         match partial {

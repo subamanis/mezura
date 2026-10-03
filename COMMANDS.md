@@ -183,8 +183,8 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     The last pattern that matches decides. '--tests spec,!spec/fixtures' declares 'spec' and
     takes its fixtures back, and '--tests !vendor/' keeps a vendored project's tests out even
     where its build file names them. The tests a build file or a file name finds on their own
-    stay found beside the patterns, and so do the markers inside a file, which a '!' never
-    reaches.
+    stay found beside the patterns, and so do the markers inside a file and a file another file
+    declares as a module under a marker, which a '!' never reaches.
 
     In a project's own configuration the patterns are read from the project directory, so they
     say the same thing from wherever inside the project the command is typed. '--hide tests'
@@ -1183,8 +1183,8 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     the document under 'left_out_of_a_scan'; the named file itself is always counted. A line of
     test code is marked 'test code' and counted below the totals, and a file that is test code as a
     whole, or that a '!' pattern of '--tests' took back, names the rule that decided it: a build
-    tool's test directory, its name, or the pattern. The document carries 'in_test' on those lines
-    and the rule under 'test_file'.
+    tool's test directory, its name, the pattern, or the file that declares it as a module under
+    a marker. The document carries 'in_test' on those lines and the rule under 'test_file'.
 
       mezura src/main.rs --explain
       mezura src/page.vue --explain --counting region

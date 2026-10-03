@@ -3,6 +3,7 @@ src/inline_module.rs 3-11
 src/attributed_functions.rs 3-6,10-14,16-19
 src/items_ending_in_semicolon.rs 1-2,4-5,7-8,10-11,13-14,16-17,19-20,23-24
 src/else_arms.rs 2-12
+src/cfg_if_arms.rs 2-4 # the else arm is the build without the test marker
 src/attribute_over_lines.rs 1-6,11-12,17-18
 src/whole_file.rs whole
 src/markers_elsewhere.rs none
@@ -26,6 +27,10 @@ src/tests/cases.rs whole # declared by tests/mod.rs inside a macro block
 src/whole_file/helper.rs whole # declared under the '#![cfg(test)]' of whole_file.rs
 src/bin/tool.rs 3-4
 src/bin/tool_tests.rs whole # declared by the crate root beside it
+src/declared_in_text.rs 1-13
+src/declared_in_text/text/in_string.rs none # named inside a string of declared_in_text.rs
+src/declared_in_text/text/in_raw.rs none # named inside a raw string
+src/declared_in_text/text/in_comment.rs none # named inside a block comment
 tests/integration.rs whole
 tests/common/mod.rs whole
 tests/examples/inside_tests.rs whole

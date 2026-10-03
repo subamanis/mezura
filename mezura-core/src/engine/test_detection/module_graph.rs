@@ -2,15 +2,14 @@
 // walked once the counting is over and which thread counted the declaring file and which the
 // declared one changes nothing.
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
-use std::hash::{BuildHasherDefault, Hasher};
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::{FileEntry, LineClasses, Stats, TestCode};
-use crate::engine::file_parser::TestReport;
+use crate::{EngineConfig, FileEntry, LineClasses, Stats, TestCode};
+use crate::engine::file_parser::{NestedLanguageLookup, TestReport, read_module_declarations};
 use crate::engine::modules::ModuleId;
-use crate::engine::targets::normalise_separators;
+use crate::engine::targets::spell_out;
 use crate::engine::test_detection::{attribute, find_word_end, is_word_byte, is_word_start};
 
 // The files whose declarations resolve beside them. Any other file's resolve under a folder of its
@@ -24,6 +23,8 @@ const RAW_IDENTIFIER : &[u8] = b"r#";
 const PATH_ATTRIBUTE : &[u8] = b"path";
 const COMMENT_STARTS : [&[u8]; 3] = [b"//", b"/*", b"*"];
 const MOST_HOPS : usize = 64;
+const EACH_BYTE : u64 = 0x0101_0101_0101_0101;
+const HIGH_BITS : u64 = 0x8080_8080_8080_8080;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Declaration {
@@ -31,6 +32,112 @@ pub(crate) struct Declaration {
     // Outermost first
     pub inline_modules: Vec<Box<str>>,
     pub seed: bool,
+}
+
+pub(crate) struct ModuleRow {
+    pub path: PathBuf,
+    pub module: ModuleId,
+    pub language_name: Arc<str>,
+    pub lines: usize,
+    pub classes: LineClasses,
+    pub bytes: usize,
+    pub partial: Option<TestReport>,
+    pub declarations: Vec<Declaration>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Promotion {
+    pub seeds: usize,
+    pub promoted: usize,
+}
+
+pub(crate) fn promote_declared_test_modules(rows: &[ModuleRow], tests_by_module: &mut [HashMap<String, TestCode>],
+        files_by_module: &mut [HashMap<String, Vec<FileEntry>>], source: &mut dyn DeclarationSource) -> Promotion
+{
+    let seeds = rows.iter().flat_map(|row| &row.declarations).filter(|declaration| declaration.seed).count();
+    if seeds == 0 {
+        return Promotion::default();
+    }
+    let by_path = rows.iter().enumerate().map(|(at, row)| (PathKey::of(&row.path), at)).collect::<PathIndex<'_>>();
+    let mut marked = vec![false; rows.len()];
+    let mut read_without_a_row = HashSet::new();
+    let mut pending = Vec::new();
+    for row in rows {
+        for declaration in row.declarations.iter().filter(|declaration| declaration.seed) {
+            pending.extend(find_declared_file(&row.path, &row.language_name, declaration, false, &by_path, source));
+        }
+    }
+    // A file already marked ends the walk there, so one that two seeds reach is booked once
+    while let Some(found) = pending.pop() {
+        match found {
+            Found::Row(at) => {
+                if marked[at] { continue; }
+                marked[at] = true;
+                for declaration in &rows[at].declarations {
+                    pending.extend(find_declared_file(&rows[at].path, &rows[at].language_name, declaration, true, &by_path, source));
+                }
+            },
+            Found::WithoutARow(path, language_name, declarations) => {
+                if !read_without_a_row.insert(path.clone()) { continue; }
+                for declaration in &declarations {
+                    pending.extend(find_declared_file(&path, &language_name, declaration, true, &by_path, source));
+                }
+            }
+        }
+    }
+
+    let mut promoted = 0;
+    let mut entries_by_path: HashMap<(ModuleId, Arc<str>), HashMap<String, usize>> = HashMap::new();
+    for row in rows.iter().zip(&marked).filter_map(|(row, marked)| marked.then_some(row)) {
+        let share = tests_by_module[row.module as usize].entry(row.language_name.to_string()).or_default();
+        if !share.promote_to_whole_file(row.lines, &row.classes, row.bytes, row.partial.as_ref()) { continue; }
+        promoted += 1;
+        let Some(entries) = files_by_module[row.module as usize].get_mut(&*row.language_name) else { continue };
+        let index = entries_by_path.entry((row.module, row.language_name.clone())).or_insert_with(|| entries.iter()
+                .enumerate().map(|(at, entry)| (entry.path.clone(), at)).collect());
+        if let Some(&at) = index.get(&spell_out(&row.path)) {
+            entries[at].tests = Some(Stats::new(1, row.bytes, row.lines, row.classes.clone(), HashMap::new()));
+        }
+    }
+    Promotion { seeds, promoted }
+}
+
+pub(crate) fn find_declaring_chain(file: &Path, language_name: &str, source: &mut dyn DeclarationSource) -> Option<Vec<PathBuf>> {
+    let mut visited = HashSet::from([file.to_path_buf()]);
+    let mut chain = Vec::new();
+    climb_to_a_marker(file, language_name, source, &mut visited, &mut chain).then_some(chain)
+}
+
+pub(crate) trait DeclarationSource {
+    fn is_file(&mut self, path: &Path) -> bool;
+    fn read_declarations(&mut self, path: &Path, language_name: &str) -> Option<Vec<Declaration>>;
+    fn list_files(&mut self, folder: &Path) -> Vec<PathBuf>;
+}
+
+pub(crate) struct FilesOnDisk<'a> {
+    pub lookup: &'a NestedLanguageLookup<'a>,
+    pub config: &'a EngineConfig,
+    pub is_whole: &'a dyn Fn(&Path) -> bool,
+}
+
+impl DeclarationSource for FilesOnDisk<'_> {
+    fn is_file(&mut self, path: &Path) -> bool {
+        path.is_file()
+    }
+
+    fn read_declarations(&mut self, path: &Path, language_name: &str) -> Option<Vec<Declaration>> {
+        let contents = std::fs::read_to_string(path).ok()?;
+        let language = self.lookup.languages.get(language_name)?;
+        let mut declarations = read_module_declarations(&contents, language, self.lookup, self.config)?;
+        if (self.is_whole)(path) {
+            declarations.iter_mut().for_each(|declaration| declaration.seed = false);
+        }
+        Some(declarations)
+    }
+
+    fn list_files(&mut self, folder: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(folder).map(|listing| listing.flatten().map(|entry| entry.path()).collect()).unwrap_or_default()
+    }
 }
 
 pub(crate) struct ModuleDeclarations<'a> {
@@ -119,7 +226,8 @@ impl<'a> ModuleDeclarations<'a> {
         }
     }
 
-    // An attribute spanning lines is not walked through, so a path above one of those goes unseen
+    // An attribute spanning lines ends the look-back, so a path above one of those goes unseen and
+    // the declaration is followed to the default place
     fn is_under_a_path_attribute(&self, line_start: usize) -> bool {
         let mut end = line_start;
         while end > 0 {
@@ -130,97 +238,22 @@ impl<'a> ModuleDeclarations<'a> {
                 end = start;
                 continue;
             }
-            if line.starts_with(b"#[") || line.starts_with(b"#![") {
-                let name_start = skip_whitespace(line, 2 + usize::from(line[1] == b'!'));
-                if &line[name_start..find_word_end(line, name_start)] == PATH_ATTRIBUTE { return true; }
-                end = start;
-                continue;
-            }
-            return false;
+            let Some((after, names_a_path)) = skip_attributes(line, 0) else { return false };
+            let carries_an_item = after == 0
+                    || (after < line.len() && !COMMENT_STARTS.iter().any(|comment| line[after..].starts_with(comment)));
+            if carries_an_item { return false; }
+            if names_a_path { return true; }
+            end = start;
         }
         false
     }
 }
 
-pub(crate) struct ModuleRow {
-    pub path: PathBuf,
-    pub module: ModuleId,
-    pub language_name: Arc<str>,
-    pub lines: usize,
-    pub classes: LineClasses,
-    pub bytes: usize,
-    pub partial: Option<TestReport>,
-    pub declarations: Vec<Declaration>,
-}
-
-#[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct Promotion {
-    pub seeds: usize,
-    pub promoted: usize,
-}
-
-// The rows are borrowed, so the caller frees them where their ten thousand paths are off the wall
-pub(crate) fn promote_declared_test_modules(rows: &[ModuleRow], tests_by_module: &mut [HashMap<String, TestCode>],
-        files_by_module: &mut [HashMap<String, Vec<FileEntry>>]) -> Promotion
-{
-    let seeds = rows.iter().flat_map(|row| &row.declarations).filter(|declaration| declaration.seed).count();
-    if seeds == 0 {
-        return Promotion::default();
-    }
-    // Keyed on the bytes of the path, which every path of one run and every candidate for it
-    // share, since the same walk joined them
-    let by_path = rows.iter().enumerate().map(|(at, row)| (row.path.as_os_str(), at)).collect::<PathIndex<'_>>();
-    let mut marked = vec![false; rows.len()];
-    let mut pending = Vec::new();
-    for row in rows {
-        for declaration in row.declarations.iter().filter(|declaration| declaration.seed) {
-            pending.extend(find_declared_row(&row.path, declaration, &by_path));
-        }
-    }
-    // A row already marked ends the walk there, which is what ends a cycle
-    while let Some(at) = pending.pop() {
-        if marked[at] { continue; }
-        marked[at] = true;
-        for declaration in &rows[at].declarations {
-            pending.extend(find_declared_row(&rows[at].path, declaration, &by_path));
-        }
-    }
-
-    let mut promoted = 0;
-    let mut entries_by_path: HashMap<(ModuleId, Arc<str>), HashMap<String, usize>> = HashMap::new();
-    for row in rows.iter().zip(&marked).filter_map(|(row, marked)| marked.then_some(row)) {
-        let share = tests_by_module[row.module as usize].entry(row.language_name.to_string()).or_default();
-        if !share.promote_to_whole_file(row.lines, &row.classes, row.bytes, row.partial.as_ref()) { continue; }
-        promoted += 1;
-        let Some(entries) = files_by_module[row.module as usize].get_mut(&*row.language_name) else { continue };
-        let index = entries_by_path.entry((row.module, row.language_name.clone())).or_insert_with(|| entries.iter()
-                .enumerate().map(|(at, entry)| (entry.path.clone(), at)).collect());
-        if let Some(&at) = index.get(&spell_out(&row.path)) {
-            entries[at].tests = Some(Stats::new(1, row.bytes, row.lines, row.classes.clone(), HashMap::new()));
-        }
-    }
-    Promotion { seeds, promoted }
-}
-
-pub(crate) fn find_declaring_chain(file: &Path, read: &mut dyn FnMut(&Path) -> Option<Vec<Declaration>>) -> Option<Vec<PathBuf>> {
-    let mut chain = Vec::new();
-    let mut visited = HashSet::from([file.to_path_buf()]);
-    let mut current = file.to_path_buf();
-    for _ in 0..MOST_HOPS {
-        let (declarer, seed) = find_declarer_of(&current, read, &visited)?;
-        chain.push(declarer.clone());
-        if seed { return Some(chain); }
-        visited.insert(current);
-        current = declarer;
-    }
-    None
-}
-
-fn find_declared_file_candidates(declaring: &Path, declaration: &Declaration) -> Vec<PathBuf> {
+fn build_declared_file_candidates(declaring: &Path, declaration: &Declaration) -> Vec<PathBuf> {
     let (Some(dir), Some(stem)) = (declaring.parent(), declaring.file_stem().and_then(|stem| stem.to_str())) else {
         return Vec::new();
     };
-    let extension = format_extension_of(declaring);
+    let extension = build_dotted_extension_of(declaring);
     let own = if ROOT_STEMS.contains(&stem) { dir.to_path_buf() } else { dir.join(stem) };
     let mut places = vec![own.clone()];
     if own != dir { places.push(dir.to_path_buf()); }
@@ -233,10 +266,39 @@ fn find_declared_file_candidates(declaring: &Path, declaration: &Declaration) ->
     candidates
 }
 
-type PathIndex<'a> = HashMap<&'a OsStr, usize, BuildHasherDefault<BytesHasher>>;
+type PathIndex<'a> = HashMap<PathKey<'a>, usize, BuildHasherDefault<BytesHasher>>;
 
-// Eight bytes at a time, since the keys are ten thousand paths of one run and the default hasher
-// takes a millisecond over them
+// A file named on the command line keeps its forward slashes while the directory scan joins with
+// the platform's, so the separators are folded into one in the hash and in the comparison
+#[derive(Clone, Copy)]
+struct PathKey<'a>(&'a [u8]);
+
+impl<'a> PathKey<'a> {
+    fn of(path: &'a Path) -> Self {
+        PathKey(path.as_os_str().as_encoded_bytes())
+    }
+}
+
+impl PartialEq for PathKey<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.len() == other.0.len()
+                && self.0.iter().zip(other.0).all(|(mine, theirs)| fold_separator(*mine) == fold_separator(*theirs))
+    }
+}
+
+impl Eq for PathKey<'_> {}
+
+impl Hash for PathKey<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for chunk in self.0.chunks(8) {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            state.write_u64(fold_separators(u64::from_le_bytes(word)));
+        }
+    }
+}
+
+// Whole words at a time, since the default hasher costs more than the rest of the promotion
 #[derive(Default)]
 struct BytesHasher(u64);
 
@@ -245,8 +307,12 @@ impl Hasher for BytesHasher {
         for chunk in bytes.chunks(8) {
             let mut word = [0u8; 8];
             word[..chunk.len()].copy_from_slice(chunk);
-            self.0 = (self.0.rotate_left(5) ^ u64::from_le_bytes(word)).wrapping_mul(0x517c_c1b7_2722_0a95);
+            self.write_u64(u64::from_le_bytes(word));
         }
+    }
+
+    fn write_u64(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x517c_c1b7_2722_0a95);
     }
 
     fn finish(&self) -> u64 {
@@ -254,15 +320,62 @@ impl Hasher for BytesHasher {
     }
 }
 
-fn find_declared_row(declaring: &Path, declaration: &Declaration, by_path: &PathIndex<'_>) -> Option<usize> {
-    find_declared_file_candidates(declaring, declaration).iter().find_map(|candidate| by_path.get(candidate.as_os_str()).copied())
+fn fold_separator(byte: u8) -> u8 {
+    if cfg!(windows) && byte == b'\\' { b'/' } else { byte }
 }
 
-// The file's own folder answers for a crate root beside it too, so every sibling is read there
-fn find_declarer_of(file: &Path, read: &mut dyn FnMut(&Path) -> Option<Vec<Declaration>>, visited: &HashSet<PathBuf>)
-        -> Option<(PathBuf, bool)>
+// Every byte equal to a backslash becomes a slash, the eight of a word at once
+fn fold_separators(word: u64) -> u64 {
+    if !cfg!(windows) { return word; }
+    let differences = word ^ (u64::from(b'\\') * EACH_BYTE);
+    let non_zero = ((differences & !HIGH_BITS) + !HIGH_BITS) | differences;
+    let backslashes = (!non_zero & HIGH_BITS) >> 7;
+    word ^ (backslashes * u64::from(b'\\' ^ b'/'))
+}
+
+enum Found {
+    Row(usize),
+    WithoutARow(PathBuf, Arc<str>, Vec<Declaration>),
+}
+
+// A file reached through a declaration is a module and no crate root, so only the pair under its
+// own folder is tried. A file on disk with no row is the one named, read and booked nothing.
+fn find_declared_file(declaring: &Path, language_name: &Arc<str>, declaration: &Declaration, reached: bool,
+        by_path: &PathIndex<'_>, source: &mut dyn DeclarationSource) -> Option<Found>
 {
-    let extension = format_extension_of(file);
+    let candidates = build_declared_file_candidates(declaring, declaration);
+    let pairs = if reached { &candidates[..candidates.len().min(2)] } else { &candidates[..] };
+    for pair in pairs.chunks(2) {
+        if let Some(at) = pair.iter().find_map(|candidate| by_path.get(&PathKey::of(candidate)).copied()) {
+            return Some(Found::Row(at));
+        }
+        if let Some(candidate) = pair.iter().find(|candidate| source.is_file(candidate)) {
+            let declarations = source.read_declarations(candidate, language_name).unwrap_or_default();
+            return Some(Found::WithoutARow(candidate.clone(), language_name.clone(), declarations));
+        }
+    }
+    None
+}
+
+fn climb_to_a_marker(file: &Path, language_name: &str, source: &mut dyn DeclarationSource, visited: &mut HashSet<PathBuf>,
+        chain: &mut Vec<PathBuf>) -> bool
+{
+    if chain.len() == MOST_HOPS { return false; }
+    for (declarer, seed) in find_declarers_of(file, language_name, source, visited).unwrap_or_default() {
+        chain.push(declarer.clone());
+        if seed { return true; }
+        visited.insert(declarer.clone());
+        if climb_to_a_marker(&declarer, language_name, source, visited, chain) { return true; }
+        chain.pop();
+    }
+    false
+}
+
+// The file's own folder answers for a crate root beside it too, so the siblings are read at every level
+fn find_declarers_of(file: &Path, language_name: &str, source: &mut dyn DeclarationSource, visited: &HashSet<PathBuf>)
+        -> Option<Vec<(PathBuf, bool)>>
+{
+    let extension = build_dotted_extension_of(file);
     let stem = file.file_stem()?.to_str()?;
     let (name, mut holder) = match stem == MODULE_FILE_STEM {
         true => (file.parent()?.file_name()?.to_str()?.to_owned(), file.parent()?.parent()?.to_path_buf()),
@@ -274,18 +387,24 @@ fn find_declarer_of(file: &Path, read: &mut dyn FnMut(&Path) -> Option<Vec<Decla
         if let (Some(parent), Some(holder_name)) = (holder.parent(), holder.file_name()) {
             candidates.push(parent.join(format!("{}{extension}", holder_name.to_string_lossy())));
         }
-        if inline.is_empty() && let Ok(listing) = std::fs::read_dir(&holder) {
-            let siblings = listing.flatten().map(|entry| entry.path())
-                    .filter(|path| path.extension() == file.extension() && !candidates.contains(path)).collect::<Vec<_>>();
-            candidates.extend(siblings);
-        }
+        let mut siblings = source.list_files(&holder).into_iter()
+                .filter(|path| path.extension() == file.extension() && !candidates.contains(path)).collect::<Vec<_>>();
+        siblings.sort();
+        candidates.extend(siblings);
+        let mut declarers = Vec::new();
         for candidate in candidates {
             if candidate == file || visited.contains(&candidate) { continue; }
-            if let Some(declarations) = read(&candidate)
-                    && let Some(found) = declarations.iter().find(|declaration| *declaration.name == *name
-                            && declaration.inline_modules == inline) {
-                return Some((candidate, found.seed));
+            let Some(declarations) = source.read_declarations(&candidate, language_name) else { continue };
+            for declaration in declarations.iter().filter(|declaration| *declaration.name == *name && declaration.inline_modules == inline) {
+                let places = build_declared_file_candidates(&candidate, declaration);
+                if places.iter().find(|place| source.is_file(place)).is_some_and(|place| place.as_path() == file) {
+                    declarers.push((candidate.clone(), declaration.seed));
+                }
             }
+        }
+        if !declarers.is_empty() {
+            declarers.sort_by_key(|(_, seed)| !seed);
+            return Some(declarers);
         }
         let holder_name = holder.file_name()?.to_str()?.to_owned();
         inline.insert(0, holder_name.into());
@@ -293,12 +412,8 @@ fn find_declarer_of(file: &Path, read: &mut dyn FnMut(&Path) -> Option<Vec<Decla
     }
 }
 
-fn format_extension_of(file: &Path) -> String {
+fn build_dotted_extension_of(file: &Path) -> String {
     file.extension().map(|extension| format!(".{}", extension.to_string_lossy())).unwrap_or_default()
-}
-
-fn spell_out(path: &Path) -> String {
-    normalise_separators(&path.to_string_lossy()).into_owned()
 }
 
 // Read as Rust's attribute, so a ']' inside a string of one closes nothing
@@ -360,7 +475,7 @@ mod tests {
         read_with_ranges(&lines.iter().map(|(line, is_test)| (*line, None, *is_test)).collect::<Vec<_>>())
     }
 
-    fn declared(name: &str, inline_modules: &[&str], seed: bool) -> Declaration {
+    fn build_declaration(name: &str, inline_modules: &[&str], seed: bool) -> Declaration {
         Declaration { name: name.into(), inline_modules: inline_modules.iter().map(|name| (*name).into()).collect(), seed }
     }
 
@@ -370,10 +485,10 @@ mod tests {
                 ("pub(in crate::a) mod deep;", false), ("#[cfg(unix)] mod unix;", false),
                 ("#[cfg(test)] mod checks;", true), ("mod tests;", true), ("mod r#type;", false),
                 ("mod  spaced ;", false), ("mod x; // a comment stays outside the range", false)]);
-        assert_eq!(vec![declared("plain", &[], false), declared("shown", &[], false), declared("inner", &[], false),
-                declared("deep", &[], false), declared("unix", &[], false), declared("checks", &[], true),
-                declared("tests", &[], true), declared("type", &[], false), declared("spaced", &[], false),
-                declared("x", &[], false)], found);
+        assert_eq!(vec![build_declaration("plain", &[], false), build_declaration("shown", &[], false), build_declaration("inner", &[], false),
+                build_declaration("deep", &[], false), build_declaration("unix", &[], false), build_declaration("checks", &[], true),
+                build_declaration("tests", &[], true), build_declaration("type", &[], false), build_declaration("spaced", &[], false),
+                build_declaration("x", &[], false)], found);
     }
 
     #[test]
@@ -391,9 +506,11 @@ mod tests {
                 ("#[path = \"x.rs\"]", false), ("// a note", false), ("", false), ("/* another */", false),
                 ("mod under_comments;", false),
                 ("#[path = \"x.rs\"]", false), ("struct Between;", false), ("mod after_an_item;", false),
-                ("#[pathological]", false), ("mod under_a_longer_word;", false), ("mod plain;", false)]);
-        assert_eq!(vec![declared("after_an_item", &[], false), declared("under_a_longer_word", &[], false),
-                declared("plain", &[], false)], found);
+                ("#[pathological]", false), ("mod under_a_longer_word;", false),
+                ("#[path = \"x.rs\"] mod on_the_line_above;", false), ("#[cfg(test)]", true), ("mod under_an_attribute_with_its_item;", true),
+                ("#[allow(dead_code)] #[path = \"x.rs\"]", false), ("mod under_a_second_attribute;", false), ("mod plain;", false)]);
+        assert_eq!(vec![build_declaration("after_an_item", &[], false), build_declaration("under_a_longer_word", &[], false),
+                build_declaration("under_an_attribute_with_its_item", &[], true), build_declaration("plain", &[], false)], found);
 
         // As the parser hands the lines over, with the string of the attribute outside the code ranges
         let path_line = "#[path = \"elsewhere.rs\"]";
@@ -401,13 +518,13 @@ mod tests {
         let found = read_with_ranges(&[(path_line, Some(&[(0, 9), (path_line.len() - 1, path_line.len())]), true),
                 ("mod aside;", None, true), (doc_line, Some(&[(0, 8), (11, doc_line.len())]), false),
                 ("#[cfg(test)] // mod inside_a_comment;", Some(&[(0, 12)]), true), ("mod after_a_comment;", None, true)]);
-        assert_eq!(vec![declared("documented", &[], false), declared("after_a_comment", &[], true)], found);
+        assert_eq!(vec![build_declaration("documented", &[], false), build_declaration("after_a_comment", &[], true)], found);
     }
 
     #[test]
     fn an_indented_declaration_is_read_through_its_lead() {
         let found = read(&[("    mod indented;", false), ("\tpub mod tabbed;", false), ("  #[cfg(unix)] mod attributed;", false)]);
-        assert_eq!(vec![declared("indented", &[], false), declared("tabbed", &[], false), declared("attributed", &[], false)], found);
+        assert_eq!(vec![build_declaration("indented", &[], false), build_declaration("tabbed", &[], false), build_declaration("attributed", &[], false)], found);
     }
 
     #[test]
@@ -416,9 +533,9 @@ mod tests {
                 ("    mod inner {", false), ("        mod b;", false), ("    }", false), ("    cfg_if! {", false),
                 ("        mod c;", false), ("    }", false), ("}", false), ("mod after;", false),
                 ("#[cfg(test)]", true), ("mod tests {", true), ("    mod cases;", true), ("}", true), ("mod last;", false)]);
-        assert_eq!(vec![declared("a", &["outer"], false), declared("b", &["outer", "inner"], false),
-                declared("c", &["outer"], false), declared("after", &[], false), declared("cases", &["tests"], true),
-                declared("last", &[], false)], found);
+        assert_eq!(vec![build_declaration("a", &["outer"], false), build_declaration("b", &["outer", "inner"], false),
+                build_declaration("c", &["outer"], false), build_declaration("after", &[], false), build_declaration("cases", &["tests"], true),
+                build_declaration("last", &[], false)], found);
     }
 
     #[test]
@@ -427,13 +544,13 @@ mod tests {
         let found = read_with_ranges(&[("mod outer {", None, false),
                 (with_a_string, Some(&[(0, 8), (11, with_a_string.len())]), false), ("mod b;", None, false),
                 ("} // }", Some(&[(0, 1)]), false), ("mod c;", None, false)]);
-        assert_eq!(vec![declared("b", &["outer"], false), declared("c", &[], false)], found);
+        assert_eq!(vec![build_declaration("b", &["outer"], false), build_declaration("c", &[], false)], found);
     }
 
     #[test]
     fn a_declaration_resolves_beside_a_root_file_and_under_the_name_of_any_other() {
-        let of = |declaring: &str, name: &str, inline: &[&str]| find_declared_file_candidates(Path::new(declaring),
-                &declared(name, inline, false)).iter().map(|path| spell_out(path)).collect::<Vec<_>>();
+        let of = |declaring: &str, name: &str, inline: &[&str]| build_declared_file_candidates(Path::new(declaring),
+                &build_declaration(name, inline, false)).iter().map(|path| spell_out(path)).collect::<Vec<_>>();
         assert_eq!(vec!["src/tests.rs", "src/tests/mod.rs"], of("src/lib.rs", "tests", &[]));
         assert_eq!(vec!["src/tests.rs", "src/tests/mod.rs"], of("src/main.rs", "tests", &[]));
         assert_eq!(vec!["src/a/b.rs", "src/a/b/mod.rs"], of("src/a/mod.rs", "b", &[]));
@@ -443,35 +560,54 @@ mod tests {
         assert_eq!(vec!["src/outer/inner/x.rs", "src/outer/inner/x/mod.rs"], of("src/lib.rs", "x", &["outer", "inner"]));
         assert_eq!(vec!["src/a/outer/x.rs", "src/a/outer/x/mod.rs", "src/outer/x.rs", "src/outer/x/mod.rs"],
                 of("src/a.rs", "x", &["outer"]));
-        assert!(of("lib.rs", "x", &[]).is_empty() || of("lib.rs", "x", &[]) == vec!["x.rs", "x/mod.rs"]);
+        assert_eq!(vec!["x.rs", "x/mod.rs"], of("lib.rs", "x", &[]));
     }
 
-    // Joined the way the walk joins, so the bytes of a path and of a candidate for it agree
-    fn joined(path: &str) -> PathBuf {
+    // Joined the way the directory scan joins
+    fn join_as_the_scan_does(path: &str) -> PathBuf {
         path.split('/').fold(PathBuf::new(), |joined, component| joined.join(component))
     }
 
-    fn row(path: &str, module: ModuleId, lines: usize, partial_lines: Option<usize>, declarations: Vec<Declaration>) -> ModuleRow {
+    fn build_row(path: &str, module: ModuleId, lines: usize, partial_lines: Option<usize>, declarations: Vec<Declaration>) -> ModuleRow {
         let classes_of = |lines| LineClasses { words_in_code: lines, ..LineClasses::default() };
-        ModuleRow { path: joined(path), module, language_name: "Rust".into(), lines, classes: classes_of(lines),
+        ModuleRow { path: join_as_the_scan_does(path), module, language_name: "Rust".into(), lines, classes: classes_of(lines),
                 bytes: lines * 10, declarations,
                 partial: partial_lines.map(|partial| TestReport { bytes: partial * 10,
                         stats: FileStats { lines: partial, classes: classes_of(partial), keyword_occurences: Vec::new() } }) }
     }
 
+    #[derive(Default)]
+    struct Tree(HashMap<&'static str, Vec<Declaration>>);
+
+    impl DeclarationSource for Tree {
+        fn is_file(&mut self, path: &Path) -> bool {
+            self.0.contains_key(spell_out(path).as_str())
+        }
+
+        fn read_declarations(&mut self, path: &Path, _: &str) -> Option<Vec<Declaration>> {
+            self.0.get(spell_out(path).as_str()).cloned()
+        }
+
+        fn list_files(&mut self, folder: &Path) -> Vec<PathBuf> {
+            let folder = spell_out(folder);
+            self.0.keys().filter(|path| Path::new(path).parent().is_some_and(|parent| spell_out(parent) == folder))
+                    .map(PathBuf::from).collect()
+        }
+    }
+
     #[test]
     fn the_files_a_seed_reaches_are_booked_whole_and_the_walk_follows_every_declaration() {
         let rows = vec![
-            row("p/src/lib.rs", 0, 50, Some(3), vec![declared("tests", &[], true), declared("plain", &[], false),
-                    declared("nested", &[], true)]),
-            row("p/src/plain.rs", 0, 20, None, vec![]),
-            row("p/src/tests.rs", 0, 30, Some(10), vec![declared("all", &[], false), declared("missing", &[], false)]),
-            row("p/src/tests/all.rs", 0, 40, None, vec![declared("lib", &[], false)]),
-            row("p/src/nested/deep.rs", 1, 12, None, vec![]),
-            row("p/src/nested.rs", 0, 8, None, vec![declared("deep", &["inline"], false), declared("x", &[], false)]),
-            row("p/src/nested/inline/deep.rs", 1, 6, None, vec![]),
-            row("p/src/whole.rs", 0, 9, Some(9), vec![declared("helper", &[], true)]),
-            row("p/src/whole/helper.rs", 0, 4, None, vec![])];
+            build_row("p/src/lib.rs", 0, 50, Some(3), vec![build_declaration("tests", &[], true), build_declaration("plain", &[], false),
+                    build_declaration("nested", &[], true)]),
+            build_row("p/src/plain.rs", 0, 20, None, vec![]),
+            build_row("p/src/tests.rs", 0, 30, Some(10), vec![build_declaration("all", &[], false), build_declaration("missing", &[], false)]),
+            build_row("p/src/tests/all.rs", 0, 40, None, vec![build_declaration("lib", &[], false)]),
+            build_row("p/src/nested/deep.rs", 1, 12, None, vec![]),
+            build_row("p/src/nested.rs", 0, 8, None, vec![build_declaration("deep", &["inline"], false), build_declaration("x", &[], false)]),
+            build_row("p/src/nested/inline/deep.rs", 1, 6, None, vec![]),
+            build_row("p/src/whole.rs", 0, 9, Some(9), vec![build_declaration("helper", &[], true)]),
+            build_row("p/src/whole/helper.rs", 0, 4, None, vec![])];
         let mut tests = vec![HashMap::new(), HashMap::new()];
         tests[0].insert("Rust".to_owned(), TestCode { stats: Stats::new(3, 220, 22, LineClasses { words_in_code: 22,
                 ..LineClasses::default() }, HashMap::new()), whole_files: 1 });
@@ -479,7 +615,7 @@ mod tests {
                 "p/src/whole/helper.rs"].map(|path| FileEntry { path: path.to_owned(), stats: Stats::default(),
                 nested_languages: HashMap::new(), tests: None }).to_vec()), HashMap::new()];
 
-        let promotion = promote_declared_test_modules(&rows, &mut tests, &mut files);
+        let promotion = promote_declared_test_modules(&rows, &mut tests, &mut files, &mut Tree::default());
         assert_eq!(Promotion { seeds: 3, promoted: 5 }, promotion);
         let share = &tests[0]["Rust"];
         // tests.rs adds 20 over its 10, all.rs 40, nested.rs 8, helper.rs 4, and lib.rs and whole.rs stay as they were
@@ -496,34 +632,125 @@ mod tests {
     }
 
     #[test]
-    fn a_run_with_no_seed_books_nothing() {
-        let rows = vec![row("p/src/lib.rs", 0, 50, None, vec![declared("plain", &[], false)]),
-                row("p/src/plain.rs", 0, 20, None, vec![])];
+    fn a_file_named_on_the_command_line_keeps_its_slashes_and_is_still_found() {
+        let mut rows = vec![build_row("p/src/lib.rs", 0, 5, Some(2), vec![build_declaration("tests", &[], true)]),
+                build_row("p/src/tests.rs", 0, 30, Some(10), vec![])];
+        rows[1].path = PathBuf::from("p/src/tests.rs");
         let mut tests = vec![HashMap::new()];
         let mut files = vec![HashMap::new()];
-        assert_eq!(Promotion::default(), promote_declared_test_modules(&rows, &mut tests, &mut files));
+        assert_eq!(Promotion { seeds: 1, promoted: 1 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &mut Tree::default()));
+    }
+
+    #[test]
+    fn a_reached_file_is_a_module_so_its_declarations_never_resolve_beside_it() {
+        let rows = vec![build_row("p/src/bin/x.rs", 0, 3, Some(1), vec![build_declaration("y", &[], true)]),
+                build_row("p/src/bin/y.rs", 0, 7, None, vec![build_declaration("x", &[], false)])];
+        let mut tests = vec![HashMap::new()];
+        let mut files = vec![HashMap::new()];
+        assert_eq!(Promotion { seeds: 1, promoted: 1 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &mut Tree::default()));
+        let share = &tests[0]["Rust"];
+        assert_eq!((1, 7, 1), (share.stats.files, share.stats.lines, share.whole_files));
+    }
+
+    #[test]
+    fn a_file_two_seeds_reach_is_booked_once() {
+        let rows = vec![build_row("p/src/bin/one.rs", 0, 3, Some(1), vec![build_declaration("shared", &[], true)]),
+                build_row("p/src/bin/two.rs", 0, 3, Some(1), vec![build_declaration("shared", &[], true)]),
+                build_row("p/src/bin/shared.rs", 0, 7, None, vec![])];
+        let mut tests = vec![HashMap::new()];
+        let mut files = vec![HashMap::new()];
+        assert_eq!(Promotion { seeds: 2, promoted: 1 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &mut Tree::default()));
+        let share = &tests[0]["Rust"];
+        assert_eq!((1, 7, 1), (share.stats.files, share.stats.lines, share.whole_files));
+    }
+
+    #[test]
+    fn a_declared_file_the_count_left_out_is_read_for_what_it_declares_and_booked_nothing() {
+        let rows = vec![build_row("p/src/lib.rs", 0, 5, Some(2), vec![build_declaration("tests", &[], true)]),
+                build_row("p/src/tests/helpers.rs", 0, 3, None, vec![]),
+                build_row("p/src/common.rs", 0, 30, None, vec![]),
+                build_row("p/src/a.rs", 0, 5, Some(2), vec![build_declaration("helpers", &[], true)]),
+                build_row("p/src/helpers.rs", 0, 40, None, vec![]),
+                build_row("p/src/a/helpers/inner.rs", 0, 2, None, vec![])];
+        let mut tree = Tree(hashmap!(
+            "p/src/tests.rs" => vec![build_declaration("helpers", &[], false), build_declaration("common", &[], false)],
+            "p/src/a/helpers.rs" => vec![build_declaration("inner", &[], false)]));
+        let mut tests = vec![HashMap::new()];
+        let mut files = vec![HashMap::new()];
+        assert_eq!(Promotion { seeds: 2, promoted: 2 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &mut tree));
+        let share = &tests[0]["Rust"];
+        assert_eq!((2, 5, 2), (share.stats.files, share.stats.lines, share.whole_files),
+                "helpers.rs and inner.rs through the files without a row, and neither same-named file a folder up");
+    }
+
+    #[test]
+    fn a_seed_naming_nothing_and_a_file_with_no_lines_move_nothing() {
+        let rows = vec![build_row("p/src/lib.rs", 0, 5, Some(2), vec![build_declaration("absent", &[], true), build_declaration("empty", &[], true)]),
+                build_row("p/src/empty.rs", 0, 0, None, vec![])];
+        let mut tests = vec![HashMap::new()];
+        let mut files = vec![HashMap::new()];
+        assert_eq!(Promotion { seeds: 2, promoted: 0 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &mut Tree::default()));
+        let share = &tests[0]["Rust"];
+        assert_eq!((0, 0, 0), (share.stats.files, share.stats.lines, share.whole_files));
+    }
+
+    #[test]
+    fn a_run_with_no_seed_books_nothing() {
+        let rows = vec![build_row("p/src/lib.rs", 0, 50, None, vec![build_declaration("plain", &[], false)]),
+                build_row("p/src/plain.rs", 0, 20, None, vec![])];
+        let mut tests = vec![HashMap::new()];
+        let mut files = vec![HashMap::new()];
+        assert_eq!(Promotion::default(), promote_declared_test_modules(&rows, &mut tests, &mut files, &mut Tree::default()));
         assert!(tests[0].is_empty());
     }
 
     #[test]
     fn the_declaring_chain_is_found_upward_through_folders_and_inline_modules() {
-        let tree: HashMap<&str, Vec<Declaration>> = hashmap!(
-            "p/src/lib.rs" => vec![declared("tests", &[], true), declared("plain", &[], false),
-                    declared("deep", &["outer"], true), declared("a", &[], false)],
-            "p/src/tests.rs" => vec![declared("all", &[], false)],
+        let mut tree = Tree(hashmap!(
+            "p/src/lib.rs" => vec![build_declaration("tests", &[], true), build_declaration("plain", &[], false),
+                    build_declaration("deep", &["outer"], true), build_declaration("a", &[], false)],
+            "p/src/tests.rs" => vec![build_declaration("all", &[], false)],
             "p/src/tests/all.rs" => vec![],
-            "p/src/plain.rs" => vec![declared("more", &[], false)],
+            "p/src/plain.rs" => vec![build_declaration("more", &[], false)],
             "p/src/plain/more.rs" => vec![],
-            "p/src/a.rs" => vec![declared("b", &[], false)],
-            "p/src/a/b.rs" => vec![declared("a", &[], false)],
-            "p/src/outer/deep.rs" => vec![]);
-        let chain = |file: &str| find_declaring_chain(Path::new(file), &mut |path: &Path| tree.get(spell_out(path).as_str()).cloned())
+            "p/src/a.rs" => vec![build_declaration("b", &[], false)],
+            "p/src/a/b.rs" => vec![build_declaration("a", &[], false)],
+            "p/src/outer/deep.rs" => vec![],
+            "q/src/lib.rs" => vec![build_declaration("main", &[], true)],
+            "q/src/main.rs" => vec![build_declaration("lib", &[], false)]));
+        let mut chain = |file: &str| find_declaring_chain(Path::new(file), "Rust", &mut tree)
                 .map(|chain| chain.iter().map(|path| spell_out(path)).collect::<Vec<_>>());
         assert_eq!(Some(vec!["p/src/lib.rs".to_owned()]), chain("p/src/tests.rs"));
         assert_eq!(Some(vec!["p/src/tests.rs".to_owned(), "p/src/lib.rs".to_owned()]), chain("p/src/tests/all.rs"));
         assert_eq!(Some(vec!["p/src/lib.rs".to_owned()]), chain("p/src/outer/deep.rs"));
         assert_eq!(None, chain("p/src/plain/more.rs"), "a chain ending under no marker was taken");
-        assert_eq!(None, chain("p/src/a/b.rs"), "a cycle did not end");
+        assert_eq!(None, chain("p/src/a/b.rs"), "a chain reaching lib.rs outside a marker was taken");
         assert_eq!(None, chain("p/src/lib.rs"));
+        assert_eq!(None, chain("q/src/lib.rs"), "two files declaring each other did not end the search");
+    }
+
+    #[test]
+    fn the_declaring_chain_prefers_a_marker_and_takes_a_declarer_only_where_its_declaration_lands_here() {
+        let mut tree = Tree(hashmap!(
+            "r/src/bin/tool.rs" => vec![build_declaration("cases", &["checks"], true)],
+            "r/src/bin/checks/cases.rs" => vec![],
+            "r/src/bin/one.rs" => vec![build_declaration("shared", &[], false)],
+            "r/src/bin/two.rs" => vec![build_declaration("shared", &[], true)],
+            "r/src/bin/shared.rs" => vec![],
+            "r/src/lib.rs" => vec![build_declaration("clock", &[], false), build_declaration("clock", &[], true),
+                    build_declaration("a", &[], false)],
+            "r/src/clock.rs" => vec![],
+            "r/src/a.rs" => vec![build_declaration("x", &[], true)],
+            "r/src/a/x.rs" => vec![],
+            "r/src/x.rs" => vec![]));
+        let mut chain = |file: &str| find_declaring_chain(Path::new(file), "Rust", &mut tree)
+                .map(|chain| chain.iter().map(|path| spell_out(path)).collect::<Vec<_>>());
+        assert_eq!(Some(vec!["r/src/bin/tool.rs".to_owned()]), chain("r/src/bin/checks/cases.rs"),
+                "a crate root declaring through an inline module sits a level up, among the siblings there");
+        assert_eq!(Some(vec!["r/src/bin/two.rs".to_owned()]), chain("r/src/bin/shared.rs"),
+                "the declarer under a marker wins over the one sorting first");
+        assert_eq!(Some(vec!["r/src/lib.rs".to_owned()]), chain("r/src/clock.rs"), "a module declared twice is a seed once");
+        assert_eq!(Some(vec!["r/src/a.rs".to_owned()]), chain("r/src/a/x.rs"));
+        assert_eq!(None, chain("r/src/x.rs"), "a declaration landing under the sibling's own folder was taken");
     }
 }

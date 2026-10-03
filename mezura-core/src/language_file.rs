@@ -518,7 +518,9 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines);
     }
 
-    // Any of the three may be absent, all three may not. A name of any other shape refuses the file.
+    // Any of the three may be absent, all three may not, and the module word needs the markers,
+    // since a declaration is a seed only on a line a marker opened. A name of any other shape
+    // refuses the file.
     let mut test_markers = Vec::new();
     let mut module_keyword = None;
     let mut test_file_names = Vec::new();
@@ -530,6 +532,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             header = read_next_header(lines);
         }
         if header.as_deref() == Some(TEST_MODULES) {
+            if test_markers.is_empty() {return None;}
             let words = split_line_on_whitespace(&read_value_line(lines)?);
             let [word] = words.as_slice() else {return None};
             module_keyword = Some(word.clone());
@@ -1249,13 +1252,19 @@ pl      Perl, Prolog
         let names_alone = good.replace("    MARKERS\n    #[ #![\n    MODULES\n    mod\n", "");
         assert!(parse_language(&names_alone).expect("one part alone must parse").test_markers.is_empty());
         let modules_alone = good.replace("    MARKERS\n    #[ #![\n", "").replace("    FILE NAMES\n    tests.rs *_test.rs test_*\n", "");
-        assert_eq!(Some("mod".to_owned()), parse_language(&modules_alone).expect("one part alone must parse").module_keyword);
+        assert!(parse_language(&modules_alone).is_none(), "MODULES without MARKERS was accepted");
+        let modules_and_names = good.replace("    MARKERS\n    #[ #![\n", "");
+        assert!(parse_language(&modules_and_names).is_none(), "MODULES without MARKERS was accepted beside FILE NAMES");
         let none = good.replace("    MARKERS\n    #[ #![\n    MODULES\n    mod\n    FILE NAMES\n    tests.rs *_test.rs test_*\n", "");
         assert!(parse_language(&none).is_none(), "a block holding nothing was accepted");
         let empty_markers = good.replace("    #[ #![\n", "    \n");
         assert!(parse_language(&empty_markers).is_none());
         let two_words = good.replace("    mod\n", "    mod module\n");
         assert!(parse_language(&two_words).is_none(), "two module words were accepted");
+        let empty_word = good.replace("    mod\n", "    \n");
+        assert!(parse_language(&empty_word).is_none(), "an empty module word was accepted");
+        let no_word = good.replace("    MODULES\n    mod\n", "    MODULES\n");
+        assert!(parse_language(&no_word).is_none(), "MODULES with nothing under it was accepted");
         let out_of_order = good.replace("    MARKERS\n    #[ #![\n    MODULES\n    mod\n", "    MODULES\n    mod\n    MARKERS\n    #[ #![\n");
         assert!(parse_language(&out_of_order).is_none(), "MODULES before MARKERS was accepted");
         for wrong in ["a*b", "*", "**test", "test_*.rs*"] {

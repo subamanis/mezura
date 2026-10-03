@@ -93,6 +93,12 @@ sources (`mezura ./core/src`), naming one file by hand, `--explain` on that file
 of a `--diff` revision all agree. A folder above the project never makes it tests: `D:/tests/app`
 is tests only if `D:/Cargo.toml` exists.
 
+The one exception is a file another file declares as a module under a marker. The declaring file
+has to be in the same count, so counting a folder below it, naming the declared file alone, or
+leaving the declarer out with `--exclude`, a `.gitignore` or as generated leaves the declared file
+production, while `--explain` reads the declaring files from disk and answers as a count of the
+whole project does.
+
 
 ## Declaring the rest with `--tests`
 
@@ -116,7 +122,8 @@ The rules in short, with the whole of them under `--tests` in [COMMANDS.md](COMM
 - A trailing `/` means a folder only, so `tests/` leaves a script named `tests` alone. `x/**`
   means the folder `x`, and `**` alone a whole target.
 - A `!` takes back the folder or file it names, from a build file or from an earlier pattern.
-  What a marker inside a file says stays: a `#[cfg(test)]` under `!vendor/` is still test code.
+  What a marker inside a file says stays: a `#[cfg(test)]` under `!vendor/` is still test code,
+  and so is a file another file declares as a module under a marker.
 - A pattern that names nothing on disk, and a name with a slash that matched nothing, are reported.
 - In PowerShell, quote the whole list or escape each comma with a backtick.
 
@@ -174,9 +181,12 @@ project included. Where a project has a production folder of that name, write th
   under a `cfg(test)` module inherits it. The file is found where rustc finds it: `tests.rs` or
   `tests/mod.rs` beside a `lib.rs`, `main.rs` or `mod.rs`, under a folder named after any other
   file, and beside a crate root in `src/bin/`; a `mod x;` inside `mod outer { }` is under
-  `outer/`. Any `mod x;` on a line of test code counts, so one inside a `#[cfg(test)] mod tests {
-  }` or under a `#![cfg(test)]` does too. `--explain` on such a file names the file that declares
-  it and the one holding the marker.
+  `outer/`. A file named this way that the count left out, under `--exclude`, a `.gitignore` or a
+  `--tests` pattern, is still read for the modules it declares, so those are found too. Any
+  `mod x;` on a line of test code counts, so one inside a `#[cfg(test)] mod tests {
+  }` or under a `#![cfg(test)]` does too. The declaring file has to be in the same count, as the
+  section above on where the count starts from says. `--explain` on such a file names the file
+  that declares it and the one holding the marker.
 
 From the marker, further `#[...]` on the item are skipped, and the test code runs to the `}`
 matching the first `{`, or to the first `;`, whichever comes first, with brackets counted so that

@@ -992,6 +992,13 @@ mod tests {
         assert_eq!("blanks", CountingModel::Region.get_bucket_name(Bucket::Third));
     }
 
+    #[test]
+    fn the_module_keyword_is_declared_through_its_builder() {
+        let language = Language::new("L", ["l"], StringRules::escaping_nothing(), ["//"], &[], []);
+        assert_eq!(None, language.module_keyword);
+        assert_eq!(Some("mod".to_owned()), language.with_module_keyword("mod").module_keyword);
+    }
+
     // Every line ends in an empty symbol, so a language carrying one joins its whole file into one
     // line and reports counts that look ordinary.
     #[test]

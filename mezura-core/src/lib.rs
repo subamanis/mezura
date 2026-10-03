@@ -78,9 +78,10 @@ use std::time::Instant;
 
 use crossbeam_deque::{Injector, Worker};
 
+use engine::file_parser::NestedLanguageLookup;
 use engine::modules::{ModuleId, Modules};
 use engine::path_patterns::{PathPatternMatcher, TakingBack, Unused, UnusedPattern};
-use engine::test_detection::{DirectoryScope, TestScope, promote_declared_test_modules};
+use engine::test_detection::{DirectoryScope, FilesOnDisk, TestScope, promote_declared_test_modules};
 
 /// The name of the file that decides which language gets an extension or a file name two of them
 /// claim.
@@ -323,13 +324,16 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     // Inside the count, since the caller's callback ran before this
     let promotion_started = Instant::now();
     let module_rows = std::mem::take(&mut *module_rows.lock().unwrap());
-    let promotion = promote_declared_test_modules(&module_rows, tests_by_module, files_by_module);
+    let lookup = NestedLanguageLookup { languages: &language_map_ref, extension_to_name: &nested_definitions.extension_to_name,
+            set_aside: &nested_definitions.set_aside };
+    let mut files_on_disk = FilesOnDisk { lookup: &lookup, config: &config, is_whole: &|_| false };
+    let promotion = promote_declared_test_modules(&module_rows, tests_by_module, files_by_module, &mut files_on_disk);
+    drop(module_rows);
     parsing_duration_millis += promotion_started.elapsed().as_millis();
     if *phase_timing::ENABLED && promotion.seeds > 0 {
         eprintln!("[phase] test modules: {} declared under a marker, {} files counted whole, {:.1} ms",
             promotion.seeds, promotion.promoted, promotion_started.elapsed().as_secs_f64() * 1000.0);
     }
-    drop(module_rows);
 
     let mut per_language = merge_over_modules(per_module, Stats::add);
     // Dropped before the total is summed, or the total's keyword map would name the keywords of

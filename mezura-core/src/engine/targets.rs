@@ -189,6 +189,10 @@ pub(crate) fn normalise_separators(path: &str) -> Cow<'_, str> {
     if cfg!(windows) {Cow::Owned(path.replace('\\', "/"))} else {Cow::Borrowed(path)}
 }
 
+pub(crate) fn spell_out(path: &Path) -> String {
+    normalise_separators(&path.to_string_lossy()).into_owned()
+}
+
 // 'convert_to_absolute' asks the filesystem, and a pattern is not a path that exists. Joined to the
 // working directory, the pattern still means the same thing read back from somewhere else.
 pub(crate) fn absolutize_pattern(pattern: &str) -> String {

@@ -265,7 +265,8 @@ Tests
 ```
 
 Any of the three can be left out, in the order `MARKERS`, `MODULES`, `FILE NAMES` when more than
-one is there. A block with none refuses the file.
+one is there. A block with none refuses the file, and so does `MODULES` without `MARKERS`, since a
+declaration counts only on a line a marker opened.
 
 `MARKERS` is what is searched for. `#[` and `#![` are read as Rust attributes: any attribute with
 `test` in its name starts a test, `#[cfg(...)]` starts one when its predicate has `test` outside a

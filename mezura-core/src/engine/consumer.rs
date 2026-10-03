@@ -11,6 +11,7 @@ use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, FileEntry, File
         Language, ModuleRowsMut, NestedLanguageMapMut, ParsableFile, ScanProgress, ScanSkip, SkippedFiles, Stats,
         StatsMapMut, TestCode, TestCodeMapMut, phase_timing};
 use crate::engine::file_parser;
+use crate::engine::targets::spell_out;
 use crate::engine::test_detection::ModuleRow;
 use crate::languages::NestedLanguageDefinitions;
 
@@ -260,8 +261,4 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
     if !local_rows.is_empty() {
         module_rows.lock().unwrap().append(&mut local_rows);
     }
-}
-
-fn spell_out(path: &std::path::Path) -> String {
-    crate::engine::targets::normalise_separators(&path.to_string_lossy()).into_owned()
 }

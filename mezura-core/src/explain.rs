@@ -2,11 +2,10 @@ use std::path::Path;
 
 use crate::{EngineConfig, Language, LineClass, LineClasses, ScanSkip, Span, TestFileName};
 use crate::domain::CommentPair;
-use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file, find_scan_skip, is_a_test_file,
-        read_module_declarations};
+use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file, find_scan_skip, is_a_test_file};
 use crate::engine::path_patterns::{PathPatternMatcher, TakingBack};
 use crate::engine::targets::{find_names_root_of_path, normalise_separators};
-use crate::engine::test_detection::{DirectoryScope, TestScope, find_declaring_chain, find_test_directory_along};
+use crate::engine::test_detection::{DirectoryScope, FilesOnDisk, TestScope, find_declaring_chain, find_test_directory_along};
 use crate::languages::Languages;
 
 /// One file read line by line, as [`explain_file`] answers it.
@@ -153,6 +152,8 @@ impl std::error::Error for ExplainError {}
 /// had left open, and which language's rules read it.
 ///
 /// The answers come out of the same walk that counts, so they cannot disagree with the totals.
+/// The one exception is a file another file declares as a module under a test marker, which is
+/// read that way here whether or not the count reached the declaring file.
 ///
 /// The languages must have been resolved against this same configuration, the way [`crate::run`]
 /// demands.
@@ -228,9 +229,17 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
     let folder = file.parent().unwrap_or(file);
     let (scope, decided_by) = DirectoryScope::of_target(folder, names_root, &patterns).of_file(file, &patterns, &mut Vec::new());
     // Read the way a run reads it, so a file a pattern took back is still declared under the marker
+    // and a declarer a pattern made whole seeds nothing of its own
+    let is_whole = |candidate: &Path| {
+        let spelled = normalise_separators(&candidate.to_string_lossy()).into_owned();
+        let root = crate::find_names_root_of_target(&config.test_patterns, &spelled, || find_names_root_of_path(&spelled, true));
+        let candidate = Path::new(&spelled);
+        let folder = candidate.parent().unwrap_or(candidate);
+        DirectoryScope::of_target(folder, root, &patterns).of_file(candidate, &patterns, &mut Vec::new()).0 == TestScope::Tests
+    };
+    let mut files_on_disk = FilesOnDisk { lookup, config, is_whole: &is_whole };
     if scope != TestScope::Tests && language.module_keyword.is_some()
-            && let Some(chain) = find_declaring_chain(file, &mut |candidate| std::fs::read_to_string(candidate).ok()
-                    .and_then(|contents| read_module_declarations(&contents, language, lookup, config))) {
+            && let Some(chain) = find_declaring_chain(file, &language.name, &mut files_on_disk) {
         let declared_by = chain.iter().map(|path| normalise_separators(&path.to_string_lossy()).into_owned()).collect();
         return Ok((true, Some(TestFileRule::DeclaredModule { declared_by })));
     }

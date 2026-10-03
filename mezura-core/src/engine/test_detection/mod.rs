@@ -12,10 +12,11 @@ use crate::{Language, LineClass, TestFileName};
 use crate::engine::is_the_same_name;
 use crate::engine::path_patterns::{PathPatternMatcher, PatternMatch};
 
-pub(crate) use module_graph::{Declaration, ModuleDeclarations, ModuleRow, find_declaring_chain,
+pub(crate) use module_graph::{Declaration, FilesOnDisk, ModuleDeclarations, ModuleRow, find_declaring_chain,
         promote_declared_test_modules};
 
 const ELSE : &[u8] = b"else";
+const IF : &[u8] = b"if";
 // Every file of a row has to be present, since an Octave package carries a DESCRIPTION too.
 // 'src/test' is the one directory two levels down, and the walk holds the 'src' as 'JvmSources'.
 const BUILD_TOOLS : [BuildTool; 19] = [
@@ -51,8 +52,8 @@ pub(crate) struct TestWalk<'a> {
     // The offset the scan of the open extent resumes from, which can sit past the current line
     cursor: usize,
     held: Vec<(LineClass, usize)>,
-    // An 'if' under an attribute owns its 'else' arms. After a word such as D's 'unittest' the
-    // 'else' is the branch built without it.
+    // An 'if' under an attribute owns its 'else' arms. After a word such as D's 'unittest', or
+    // after a cfg_if's 'if #[cfg(test)]', the 'else' is the branch built without it.
     else_continues: bool,
 }
 
@@ -190,6 +191,7 @@ impl<'a> TestWalk<'a> {
                     },
                     b'{' => {
                         if depth == 0 && ends != Terminator::Semicolon {
+                            if ends == Terminator::Undecided { self.else_continues = false; }
                             self.state = State::Inside { depth: 1 };
                             self.cursor = base + at + 1;
                             return true;
@@ -203,6 +205,7 @@ impl<'a> TestWalk<'a> {
                     },
                     _ if depth == 0 && ends.is_open() && is_word_start(byte) => {
                         let end = find_word_end(line, at);
+                        if ends == Terminator::Undecided { self.else_continues &= &line[at..end] == IF; }
                         ends = ends.read_word(&line[at..end]);
                         at = end;
                         continue;
