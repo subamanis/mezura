@@ -1283,6 +1283,30 @@ fn the_test_code_of_a_language_is_one_share_whichever_way_it_was_found() {
 }
 
 #[test]
+fn the_keywords_inside_the_test_code_are_counted_in_its_share() {
+    let root = std::env::temp_dir().join("mezura-test-code-keywords");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("tests")).unwrap();
+    std::fs::write(root.join("Cargo.toml"), "[package]\n").unwrap();
+    std::fs::write(root.join("src").join("lib.rs"),
+            "pub struct Production;\n\n#[cfg(test)]\nmod cases;\n\n#[cfg(test)]\nmod tests {\n    struct Fixture;\n}\n").unwrap();
+    std::fs::write(root.join("src").join("cases.rs"), "struct Case;\n\n#[cfg(test)]\nmod inner {\n    struct Deeper;\n}\n").unwrap();
+    std::fs::write(root.join("tests").join("x.rs"), "struct Harness;\n").unwrap();
+    let root_str = root.to_string_lossy().replace('\\', "/");
+    let config = EngineConfig { detect_tests: true, threads: Threads::new(1, 4), ..EngineConfig::new([root_str.clone()]) };
+    let (languages, _) = Languages::shipped(&config);
+    let result = run(&config, languages).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+
+    let structs = |stats: &mezura_core::Stats| stats.keyword_occurences["structs"];
+    assert_eq!(5, structs(&result.per_language["Rust"]));
+    assert_eq!(4, structs(&result.tests["Rust"].stats),
+            "the inline module, the declared module with the module inside it, and the integration test");
+    assert_eq!(4, structs(&result.modules[0].tests["Rust"].stats));
+}
+
+#[test]
 fn a_module_declared_under_a_marker_is_test_code_whole_and_so_is_what_it_declares() {
     let root = std::env::temp_dir().join("mezura-test-modules");
     let _ = std::fs::remove_dir_all(&root);

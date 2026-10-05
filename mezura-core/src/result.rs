@@ -2,7 +2,7 @@
 // 'Language' exists before anything has been counted, a 'Stats' of it does not.
 use std::collections::HashMap;
 
-use crate::{CountingModel, Keyword, LineClasses, Stats};
+use crate::{CountingModel, Keyword, Language, Stats};
 use crate::domain::FileStats;
 use crate::engine::config::{Target, Threads};
 use crate::engine::file_parser::TestReport;
@@ -176,26 +176,30 @@ impl TestCode {
 
     // False for a file that is whole already or that has no lines, so nothing moves twice and an
     // empty file counts no file, as the consumer counts it
-    pub(crate) fn promote_to_whole_file(&mut self, lines: usize, classes: &LineClasses, bytes: usize,
+    pub(crate) fn promote_to_whole_file(&mut self, whole: &FileStats, bytes: usize, keywords: &[Keyword],
             partial: Option<&TestReport>) -> bool
     {
-        if lines == 0 { return false; }
-        let mut moved = classes.clone();
-        let (mut moved_lines, mut moved_bytes) = (lines, bytes);
+        if whole.lines == 0 { return false; }
+        let mut moved = whole.clone();
+        let mut moved_bytes = bytes;
         match partial {
             Some(partial) => {
-                if partial.stats.lines >= lines { return false; }
-                moved.subtract(&partial.stats.classes);
-                moved_lines -= partial.stats.lines;
+                if partial.stats.lines >= whole.lines { return false; }
+                moved.subtract(&partial.stats);
                 moved_bytes = bytes.saturating_sub(partial.bytes);
             },
             None => self.stats.files += 1
         }
-        self.stats.lines += moved_lines;
-        self.stats.classes.add(&moved);
-        self.stats.bytes += moved_bytes;
+        self.stats.add_counts(&moved, moved_bytes, keywords);
         self.whole_files += 1;
         true
+    }
+}
+
+// The same slots a language's own figures start from, so the share names every keyword at zero too
+impl From<&Language> for TestCode {
+    fn from(language: &Language) -> Self {
+        TestCode { stats: Stats::from(language), whole_files: 0 }
     }
 }
 

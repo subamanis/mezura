@@ -343,9 +343,10 @@ that is a layout rule the parser has no business guessing. Refused.
   rows and turns the detection off, patterns included, which also makes the run faster.
 - **`--by-file`** draws nothing under a file row; the figure per file is in the document.
 - **The JSON document.** `scope.tests_detected`, `languages[].tests` with the figures a nested
-  language carries plus `whole_files`, the files that are test code from their first line to their
-  last, then `total.tests`, `modules[].total.tests` and `by_file[].tests`. A comparison carries the
-  compared pair under each of those.
+  language carries, `keywords` when they are counted, and `whole_files`, the files that are test
+  code from their first line to their last, then `total.tests`, `modules[].total.tests` and
+  `by_file[].tests`, the last without keywords. A comparison carries the compared pair under each
+  of those.
 - **`--diff`** against a document written without detection, or by an earlier version, runs
   without it, so no row appears on either side, and says so.
 - **`--explain`.** Every line of test code is marked `test code`, the totals say how many, and a
@@ -353,4 +354,4 @@ that is a layout rule the parser has no business guessing. Refused.
   file, the name, the pattern, or the file that declares it as a module under a marker. The
   document carries `in_test` on those lines and the rule under `test_file`.
 - **Keywords** are counted over the whole language, its test code included, and shown once under
-  it.
+  it. The ones found inside the test code are counted apart as well.

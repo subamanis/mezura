@@ -842,26 +842,6 @@ impl Stats {
                 .saturating_sub(self.calculate_comment_lines(model))
     }
 
-    pub(crate) fn add_file(&mut self, stats: &FileStats, bytes: usize, keywords: &[Keyword]) {
-        // The walk counts a line and then sorts it into exactly one class, so the two have to
-        // agree, and this is the only door a counted file comes through. Not on 'add' below, which
-        // also takes counts parsed out of a document, where nothing promises anything.
-        debug_assert_eq!(stats.lines, stats.classes.calculate_lines(),
-                "a counted file has {} lines and {} of them landed in a class",
-                stats.lines, stats.classes.calculate_lines());
-
-        self.files += 1;
-        self.bytes += bytes;
-        self.lines += stats.lines;
-        self.classes.add(&stats.classes);
-        for (keyword_index, occurrences) in stats.keyword_occurences.iter().enumerate() {
-            if *occurrences > 0 {
-                *self.keyword_occurences.entry(keywords[keyword_index].descriptive_name.clone())
-                        .or_default() += *occurrences;
-            }
-        }
-    }
-
     /// Adds another set of figures into this one, keyword counts included.
     pub fn add(&mut self, other: &Stats) {
         self.files += other.files;
@@ -881,6 +861,30 @@ impl Stats {
         }
         total
     }
+
+    pub(crate) fn add_file(&mut self, stats: &FileStats, bytes: usize, keywords: &[Keyword]) {
+        // The walk counts a line and then sorts it into exactly one class, so the two have to
+        // agree, and this is the only door a counted file comes through. Not on 'add', which
+        // also takes counts parsed out of a document, where nothing promises anything.
+        debug_assert_eq!(stats.lines, stats.classes.calculate_lines(),
+                "a counted file has {} lines and {} of them landed in a class",
+                stats.lines, stats.classes.calculate_lines());
+
+        self.files += 1;
+        self.add_counts(stats, bytes, keywords);
+    }
+
+    pub(crate) fn add_counts(&mut self, stats: &FileStats, bytes: usize, keywords: &[Keyword]) {
+        self.bytes += bytes;
+        self.lines += stats.lines;
+        self.classes.add(&stats.classes);
+        for (keyword_index, occurrences) in stats.keyword_occurences.iter().enumerate() {
+            if *occurrences > 0 {
+                *self.keyword_occurences.entry(keywords[keyword_index].descriptive_name.clone())
+                        .or_default() += *occurrences;
+            }
+        }
+    }
 }
 
 // What a run starts each language from: every keyword it declares, at zero. The merge that ends a
@@ -896,7 +900,7 @@ impl From<&Language> for Stats {
 // identifies a keyword by its position in the language's list, which is what the matcher hands
 // back, so counting into a vector slot costs no hashing and no string copying in the innermost loop
 // of the parse. The names are attached once per file, in 'add_file'.
-#[derive(Debug,PartialEq,Default)]
+#[derive(Debug,Clone,PartialEq,Default)]
 pub(crate) struct FileStats {
     pub lines : usize,
     pub classes : LineClasses,
@@ -909,6 +913,14 @@ impl FileStats {
             lines : 0,
             classes : LineClasses::default(),
             keyword_occurences : vec![0; keywords.len()]
+        }
+    }
+
+    pub(crate) fn subtract(&mut self, other: &FileStats) {
+        self.lines = self.lines.saturating_sub(other.lines);
+        self.classes.subtract(&other.classes);
+        for (slot, counted) in self.keyword_occurences.iter_mut().zip(&other.keyword_occurences) {
+            *slot = slot.saturating_sub(*counted);
         }
     }
 }

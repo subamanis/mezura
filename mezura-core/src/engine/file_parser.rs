@@ -592,6 +592,8 @@ pub(crate) struct ParseBuffers {
     // every stretch of the file that is code, gathered line by line so that the keywords can be
     // searched once over the whole buffer instead of once per alias per line
     code_spans: Vec<(u32, u32)>,
+    // adjacent test lines merge into one range, so the hits are booked to the tests by one ascending cursor
+    test_ranges: Vec<(u32, u32)>,
     pub timing: phase_timing::Totals,
 }
 
@@ -1240,10 +1242,11 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
     whole_file_is_tests: bool, log: &mut ExplainLog) -> FileReport
 {
-    let ParseBuffers { scan, alias_indices, code_spans, .. } = buffers;
+    let ParseBuffers { scan, alias_indices, code_spans, test_ranges, .. } = buffers;
     let mut shell_stats = if config.count_keywords { FileStats::with_keywords(&language.keywords) }
             else { FileStats::default() };
     code_spans.clear();
+    test_ranges.clear();
 
     // Nothing but the keyword search reads the spans, so a language with no keywords builds none
     let collecting_spans = config.count_keywords && matchers.for_language(language).is_some();
@@ -1256,7 +1259,8 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     // The plain path writes a line's code range only where the nested language search, the test
     // extent or the module declarations read it
     let ranges_wanted = !language.nested_languages.is_empty() || test_walk.is_some() || declarations.is_some();
-    let mut test_stats = FileStats::default();
+    let mut test_stats = if collecting_spans && test_walk.is_some() { FileStats::with_keywords(&language.keywords) }
+            else { FileStats::default() };
     let mut test_bytes = 0;
 
     let mut shell = WalkState::default();
@@ -1284,15 +1288,24 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
             if tests.observe_line(line_start, raw_line, had_code, &scan.code_ranges, class, bytes) {
                 is_test = true;
                 let mut claimed = 1;
+                let mut from = line_start;
                 for (held_class, held_bytes) in tests.take_held() {
                     test_stats.lines += 1;
                     test_stats.classes.bump(held_class);
                     test_bytes += held_bytes;
+                    from -= held_bytes;
                     claimed += 1;
                 }
                 test_stats.lines += 1;
                 test_stats.classes.bump(class);
                 test_bytes += bytes;
+                if collecting_spans {
+                    let to = (line_start + bytes) as u32;
+                    match test_ranges.last_mut() {
+                        Some(last) if last.1 as usize == from => last.1 = to,
+                        _ => test_ranges.push((from as u32, to))
+                    }
+                }
                 if EXPLAIN { log.mark_last_lines_as_test(claimed); }
             }
         }
@@ -1350,11 +1363,11 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
 
     if config.count_keywords {
         if let Some(matcher) = matchers.for_language(language) {
-            count_keywords(contents, code_spans, matcher, &mut shell_stats, alias_indices);
+            count_keywords(contents, code_spans, matcher, &mut shell_stats, alias_indices, test_ranges, Some(&mut test_stats));
         }
         for bucket in &mut buckets {
             if let Some(matcher) = matchers.for_language(bucket.language) {
-                count_keywords(contents, &bucket.spans, matcher, &mut bucket.stats, alias_indices);
+                count_keywords(contents, &bucket.spans, matcher, &mut bucket.stats, alias_indices, &[], None);
             }
         }
     }
@@ -1365,8 +1378,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
             shell_stats.lines += bucket.stats.lines;
             shell_stats.classes.add(&bucket.stats.classes);
         }
-        test_stats = FileStats { lines: shell_stats.lines, classes: shell_stats.classes.clone(),
-                keyword_occurences: Vec::new() };
+        test_stats = shell_stats.clone();
         test_bytes = contents.len();
         if EXPLAIN { log.mark_last_lines_as_test(test_stats.lines); }
     }
@@ -2156,8 +2168,8 @@ fn push_trimmed_spans(spans: &mut Vec<(u32, u32)>, ranges: &[(usize, usize)], li
 // A hit counts only if it lies entirely inside one stretch of code, and its neighbours are read
 // inside that same stretch, so what a string literal removed is not treated as touching what
 // follows it.
-fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher,
-    file_stats: &mut FileStats, indices: &mut Vec<usize>)
+fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher, file_stats: &mut FileStats,
+    indices: &mut Vec<usize>, test_ranges: &[(u32, u32)], test_stats: Option<&mut FileStats>)
 {
     // The two sides are different questions and '(' is where they part. After the word it opens an
     // argument list and belongs to the declaration: Delphi's 'TFoo = class(TObject)' and Erlang's
@@ -2177,6 +2189,7 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
 
     if spans.is_empty() { return; }
     let bytes = contents.as_bytes();
+    let mut test_stats = test_stats.filter(|_| !test_ranges.is_empty());
 
     for (alias_finder, alias_len, keyword_index) in &matcher.aliases_with_indices {
         indices.clear();
@@ -2185,6 +2198,7 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
 
         // both lists ascend, so the stretch that could hold the next hit is never behind us
         let mut span = 0;
+        let mut range = 0;
         for (found, at) in indices.iter().enumerate() {
             // A hit touching another of the same alias is part of a longer word and never counts
             if (found > 0 && indices[found - 1] + alias_len == *at)
@@ -2202,6 +2216,12 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
             let after = if at + alias_len < to { bytes.get(at + alias_len) } else { None };
             if is_acceptable_before(before) && is_acceptable_after(after) {
                 file_stats.keyword_occurences[*keyword_index] += 1;
+                if let Some(tests) = &mut test_stats {
+                    while range < test_ranges.len() && (test_ranges[range].1 as usize) <= *at { range += 1; }
+                    if range < test_ranges.len() && (test_ranges[range].0 as usize) <= *at {
+                        tests.keyword_occurences[*keyword_index] += 1;
+                    }
+                }
             }
         }
     }
@@ -2386,7 +2406,7 @@ mod tests {
     }
 
     fn keywords_of(line: &str, matcher: &KeywordMatcher, file_stats: &mut FileStats) {
-        count_keywords(line, &[(0, line.len() as u32)], matcher, file_stats, &mut Vec::new());
+        count_keywords(line, &[(0, line.len() as u32)], matcher, file_stats, &mut Vec::new(), &[], None);
     }
 
     fn str_delimiters(line: &str, language: &Language, open_str_symbol: Option<u8>) -> (Vec<usize>, Vec<u8>) {
@@ -2708,7 +2728,7 @@ mod tests {
         let mut spans = Vec::new();
         assert!(info.has_code);
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
-        count_keywords(line, &spans, &matcher, &mut file_stats, &mut Vec::new());
+        count_keywords(line, &spans, &matcher, &mut file_stats, &mut Vec::new(), &[], None);
         assert_eq!(0, file_stats.keyword_occurences[0]);
 
         // and the same word, whole, still counts
@@ -2719,7 +2739,7 @@ mod tests {
         let mut spans = Vec::new();
         assert!(info.has_code);
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
-        count_keywords(line, &spans, &matcher, &mut file_stats, &mut Vec::new());
+        count_keywords(line, &spans, &matcher, &mut file_stats, &mut Vec::new(), &[], None);
         assert_eq!(1, file_stats.keyword_occurences[0]);
     }
 
@@ -4848,6 +4868,39 @@ mod tests {
         assert_eq!((whole.lines, &whole.classes), (of_tests.shell.lines, &of_tests.shell.classes));
         let tests = of_tests.tests.unwrap();
         assert_eq!((whole.lines, &whole.classes, contents.len()), (tests.stats.lines, &tests.stats.classes, tests.bytes));
+    }
+
+    #[test]
+    fn a_keyword_inside_the_test_code_is_counted_to_the_tests_as_well() {
+        let source = concat!(
+            "struct Production;\n",
+            "#[cfg(test)]\n",
+            "mod tests {\n",
+            "    struct Fixture;\n",
+            "    enum Case { One }\n",
+            "}\n",
+            "struct Later;\n",
+            "#[cfg(test)]\n",
+            "mod more {\n",
+            "    struct Second;\n",
+            "}\n");
+        let language = LANGUAGE_MAP_REF.get("Rust").unwrap();
+        let parse = |whole_file_is_tests, config: &EngineConfig| parse_lines::<false>(source, language, &shipped_lookup(),
+                &mut KeywordMatchers::default(), config, &mut ParseBuffers::default(), whole_file_is_tests,
+                &mut ExplainLog::default());
+        let counted = |stats: FileStats| content_info_of(stats, "Rust").keyword_occurences;
+        let of = |structs, enums| hashmap!("structs".to_owned() => structs, "enums".to_owned() => enums, "traits".to_owned() => 0);
+
+        let marked = parse(false, &EngineConfig::default());
+        assert_eq!(of(2, 1), counted(marked.tests.unwrap().stats));
+        assert_eq!(of(4, 1), counted(marked.shell));
+
+        let whole = parse(true, &EngineConfig::default());
+        assert_eq!(whole.shell.keyword_occurences, whole.tests.as_ref().unwrap().stats.keyword_occurences);
+        assert_eq!(of(4, 1), counted(whole.tests.unwrap().stats));
+
+        let hidden = parse(false, &EngineConfig { count_keywords: false, ..EngineConfig::default() });
+        assert!(hidden.tests.unwrap().stats.keyword_occurences.is_empty());
     }
 
     #[test]

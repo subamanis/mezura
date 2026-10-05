@@ -6,7 +6,8 @@ use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::{EngineConfig, FileEntry, LineClasses, Stats, TestCode};
+use crate::{EngineConfig, FileEntry, Language, Stats, TestCode};
+use crate::domain::FileStats;
 use crate::engine::file_parser::{NestedLanguageLookup, TestReport, read_module_declarations};
 use crate::engine::modules::ModuleId;
 use crate::engine::targets::spell_out;
@@ -38,8 +39,7 @@ pub(crate) struct ModuleRow {
     pub path: PathBuf,
     pub module: ModuleId,
     pub language_name: Arc<str>,
-    pub lines: usize,
-    pub classes: LineClasses,
+    pub stats: FileStats,
     pub bytes: usize,
     pub partial: Option<TestReport>,
     pub declarations: Vec<Declaration>,
@@ -52,7 +52,8 @@ pub(crate) struct Promotion {
 }
 
 pub(crate) fn promote_declared_test_modules(rows: &[ModuleRow], tests_by_module: &mut [HashMap<String, TestCode>],
-        files_by_module: &mut [HashMap<String, Vec<FileEntry>>], source: &mut dyn DeclarationSource) -> Promotion
+        files_by_module: &mut [HashMap<String, Vec<FileEntry>>], languages: &HashMap<String, Language>,
+        source: &mut dyn DeclarationSource) -> Promotion
 {
     let seeds = rows.iter().flat_map(|row| &row.declarations).filter(|declaration| declaration.seed).count();
     if seeds == 0 {
@@ -89,14 +90,16 @@ pub(crate) fn promote_declared_test_modules(rows: &[ModuleRow], tests_by_module:
     let mut promoted = 0;
     let mut entries_by_path: HashMap<(ModuleId, Arc<str>), HashMap<String, usize>> = HashMap::new();
     for row in rows.iter().zip(&marked).filter_map(|(row, marked)| marked.then_some(row)) {
-        let share = tests_by_module[row.module as usize].entry(row.language_name.to_string()).or_default();
-        if !share.promote_to_whole_file(row.lines, &row.classes, row.bytes, row.partial.as_ref()) { continue; }
+        let language = &languages[&*row.language_name];
+        let share = tests_by_module[row.module as usize].entry(row.language_name.to_string())
+                .or_insert_with(|| TestCode::from(language));
+        if !share.promote_to_whole_file(&row.stats, row.bytes, &language.keywords, row.partial.as_ref()) { continue; }
         promoted += 1;
         let Some(entries) = files_by_module[row.module as usize].get_mut(&*row.language_name) else { continue };
         let index = entries_by_path.entry((row.module, row.language_name.clone())).or_insert_with(|| entries.iter()
                 .enumerate().map(|(at, entry)| (entry.path.clone(), at)).collect());
         if let Some(&at) = index.get(&spell_out(&row.path)) {
-            entries[at].tests = Some(Stats::new(1, row.bytes, row.lines, row.classes.clone(), HashMap::new()));
+            entries[at].tests = Some(Stats::new(1, row.bytes, row.stats.lines, row.stats.classes.clone(), HashMap::new()));
         }
     }
     Promotion { seeds, promoted }
@@ -452,7 +455,7 @@ fn skip_whitespace(code: &[u8], from: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::FileStats;
+    use crate::{Keyword, LineClasses, StringRules};
 
     type TestLine<'a> = (&'a str, Option<&'a [(usize, usize)]>, bool);
 
@@ -570,10 +573,15 @@ mod tests {
 
     fn build_row(path: &str, module: ModuleId, lines: usize, partial_lines: Option<usize>, declarations: Vec<Declaration>) -> ModuleRow {
         let classes_of = |lines| LineClasses { words_in_code: lines, ..LineClasses::default() };
-        ModuleRow { path: join_as_the_scan_does(path), module, language_name: "Rust".into(), lines, classes: classes_of(lines),
-                bytes: lines * 10, declarations,
+        ModuleRow { path: join_as_the_scan_does(path), module, language_name: "Rust".into(),
+                stats: FileStats { lines, classes: classes_of(lines), keyword_occurences: Vec::new() }, bytes: lines * 10, declarations,
                 partial: partial_lines.map(|partial| TestReport { bytes: partial * 10,
                         stats: FileStats { lines: partial, classes: classes_of(partial), keyword_occurences: Vec::new() } }) }
+    }
+
+    fn rust_only() -> HashMap<String, Language> {
+        hashmap!("Rust".to_owned() => Language::new("Rust", ["rs"], StringRules::escaping_nothing(), ["//"], &[],
+                [Keyword::new("structs", ["struct"])]))
     }
 
     #[derive(Default)]
@@ -615,7 +623,7 @@ mod tests {
                 "p/src/whole/helper.rs"].map(|path| FileEntry { path: path.to_owned(), stats: Stats::default(),
                 nested_languages: HashMap::new(), tests: None }).to_vec()), HashMap::new()];
 
-        let promotion = promote_declared_test_modules(&rows, &mut tests, &mut files, &mut Tree::default());
+        let promotion = promote_declared_test_modules(&rows, &mut tests, &mut files, &rust_only(), &mut Tree::default());
         assert_eq!(Promotion { seeds: 3, promoted: 5 }, promotion);
         let share = &tests[0]["Rust"];
         // tests.rs adds 20 over its 10, all.rs 40, nested.rs 8, helper.rs 4, and lib.rs and whole.rs stay as they were
@@ -638,7 +646,7 @@ mod tests {
         rows[1].path = PathBuf::from("p/src/tests.rs");
         let mut tests = vec![HashMap::new()];
         let mut files = vec![HashMap::new()];
-        assert_eq!(Promotion { seeds: 1, promoted: 1 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &mut Tree::default()));
+        assert_eq!(Promotion { seeds: 1, promoted: 1 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &rust_only(), &mut Tree::default()));
     }
 
     #[test]
@@ -647,7 +655,7 @@ mod tests {
                 build_row("p/src/bin/y.rs", 0, 7, None, vec![build_declaration("x", &[], false)])];
         let mut tests = vec![HashMap::new()];
         let mut files = vec![HashMap::new()];
-        assert_eq!(Promotion { seeds: 1, promoted: 1 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &mut Tree::default()));
+        assert_eq!(Promotion { seeds: 1, promoted: 1 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &rust_only(), &mut Tree::default()));
         let share = &tests[0]["Rust"];
         assert_eq!((1, 7, 1), (share.stats.files, share.stats.lines, share.whole_files));
     }
@@ -659,7 +667,7 @@ mod tests {
                 build_row("p/src/bin/shared.rs", 0, 7, None, vec![])];
         let mut tests = vec![HashMap::new()];
         let mut files = vec![HashMap::new()];
-        assert_eq!(Promotion { seeds: 2, promoted: 1 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &mut Tree::default()));
+        assert_eq!(Promotion { seeds: 2, promoted: 1 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &rust_only(), &mut Tree::default()));
         let share = &tests[0]["Rust"];
         assert_eq!((1, 7, 1), (share.stats.files, share.stats.lines, share.whole_files));
     }
@@ -677,7 +685,7 @@ mod tests {
             "p/src/a/helpers.rs" => vec![build_declaration("inner", &[], false)]));
         let mut tests = vec![HashMap::new()];
         let mut files = vec![HashMap::new()];
-        assert_eq!(Promotion { seeds: 2, promoted: 2 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &mut tree));
+        assert_eq!(Promotion { seeds: 2, promoted: 2 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &rust_only(), &mut tree));
         let share = &tests[0]["Rust"];
         assert_eq!((2, 5, 2), (share.stats.files, share.stats.lines, share.whole_files),
                 "helpers.rs and inner.rs through the files without a row, and neither same-named file a folder up");
@@ -689,9 +697,22 @@ mod tests {
                 build_row("p/src/empty.rs", 0, 0, None, vec![])];
         let mut tests = vec![HashMap::new()];
         let mut files = vec![HashMap::new()];
-        assert_eq!(Promotion { seeds: 2, promoted: 0 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &mut Tree::default()));
+        assert_eq!(Promotion { seeds: 2, promoted: 0 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &rust_only(), &mut Tree::default()));
         let share = &tests[0]["Rust"];
         assert_eq!((0, 0, 0), (share.stats.files, share.stats.lines, share.whole_files));
+    }
+
+    #[test]
+    fn a_promoted_file_moves_its_keywords_with_it_less_what_its_own_marker_counted() {
+        let mut rows = vec![build_row("p/src/lib.rs", 0, 5, Some(2), vec![build_declaration("cases", &[], true)]),
+                build_row("p/src/cases.rs", 0, 9, Some(3), vec![])];
+        rows[1].stats.keyword_occurences = vec![4];
+        rows[1].partial.as_mut().unwrap().stats.keyword_occurences = vec![1];
+        let mut tests = vec![HashMap::new()];
+        let mut files = vec![HashMap::new()];
+        assert_eq!(Promotion { seeds: 1, promoted: 1 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &rust_only(), &mut Tree::default()));
+        let share = &tests[0]["Rust"];
+        assert_eq!((6, hashmap!("structs".to_owned() => 3)), (share.stats.lines, share.stats.keyword_occurences.clone()));
     }
 
     #[test]
@@ -700,7 +721,7 @@ mod tests {
                 build_row("p/src/plain.rs", 0, 20, None, vec![])];
         let mut tests = vec![HashMap::new()];
         let mut files = vec![HashMap::new()];
-        assert_eq!(Promotion::default(), promote_declared_test_modules(&rows, &mut tests, &mut files, &mut Tree::default()));
+        assert_eq!(Promotion::default(), promote_declared_test_modules(&rows, &mut tests, &mut files, &rust_only(), &mut Tree::default()));
         assert!(tests[0].is_empty());
     }
 

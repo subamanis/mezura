@@ -18,12 +18,15 @@ Main changes:
   -> '--explain' marks each line of test code, counts them under the totals, and names the rule
       that made a whole file test code.
   -> The JSON document carries 'scope.tests_detected', 'languages[].tests', 'total.tests' and
-      'by_file[].tests', and a comparison carries the same as 'from', 'to' and 'change'.
+      'by_file[].tests', the keywords found inside the test code under 'languages[].tests' and
+      'total.tests', and a comparison carries the same as 'from', 'to' and 'change'.
       '--explain --output json' marks a line with 'in_test' and names the rule under 'test_file'.
   -> Themes gained the 'tests-*' and 'production-*' families, one for each of the two rows.
   -> '.t' files are counted as Perl.
 
 Bugfixes:
+  -> The JSON document now carries the keywords of each nested language, so a '--diff' against a
+      saved document no longer reports every keyword inside a nested language as new.
   -> A target typed as an absolute path holding '..', 'D:/proj/tests/..', is resolved to the folder
       it names, so beside a target inside that folder it is no longer counted twice.
   -> A relative target typed on a network share, './src' from '\\server\share\proj', no longer fails

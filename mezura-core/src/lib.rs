@@ -327,7 +327,8 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let lookup = NestedLanguageLookup { languages: &language_map_ref, extension_to_name: &nested_definitions.extension_to_name,
             set_aside: &nested_definitions.set_aside };
     let mut files_on_disk = FilesOnDisk { lookup: &lookup, config: &config, is_whole: &|_| false };
-    let promotion = promote_declared_test_modules(&module_rows, tests_by_module, files_by_module, &mut files_on_disk);
+    let promotion = promote_declared_test_modules(&module_rows, tests_by_module, files_by_module, &language_map_ref,
+            &mut files_on_disk);
     drop(module_rows);
     parsing_duration_millis += promotion_started.elapsed().as_millis();
     if *phase_timing::ENABLED && promotion.seeds > 0 {

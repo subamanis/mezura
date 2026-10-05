@@ -551,7 +551,7 @@ mod tests {
         let rust = stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0]);
         let html = stats(1, 900, 40, 30, 0, HashMap::new());
         let per_language = hashmap!["Rust".to_owned() => rust.clone(), "HTML".to_owned() => html.clone()];
-        let tests = hashmap!["Rust".to_owned() => TestCode { stats: stats(2, 1200, 30, 24, 2, HashMap::new()),
+        let tests = hashmap!["Rust".to_owned() => TestCode { stats: stats(2, 1200, 30, 24, 2, hashmap!["structs".to_owned() => 1]),
                 whole_files: 1 }];
 
         let result = RunResult {
@@ -560,7 +560,8 @@ mod tests {
                 ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), nested_languages: HashMap::new(), tests: tests.clone(), files: HashMap::new() },
                 ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::total_of(&hashmap!["HTML".to_owned() => html]), nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new() }],
             per_language,
-            nested_languages: HashMap::new(),
+            nested_languages: hashmap!["HTML".to_owned() => hashmap!["JavaScript".to_owned() =>
+                    stats(1, 300, 20, 18, 0, hashmap!["classes".to_owned() => 1])]],
             tests,
             faulty_files: vec![FaultyFileDetails::new("D:\\dev\\a \"b\".rs".to_owned(), "stream did not contain valid UTF-8".to_owned(), 412)],
             skipped_files: SkippedFiles::default(),
@@ -600,6 +601,7 @@ mod tests {
 
         assert_same_stats(&written.per_language, &read.per_language);
         assert_eq!(written.total, read.total);
+        assert_eq!(written.nested_languages, read.nested_languages);
         assert_eq!(written.tests, read.tests);
         assert_eq!(written.files_present, read.files_present);
         assert_eq!(written.targets, read.targets);

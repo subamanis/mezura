@@ -642,6 +642,12 @@ fn calculate_own_share(whole: &Stats, sections: Option<&HashMap<String, Stats>>,
     let mut shell = whole.clone();
     take_out(&mut shell, &counted);
     shell.files = whole.files.saturating_sub(tests.map_or(0, |tests| tests.whole_files));
+    // A section's keywords are its own language's and were never in the whole, so only the tests' come out
+    for (keyword, occurrences) in tests.into_iter().flat_map(|tests| &tests.stats.keyword_occurences) {
+        if let Some(own) = shell.keyword_occurences.get_mut(keyword) {
+            *own = own.saturating_sub(*occurrences);
+        }
+    }
 
     shell
 }
@@ -3782,6 +3788,18 @@ mod tests {
                     "under {} the shell holds more code and comments than it has lines: {shell:?}",
                     model.name());
         }
+    }
+
+    #[test]
+    fn the_own_share_loses_the_keywords_of_its_tests_and_none_of_a_section_that_names_one_alike() {
+        let of = |files, bytes, lines, code, keywords| crate::test_support::plain_stats_of(files, bytes, lines, code, 0, keywords);
+        let whole = of(4, 8000, 400, 300, hashmap!["structs".to_owned() => 10, "enums".to_owned() => 2]);
+        let sections = hashmap!["JavaScript".to_owned() => of(1, 1000, 50, 40, hashmap!["structs".to_owned() => 3])];
+        let tests = TestCode { stats: of(2, 2000, 100, 80, hashmap!["structs".to_owned() => 4]), whole_files: 1 };
+
+        let own = calculate_own_share(&whole, Some(&sections), Some(&tests));
+        assert_eq!((3, 250), (own.files, own.lines));
+        assert_eq!(hashmap!["structs".to_owned() => 6, "enums".to_owned() => 2], own.keyword_occurences);
     }
 
     #[test]

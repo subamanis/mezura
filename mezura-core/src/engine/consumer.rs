@@ -106,7 +106,8 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                     Ok(file_parser::FileOutcome::Counted(mut report, resolved)) => {
                         let lang_name = resolved.as_deref().unwrap_or(lang_name);
                         progress.record_file_parsed(report.total_lines());
-                        let keywords = &language_map.get(lang_name).unwrap().keywords;
+                        let language = language_map.get(lang_name).unwrap();
+                        let keywords = &language.keywords;
                         let bytes = report.bytes;
                         let module = parsable_file.module as usize;
                         let mut of_this_file = config.collect_files.then(HashMap::<String, Stats>::new);
@@ -115,10 +116,10 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                         // and one written in the container's own language, get no row at all.
                         for section in report.sections.iter().filter(|section|
                                 section.stats.lines > 0 && section.language != lang_name) {
-                            let section_keywords = lookup.find_by_name(&section.language)
-                                    .map(|inner| inner.keywords.as_slice()).unwrap_or(&[]);
+                            let inner = lookup.find_by_name(&section.language);
+                            let section_keywords = inner.map_or(&[][..], |inner| inner.keywords.as_slice());
                             local_nested[module].entry(lang_name.to_owned()).or_default()
-                                    .entry(section.language.clone()).or_default()
+                                    .entry(section.language.clone()).or_insert_with(|| inner.map_or_else(Stats::default, Stats::from))
                                     .add_file(&section.stats, section.bytes, section_keywords);
                             if let Some(sections) = &mut of_this_file {
                                 sections.entry(section.language.clone()).or_default()
@@ -156,13 +157,14 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                             match local_tests[module].get_mut(lang_name) {
                                 Some(share) => share.add_file(&tests.stats, tests.bytes, keywords, is_whole),
                                 None => { local_tests[module].entry(lang_name.to_owned())
-                                        .or_default().add_file(&tests.stats, tests.bytes, keywords, is_whole); }
+                                        .or_insert_with(|| TestCode::from(language))
+                                        .add_file(&tests.stats, tests.bytes, keywords, is_whole); }
                             }
                         }
                         if let Some(declarations) = declarations {
                             local_rows.push(ModuleRow { path: parsable_file.path, module: parsable_file.module,
-                                    language_name: resolved.unwrap_or(parsable_file.language_name), lines: whole.lines,
-                                    classes: whole.classes, bytes, partial: tests.map(|share| *share), declarations });
+                                    language_name: resolved.unwrap_or(parsable_file.language_name), stats: whole,
+                                    bytes, partial: tests.map(|share| *share), declarations });
                         }
                     },
                     Ok(file_parser::FileOutcome::Skipped(kind)) => {
