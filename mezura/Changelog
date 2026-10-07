@@ -40,6 +40,9 @@ Bugfixes:
       typed that no command can type.
   -> In the table, the boxed table and a comparison, the branch before a nested language or a file
       takes the theme's 'nested-branch' or 'file-branch' color, as it already did in the list.
+  -> The sort marker of the table headers is an arrow, '↓' or '↑', and the tip of the default
+      progress bar moves half a cell at a time, so neither shows as question marks in the classic
+      Windows console.
 
 Change in commands:
   -> A name pattern that reaches above a target no longer matches: 'services/api/gen' with the

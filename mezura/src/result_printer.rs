@@ -31,8 +31,8 @@ const SHOWN_PATH_WIDTH : usize = 45;
 const ELIDED : &str = "...";
 const SEPARATOR_LINE : &str = "\u{2500}";
 // Down for the figures, which come biggest first, and up for the name, which comes A to Z
-const SORTED_DESCENDING : char = '\u{2304}';
-const SORTED_ASCENDING : char = '\u{2303}';
+const SORTED_DESCENDING : char = '\u{2193}';
+const SORTED_ASCENDING : char = '\u{2191}';
 
 // The same for the list layout, whose rows are far wider
 const LIST_INDENT : &str = "    ";
@@ -4339,26 +4339,26 @@ mod tests {
                     .split_whitespace().map(str::to_owned).collect::<Vec<_>>()
         };
 
-        assert_eq!(vec!["Language", "Files", "%", "⌄", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
+        assert_eq!(vec!["Language", "Files", "%", "↓", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
                 header_hiding(""));
-        assert_eq!(vec!["Language", "Files", "⌄", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
+        assert_eq!(vec!["Language", "Files", "↓", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
                 header_hiding("files-percentages"));
-        assert_eq!(vec!["Language", "Files", "%", "⌄", "Lines", "Code", "%", "Comments", "%", "Extra", "Size"],
+        assert_eq!(vec!["Language", "Files", "%", "↓", "Lines", "Code", "%", "Comments", "%", "Extra", "Size"],
                 header_hiding("lines-percentages"));
-        assert_eq!(vec!["Language", "Files", "%", "⌄", "Lines", "%", "Code", "Comments", "%", "Extra", "Size"],
+        assert_eq!(vec!["Language", "Files", "%", "↓", "Lines", "%", "Code", "Comments", "%", "Extra", "Size"],
                 header_hiding("code-percentages"));
-        assert_eq!(vec!["Language", "Files", "%", "⌄", "Lines", "%", "Code", "%", "Comments", "Extra", "Size"],
+        assert_eq!(vec!["Language", "Files", "%", "↓", "Lines", "%", "Code", "%", "Comments", "Extra", "Size"],
                 header_hiding("comments-percentages"));
 
-        assert_eq!(vec!["Language", "Files", "⌄", "Lines", "Code", "Comments", "Extra", "Size"],
+        assert_eq!(vec!["Language", "Files", "↓", "Lines", "Code", "Comments", "Extra", "Size"],
                 header_hiding("percentages"));
-        assert_eq!(vec!["Language", "Files", "⌄", "Lines", "%", "Code", "%", "Comments", "Extra", "Size"],
+        assert_eq!(vec!["Language", "Files", "↓", "Lines", "%", "Code", "%", "Comments", "Extra", "Size"],
                 header_hiding("files-percentages,comments-percentages"));
 
         // A hidden column takes its own share out with it, and a comparison's name reaches nothing here
-        assert_eq!(vec!["Language", "Files", "%", "⌄", "Lines", "%", "Code", "%", "Extra", "Size"],
+        assert_eq!(vec!["Language", "Files", "%", "↓", "Lines", "%", "Code", "%", "Extra", "Size"],
                 header_hiding("comments"));
-        assert_eq!(vec!["Language", "Files", "%", "⌄", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
+        assert_eq!(vec!["Language", "Files", "%", "↓", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
                 header_hiding("change-percentages"));
     }
     // The arithmetic is 'render::percentages' and is asserted there; what is left is which field

@@ -592,7 +592,7 @@ pub const PROGRESS_BAR_HELP  :  &str =
 
     One argument: 'smooth', 'blocky' or 'hash'. Default: smooth
 
-      smooth   ▏▎▍▌▋▊▉█   one unbroken bar, its tip moving in eight steps per cell
+      smooth   ▌█         one unbroken bar, its tip moving half a cell at a time
       blocky   ▪▮         separate boxes, each narrower than its cell, so a small gap falls
                           between them
       hash     .:#        plain ASCII, so it renders on any terminal

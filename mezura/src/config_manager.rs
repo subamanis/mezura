@@ -377,7 +377,7 @@ impl ProgressBarStyle {
     // than the cell it sits in.
     pub fn get_charset(&self) -> &'static str {
         match self {
-            Self::Smooth => "▏▎▍▌▋▊▉█",
+            Self::Smooth => "▌█",
             Self::Blocky => "▪▮",
             Self::Hash => ".:#"
         }
