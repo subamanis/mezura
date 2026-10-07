@@ -435,7 +435,8 @@ impl Layout {
 pub enum TestsBreakdown {
     #[default]
     Share,
-    Split
+    Split,
+    Removed
 }
 
 impl TestsBreakdown {
@@ -443,6 +444,7 @@ impl TestsBreakdown {
         match value.trim().to_lowercase().as_str() {
             "share" => Some(Self::Share),
             "split" => Some(Self::Split),
+            "removed" => Some(Self::Removed),
             _ => None
         }
     }
@@ -450,7 +452,8 @@ impl TestsBreakdown {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Share => "share",
-            Self::Split => "split"
+            Self::Split => "split",
+            Self::Removed => "removed"
         }
     }
 }

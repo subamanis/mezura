@@ -997,19 +997,24 @@ pub const BY_FILE_HELP  :  &str =
 ";
 pub const TESTS_BREAKDOWN_HELP  :  &str =
 "--tests-breakdown
-    the tests of each language as one row, or split from the rest of it
+    the tests of each language as one row, split from the rest of it, or removed from the rows
 
-    One argument: 'share' or 'split'. Default: share
+    One argument: 'share', 'split' or 'removed'. Default: share
 
       share     one row under each language that holds tests, 'tests', whose share of the
                 language is the percentage beside its files and lines
       split     two rows: 'production', the code of the language outside its tests, and then
                 'tests'
+      removed   the tests show nowhere: the row of each language holds only its code outside
+                them, no 'tests' row hangs under it or under the total, and the total adds up
+                the rows. The overview, '--sort', '--top', the keywords and the file rows of
+                '--by-file' follow, a file or a language that is tests whole getting no row.
+                When the whole run is tests, one sentence says so.
 
-    Under the total a 'tests' row adds up the test code of every language, whichever is chosen.
-    An HTML page, a '.vue' or any other file holding sections of other languages already splits
-    its language into rows, 'HTML itself' beside the sections, so there 'tests' joins them and
-    'split' changes nothing.
+    Under 'share' and 'split' a 'tests' row under the total adds up the test code of every
+    language. An HTML page, a '.vue' or any other file holding sections of other languages already
+    splits its language into rows, 'HTML itself' beside the sections, so there 'tests' joins them
+    and 'split' changes nothing. The JSON document carries every figure whole whichever is chosen.
 
     '--hide tests' turns the detection off, and then there is no row to draw either way.
 

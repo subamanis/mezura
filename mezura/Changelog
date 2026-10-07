@@ -12,8 +12,8 @@ Main changes:
   -> New '--tests': glob patterns for the files and directories to count as test code, a '!' in
       front of one taking back what an earlier pattern or a build tool declared, the last match
       winning.
-  -> New '--tests-breakdown share|split': one 'tests' row under the language, or a more comprehensive
-     split between 'production' and 'tests' under the total for the language.
+  -> New '--tests-breakdown share|split|removed': one 'tests' row under the language, a 'production'
+      and a 'tests' row under it, or every row without its tests and no 'tests' row anywhere.
   -> '--hide tests' hides the rows and turns the detection off.
   -> '--explain' marks each line of test code, counts them under the totals, and names the rule
       that made a whole file test code.

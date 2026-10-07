@@ -154,7 +154,8 @@ HOW THE REPORT LOOKS
   --sort               which column the languages are ordered by
   --top                show only this many languages, and say how many were left out
   --by-file            give every file its own row, or only the biggest few of each language
-  --tests-breakdown    the tests of each language as one row, or split from the rest of it
+  --tests-breakdown    the tests of each language as one row, split from the rest of it, or removed from the
+                       rows
   --hide               parts of the output to leave unprinted
   --theme              apply a theme, which is a whole look kept in one file
   --style              override the color and attributes of one kind of printed text
@@ -322,7 +323,8 @@ mezura ./ --tests "__tests__/,*.test.ts,*.test.tsx"
 ```
 
 `--tests-breakdown split` draws the rest of the language as a `production` row beside the tests,
-`--hide tests` turns the whole thing off, and `--explain` marks each line of test code and says
+`--tests-breakdown removed` leaves the tests out of every row and shows them nowhere, `--hide tests`
+turns the whole thing off, and `--explain` marks each line of test code and says
 which rule made a whole file one. What is found for each language, what is refused (doc tests,
 tests a macro writes, a framework's names) and every known limitation with its example are in
 **[Test detection](https://github.com/subamanis/mezura/blob/HEAD/TEST_DETECTION.md)**, with ready

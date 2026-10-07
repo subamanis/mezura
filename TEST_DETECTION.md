@@ -328,7 +328,9 @@ that is a layout rule the parser has no business guessing. Refused.
   `@Test`: every one is a claim about somebody's project, and the failure is silent miscounting.
   What is declared lives in the language file or in `--tests`, visible and editable.
 - **Test code inside a nested section.** vitest in the `<script>` of a `.vue` is JavaScript inside
-  Vue, and stays so.
+  Vue, and stays so. The other way round, a `<script>` inside a file that is tests whole goes to
+  the tests of the container with the rest of the file and is no section, and the keywords inside
+  it are not counted at all.
 - **A test directory by its name alone.** `test`, `tests` and `__tests__` are folders; the build
   file beside one is what makes it tests. A project checked out under `D:/tests/`, or a home
   folder called `test`, changes nothing.
@@ -339,8 +341,14 @@ that is a layout rule the parser has no business guessing. Refused.
 - **The report.** A `tests` row under each language that holds any, its `Files %` and `Lines %`
   being its share of the language, and one under the total. `--tests-breakdown split` draws the
   rest of the language as a `production` row above it; a language with sections of other
-  languages already draws `X itself` beside them, and `tests` joins those. `--hide tests` hides the
-  rows and turns the detection off, patterns included, which also makes the run faster.
+  languages already draws `X itself` beside them, and `tests` joins those. `--tests-breakdown
+  removed` leaves the tests out of every row and shows them nowhere, no `tests` row under a
+  language or under the total, the sections of other languages staying under it; the overview,
+  `--sort`, `--top`, the keywords and the file rows follow, a file or a language that is tests
+  whole getting no row, and a run that is tests whole gets one sentence saying so in place of the
+  report.
+  The document carries every figure whole whichever is chosen. `--hide tests` hides the rows and
+  turns the detection off, patterns included, which also makes the run faster.
 - **`--by-file`** draws nothing under a file row; the figure per file is in the document.
 - **The JSON document.** `scope.tests_detected`, `languages[].tests` with the figures a nested
   language carries, `keywords` when they are counted, and `whole_files`, the files that are test

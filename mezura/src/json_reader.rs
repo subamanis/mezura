@@ -368,19 +368,25 @@ fn parse_files(entries: &[Value], at: &str) -> Result<HashMap<String, Vec<FileEn
         let rows = read_array(rows, &at)?;
         let files = rows.iter().enumerate().map(|(i, row)| {
             let at = format!("{at}[{i}]");
-            let row = read_object(row, &at)?;
+            let members = read_object(row, &at)?;
             Ok(FileEntry {
-                path: read_text(row, "path", &at)?,
-                stats: Stats::new(1, read_number(row, "bytes", &at)?, read_number(row, "lines", &at)?,
-                        parse_classes(row, &at)?, HashMap::new()),
+                path: read_text(members, "path", &at)?,
+                stats: parse_file_figures(row, &at)?,
                 nested_languages: HashMap::new(),
-                tests: None
+                tests: members.get("tests").map(|tests| parse_file_figures(tests, &join_location(&at, "tests"))).transpose()?
             })
         }).collect::<Result<Vec<_>, DocumentError>>()?;
         found.insert(name, files);
     }
 
     Ok(found)
+}
+
+fn parse_file_figures(figures: &Value, at: &str) -> Result<Stats, DocumentError> {
+    let figures = read_object(figures, at)?;
+
+    Ok(Stats::new(1, read_number(figures, "bytes", at)?, read_number(figures, "lines", at)?,
+            parse_classes(figures, at)?, HashMap::new()))
 }
 
 fn parse_performance(entry: &Map<String, Value>) -> Result<Performance, DocumentError> {
@@ -717,7 +723,7 @@ mod tests {
         config.view.by_file = Some(crate::config_manager::ByFile::All);
         let written = FileEntry { path: "D:/dev/api/main.rs".to_owned(),
                 stats: stats(1, 3000, 60, 40, 10, HashMap::new()),
-                nested_languages: HashMap::new(), tests: None };
+                nested_languages: HashMap::new(), tests: Some(stats(1, 1000, 20, 15, 2, HashMap::new())) };
         result.modules[0].files = hashmap!["Rust".to_owned() => vec![written.clone()]];
 
         let read = parse(&create_document(&result, &Local::now(), &config)).unwrap();
@@ -726,6 +732,7 @@ mod tests {
         assert_eq!(1, files.len());
         assert_eq!("D:/dev/api/main.rs", files[0].path);
         assert_eq!(written.stats, files[0].stats);
+        assert_eq!(written.tests, files[0].tests);
 
         // A capped run says how many rows its document is missing, wherever the cuts landed
         config.view.by_file = Some(crate::config_manager::ByFile::Capped(1));

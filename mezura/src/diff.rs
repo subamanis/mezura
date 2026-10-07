@@ -379,24 +379,26 @@ pub fn create_comparison_rows(baseline: &HashMap<String, Stats>, subject: &HashM
 // 'by_file' then keeps the biggest moves, not the biggest files.
 pub fn create_file_comparison_rows(baseline: &[&FileEntry], subject: &[&FileEntry],
         bases: &(String, String), by_file: ByFile, sort_by: SortCriterion,
-        model: mezura_core::CountingModel) -> (Vec<FileStatsChange>, usize)
+        model: mezura_core::CountingModel, without_tests: bool) -> (Vec<FileStatsChange>, usize)
 {
-    let mut merged: HashMap<String, (Option<&Stats>, Option<&Stats>)> =
-            HashMap::with_capacity(baseline.len() + subject.len());
+    type BothSides<'a> = (Option<Cow<'a, Stats>>, Option<Cow<'a, Stats>>);
+    let mut merged: HashMap<String, BothSides> = HashMap::with_capacity(baseline.len() + subject.len());
     for file in baseline {
-        merged.insert(relativise(&file.path, &bases.0), (Some(&file.stats), None));
+        merged.insert(relativise(&file.path, &bases.0),
+                (Some(super::result_printer::find_shown_stats_of(file, without_tests)), None));
     }
     for file in subject {
-        merged.entry(relativise(&file.path, &bases.1)).or_default().1 = Some(&file.stats);
+        merged.entry(relativise(&file.path, &bases.1)).or_default().1 =
+                Some(super::result_printer::find_shown_stats_of(file, without_tests));
     }
 
-    // Filtered on the references, so only the rows that survive are built: raw counts that are
-    // equal are equal under either model
+    // Filtered before the rows are built, so only the ones that survive are built. Raw counts that
+    // are equal are equal under either model.
     let mut rows = merged.into_iter()
             .filter(|(_, (before, now))| before != now)
             .map(|(path, (before, now))| FileStatsChange {
-                baseline: before.cloned().unwrap_or_default(),
-                subject: now.cloned().unwrap_or_default(),
+                baseline: before.map(Cow::into_owned).unwrap_or_default(),
+                subject: now.map(Cow::into_owned).unwrap_or_default(),
                 path
             }).collect::<Vec<_>>();
 
@@ -893,7 +895,7 @@ mod tests {
 
         // The unchanged file has no row; the biggest move first, whichever side has the file
         let (rows, hidden) = create_file_comparison_rows(&before, &after, &bases, ByFile::All,
-                SortCriterion::Lines, model);
+                SortCriterion::Lines, model, false);
         assert_eq!(0, hidden);
         assert_eq!(vec!["src/a.rs", "src/gone.rs", "src/added.rs"],
                 rows.iter().map(|x| x.path.as_str()).collect::<Vec<_>>());
@@ -903,19 +905,19 @@ mod tests {
 
         // The cap keeps the biggest moves of what changed, and says how many it left out
         let (cut, hidden) = create_file_comparison_rows(&before, &after, &bases, ByFile::Capped(1),
-                SortCriterion::Lines, model);
+                SortCriterion::Lines, model, false);
         assert_eq!((1, 2), (cut.len(), hidden));
         assert_eq!("src/a.rs", cut[0].path);
 
         // Under a sort by name the paths themselves order the rows
         let (named, _) = create_file_comparison_rows(&before, &after, &bases, ByFile::All,
-                SortCriterion::Name, model);
+                SortCriterion::Name, model, false);
         assert_eq!(vec!["src/a.rs", "src/added.rs", "src/gone.rs"],
                 named.iter().map(|x| x.path.as_str()).collect::<Vec<_>>());
 
         // Every row is one file, so a sort by files measures the move in lines instead
         let (by_files, _) = create_file_comparison_rows(&before, &after, &bases, ByFile::All,
-                SortCriterion::Files, model);
+                SortCriterion::Files, model, false);
         assert_eq!(vec!["src/a.rs", "src/gone.rs", "src/added.rs"],
                 by_files.iter().map(|x| x.path.as_str()).collect::<Vec<_>>());
     }

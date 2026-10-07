@@ -25,7 +25,8 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
     let RunResult {per_language, total, faulty_files, unreadable_dirs, nested_languages, tests, ..} = result;
     let tests = find_tests(tests, config);
     let (shown, hidden) = result_printer::find_shown_language_names(per_language, config);
-    let file_rows = result_printer::find_files_to_show(result, config);
+    // The document carries every file whole, with its tests beside it, whatever the report leaves out
+    let file_rows = result_printer::find_files_to_show(result, config, false);
     // With modules the rows are written once, inside each module's own languages, and so are the
     // counts of what the cap hid: every file belongs to exactly one module
     let (files, files_hidden) = match result.has_modules() {
@@ -236,7 +237,7 @@ fn compare_files_per_language(baseline_modules: &[mezura_core::ModuleResult],
     for name in names {
         let (rows, cut) = super::diff::create_file_comparison_rows(
                 baseline.get(name).unwrap_or(&empty), subject.get(name).unwrap_or(&empty),
-                bases, by_file, config.view.sort_by, config.view.counting);
+                bases, by_file, config.view.sort_by, config.view.counting, false);
         hidden += cut;
         if !rows.is_empty() {
             per_language.insert(name.to_owned(), rows);
