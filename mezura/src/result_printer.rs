@@ -2137,7 +2137,8 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, usize, V
     let with_figures = headers.len() - 1;
     // A note spans the whole frame, so it is not what any one column has to be wide enough for
     let name_width = rows.iter().zip(kinds.iter()).filter(|(_, kind)| **kind != RowKind::Note)
-            .map(|((name, _, _), _)| calculate_widest_visible_line(name)).max().unwrap_or(0)
+            .map(|((name, depth, _), kind)| calculate_widest_visible_line(&format_boxed_name(name, *depth, *kind)))
+            .max().unwrap_or(0)
             .max(calculate_widest_visible_line(name_title));
     // Measured with the escape sequences skipped, since the size cell colors its own unit and a
     // comparison's change cells arrive painted by their direction
@@ -2174,10 +2175,6 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, usize, V
         format!("{bar}{padding}{}{padding}{bar}", cells.join(&format!("{padding}{inner_bar}{padding}")))
     };
 
-    let longest_section = rows.iter().zip(kinds.iter())
-            .filter(|(_, kind)| kind.is_sub_row())
-            .map(|((name, _, _), _)| calculate_widest_visible_line(find_section_name_in(name)))
-            .max().unwrap_or(0);
     let mut lines = vec![frame("┌", "┬", "┐", "─", BORDER_OUTER, false)];
 
     // The titles are centred: their columns are often much wider than the word in them.
@@ -2224,17 +2221,7 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, usize, V
             RowKind::Note => &theme.note,
             RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File => of_a_sub_row.name
         };
-        // The block as a whole is pushed right by its longest name. Aligning each name on its own
-        // right edge puts a three letter one further in than a ten letter one, which reads as depth.
-        // The sections stop halfway, so that the two lists under one language are not one block.
-        let name = if kind.is_sub_row() {
-            let marker = if kind == RowKind::File {BOXED_FILE_MARKER} else {BOXED_MARKER};
-            let text = format!("{marker} {}", find_section_name_in(name));
-            let indent = inner_widths[0].saturating_sub(2 + longest_section);
-            " ".repeat(if kind == RowKind::File {indent} else {indent / 2 + 2 * depth}) + &text
-        } else {
-            name.clone()
-        };
+        let name = format_boxed_name(name, *depth, kind);
         let padding = " ".repeat(inner_widths[0].saturating_sub(calculate_widest_visible_line(&name)));
         let painted_name = if kind.is_sub_row() {
             let (tree, section) = split_off_the_branch(&name);
@@ -2267,6 +2254,18 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, usize, V
 
     lines.push(frame("└", "┴", "┘", "─", BORDER_OUTER, false));
     lines
+}
+
+// A sub-row starts where the table's tree does. The table spends four columns on a level and this
+// spends two, so the name column is measured on what this returns.
+fn format_boxed_name(cell: &str, depth: usize, kind: RowKind) -> Cow<'_, str> {
+    if !kind.is_sub_row() {
+        return Cow::Borrowed(cell);
+    }
+    let marker = if kind == RowKind::File {BOXED_FILE_MARKER} else {BOXED_MARKER};
+    let start = cell.len() - cell.trim_start_matches(' ').len();
+
+    Cow::Owned(format!("{}{marker} {}", " ".repeat(start + 2 * depth), find_section_name_in(cell)))
 }
 
 fn print_individually(theme: &Theme, groups: &[Group], columns: &Columns, block_width: usize, should_print_keywords: bool)
@@ -4090,6 +4089,32 @@ mod tests {
                 .collect::<Vec<_>>());
         assert_eq!((396, 356), (under_html[0].baseline.lines, under_html[0].subject.lines),
                 "the production row is the language less its tests on each side, and HTML had none before");
+    }
+
+    #[test]
+    fn in_the_boxed_table_a_sub_row_starts_where_the_tree_of_the_table_does_and_a_file_beside_it() {
+        colored::control::set_override(false);
+
+        let (sorted, content_info, total) = sample_data();
+        let (sections, tests, entries) = (sample_sections(), sample_tests(), sample_files());
+        let files = hashmap!["HTML" => FileRows { hidden: 0, shown: entries["HTML"].iter()
+                .map(|file| (Cow::Borrowed(file.path.trim_start_matches("D:/x/")), file)).collect() }];
+        let groups = vec![Group { name: None, languages: sorted, hidden: 0, per_language: Cow::Borrowed(&content_info),
+                nested: &sections, tests: &tests, tests_breakdown: TestsBreakdown::Split, files,
+                total: Cow::Borrowed(&total), baseline: None }];
+        let view = ViewSettings { sort_by: SortCriterion::Lines, hidden: config_manager::Hidden::default(),
+                model: CountingModel::Content };
+        let lines = format_boxed_lines(&Theme::default(), &groups, &total, true, &[], view);
+        let column_of = |name: &str, glyph: fn(char) -> bool| {
+            let line = lines.iter().find(|line| line.contains(name)).unwrap();
+            line.split('\u{2502}').nth(1).unwrap().chars().position(glyph).unwrap()
+        };
+        let marker = |glyph: char| glyph == BOXED_MARKER || glyph == BOXED_FILE_MARKER;
+
+        let language = column_of("HTML  ", |glyph| glyph != ' ');
+        assert_eq!(language + 1, column_of("production", marker));
+        assert_eq!(language + 1, column_of("index.html", marker), "a file stands beside the rows of its language");
+        assert_eq!(language + 3, column_of("HTML itself", marker), "a level further down starts two columns in");
     }
 
     #[test]
