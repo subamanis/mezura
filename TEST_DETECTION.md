@@ -339,9 +339,10 @@ that is a layout rule the parser has no business guessing. Refused.
 ## Where the count shows
 
 - **The report.** A `tests` row under each language that holds any, its `Files %` and `Lines %`
-  being its share of the language, and one under the total. `--tests-breakdown split` draws the
-  rest of the language as a `production` row above it; a language with sections of other
-  languages already draws `X itself` beside them, and `tests` joins those. `--tests-breakdown
+  being its share of the language, and one under the total. A language with sections of other
+  languages draws `X itself` beside them, and `tests` joins those. `--tests-breakdown split` draws
+  the rest of the language as a `production` row above `tests`, and the sections and `X itself`
+  hang under that row, their percentages being shares of it. `--tests-breakdown
   removed` leaves the tests out of every row and shows them nowhere, no `tests` row under a
   language or under the total, the sections of other languages staying under it; the overview,
   `--sort`, `--top`, the keywords and the file rows follow, a file or a language that is tests

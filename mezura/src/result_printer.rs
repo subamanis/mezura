@@ -236,8 +236,8 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
                     NAME.len(), FILES, lines, code, comments);
             let mut rows = vec![columns.append_size(&theme.arrow, &row, &format_size(theme, BYTES), width)];
             let parts = find_parts_of(&groups[0], NAME, &per_language[NAME]);
-            for (at, (part, stats, kind)) in parts.iter().enumerate() {
-                rows.push(format_list_sub_row(theme, &columns, "", part, stats, *kind, at + 1 == parts.len(), width));
+            for (part, branch) in parts.iter().zip(format_branches(parts.iter().map(|part| part.depth))) {
+                rows.push(format_list_sub_row(theme, &columns, "", &branch, &part.name, &part.stats, part.kind, width));
             }
             rows.push(get_keywords_as_str(theme, &keywords, None, columns.calculate_words_start(), width));
             rows
@@ -690,30 +690,50 @@ fn take_out(shell: &mut Stats, sections: &Stats) {
     shell.lines = shell.classes.calculate_lines();
 }
 
+struct Part {
+    name: String,
+    stats: Stats,
+    kind: RowKind,
+    depth: usize
+}
+
 // The own share, the sections biggest first, then the tests. They add up to the language's row, so
 // a line of a section or of the tests is taken out of the own share. A row that already left its
 // tests out has no tests to hang under it.
-fn find_parts_of(group: &Group, language: &str, row: &Stats) -> Vec<(String, Stats, RowKind)> {
+fn find_parts_of(group: &Group, language: &str, row: &Stats) -> Vec<Part> {
     let sections = group.nested.get(language);
     let tests = group.tests.get(language).filter(|_| !group.leaves_tests_out());
     if sections.is_none() && tests.is_none() {
         return Vec::new();
     }
 
-    let mut rows = sections.into_iter().flatten()
-            .map(|(name, stats)| (name.clone(), stats.clone(), RowKind::Nested)).collect::<Vec<_>>();
-    rows.sort_by(|one, other| other.1.lines.cmp(&one.1.lines).then(one.0.cmp(&other.0)));
-    if let Some(tests) = tests {
-        rows.push((TESTS_NAME.to_owned(), tests.stats.clone(), RowKind::Tests));
-    }
-
-    let shell = calculate_own_share(row, sections, tests);
     let has_sections = sections.is_some_and(|sections| !sections.is_empty());
+    let mut parts = Vec::new();
+    let mut depth = 0;
+    if nests_under_production(has_sections, tests.is_some(), group.tests_breakdown) {
+        parts.push(Part { name: PRODUCTION_NAME.to_owned(), stats: calculate_own_share(row, None, tests),
+                kind: RowKind::Production, depth });
+        depth += 1;
+    }
+    let shell = calculate_own_share(row, sections, tests);
     if shell.lines > 0 && let Some((name, kind)) = find_own_share_name(language, has_sections, group.tests_breakdown) {
-        rows.insert(0, (name, shell, kind));
+        parts.push(Part { name, stats: shell, kind, depth });
+    }
+    let mut sorted = sections.into_iter().flatten().collect::<Vec<_>>();
+    sorted.sort_by(|(one, of_one), (other, of_other)| of_other.lines.cmp(&of_one.lines).then(one.cmp(other)));
+    parts.extend(sorted.into_iter().map(|(name, stats)| Part { name: name.clone(), stats: stats.clone(),
+            kind: RowKind::Nested, depth }));
+    if let Some(tests) = tests {
+        parts.push(Part { name: TESTS_NAME.to_owned(), stats: tests.stats.clone(), kind: RowKind::Tests, depth: 0 });
     }
 
-    rows
+    parts
+}
+
+// A section is never test code, so under 'split' a container's own share and its sections add up to
+// its production
+fn nests_under_production(has_sections: bool, has_tests: bool, breakdown: TestsBreakdown) -> bool {
+    has_sections && has_tests && breakdown == TestsBreakdown::Split
 }
 
 // A file that is tests whole holds none of the language's other lines
@@ -765,7 +785,8 @@ struct NamedRow<'a> {
     group: &'a Group<'a>,
     // The language whose row this is, or whose row it sits under
     language: Option<&'a String>,
-    stats: Option<Cow<'a, Stats>>
+    stats: Option<Cow<'a, Stats>>,
+    under_production: Option<Stats>
 }
 
 // The notes go last, above the total, since they say why the rows above do not add up to it
@@ -775,11 +796,12 @@ fn create_named_rows<'a>(groups: &'a [Group], print_total: bool, notes: &[String
     for group in groups {
         if grouped {
             rows.push(NamedRow { cell: group.get_displayed_name().to_owned(), kind: RowKind::Module,
-                    group, language: None, stats: None });
+                    group, language: None, stats: None, under_production: None });
         }
         for name in &group.languages {
             let cell = if grouped {GROUP_INDENT.to_owned() + name} else {name.clone()};
-            rows.push(NamedRow { cell, kind: RowKind::Language, group, language: Some(name), stats: None });
+            rows.push(NamedRow { cell, kind: RowKind::Language, group, language: Some(name), stats: None,
+                    under_production: None });
             rows.extend(create_nested_rows_under(group, name, grouped));
         }
     }
@@ -788,14 +810,15 @@ fn create_named_rows<'a>(groups: &'a [Group], print_total: bool, notes: &[String
     }
     for note in notes {
         rows.push(NamedRow { cell: note.clone(), kind: RowKind::Note, group: &groups[0],
-                language: None, stats: None });
+                language: None, stats: None, under_production: None });
     }
     if print_total {
         rows.push(NamedRow { cell: TOTAL_NAME.to_owned(), kind: RowKind::Total, group: &groups[0],
-                language: None, stats: None });
+                language: None, stats: None, under_production: None });
         if let Some(tests) = calculate_tests_of_everything(groups) {
             rows.push(NamedRow { cell: format!("{BRANCH_INDENT}{}{TESTS_NAME}", find_branch_marker(true)),
-                    kind: RowKind::Tests, group: &groups[0], language: None, stats: Some(Cow::Owned(tests)) });
+                    kind: RowKind::Tests, group: &groups[0], language: None, stats: Some(Cow::Owned(tests)),
+                    under_production: None });
         }
     }
 
@@ -807,14 +830,18 @@ fn create_nested_rows_under<'a>(group: &'a Group<'a>, name: &'a String, grouped:
     let whole = group.per_language.get(name).unwrap();
 
     let parts = find_parts_of(group, name, whole);
+    let branches = format_branches(parts.iter().map(|part| part.depth));
     let files = group.files.get(name.as_str());
     let shown = files.map(|rows| rows.shown.as_slice()).unwrap_or_default();
     let mut rows = Vec::with_capacity(parts.len() + shown.len());
-    let part_count = parts.len();
-    for (at, (part, stats, kind)) in parts.into_iter().enumerate() {
-        let last = at + 1 == part_count;
-        rows.push(NamedRow { cell: format!("{indent}{}{part}", find_branch_marker(last)),
-                kind, group, language: Some(name), stats: Some(Cow::Owned(stats)) });
+    let mut production = None;
+    for (part, branch) in parts.into_iter().zip(branches) {
+        let under_production = if part.depth > 0 {production.clone()} else {None};
+        if part.kind == RowKind::Production {
+            production = Some(part.stats.clone());
+        }
+        rows.push(NamedRow { cell: format!("{indent}{branch}{}", part.name), kind: part.kind, group,
+                language: Some(name), stats: Some(Cow::Owned(part.stats)), under_production });
     }
     // A language whose files were cut ends on a branch that hangs open, so that a tree drawn shut is
     // always the whole of what there is
@@ -823,7 +850,7 @@ fn create_nested_rows_under<'a>(group: &'a Group<'a>, name: &'a String, grouped:
         let last = at + 1 == shown.len() && complete;
         rows.push(NamedRow { cell: format!("{indent}{}{shown_path}", find_file_branch_marker(last)),
                 kind: RowKind::File, group, language: Some(name),
-                stats: Some(find_shown_stats_of(file, group.leaves_tests_out())) });
+                stats: Some(find_shown_stats_of(file, group.leaves_tests_out())), under_production: None });
     }
 
     rows
@@ -848,7 +875,7 @@ impl RowFigures {
 }
 
 // A module's share is of the whole run, a language's of the module it sits in, and a sub-row's of the
-// language it hangs under, or of the whole run under the total. A note has no figures.
+// row it hangs under. A note has no figures.
 fn find_row_figures(row: &NamedRow, total: &Stats, model: CountingModel) -> Option<RowFigures> {
     let shown_against = |stats: &Stats, against: &Stats| RowFigures {
         files: stats.files,
@@ -867,13 +894,31 @@ fn find_row_figures(row: &NamedRow, total: &Stats, model: CountingModel) -> Opti
         RowKind::Total => Some(shown_against(total, total)),
         RowKind::Language => Some(shown_against(of_language(row.language.unwrap()), &group.total)),
         RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File => Some(shown_against(row.stats.as_deref().unwrap(),
-                row.language.map_or(total, of_language))),
+                row.under_production.as_ref().unwrap_or_else(|| row.language.map_or(total, of_language)))),
         RowKind::Note => None
     }
 }
 
+fn format_branches(depths: impl IntoIterator<Item = usize>) -> Vec<String> {
+    let depths = depths.into_iter().collect::<Vec<_>>();
+    let goes_on = |at: usize, level: usize| depths[at + 1..].iter()
+            .take_while(|depth| **depth >= level).any(|depth| *depth == level);
+
+    depths.iter().enumerate().map(|(at, depth)| {
+        let mut branch = (0..*depth).map(|level| find_continuation_marker(!goes_on(at, level)).to_owned() + BRANCH_INDENT)
+                .collect::<String>();
+        branch.push_str(find_branch_marker(!goes_on(at, *depth)));
+        branch
+    }).collect()
+}
+
 fn find_branch_marker(last: bool) -> &'static str {
     if last {"\u{2514}\u{2500} "} else {"\u{251c}\u{2500} "}
+}
+
+// As wide as a branch marker, so that every level hangs from the second letter of the name above it
+fn find_continuation_marker(last: bool) -> &'static str {
+    if last {"   "} else {"\u{2502}  "}
 }
 
 // Longer than a nested language's, so the two lists under one language are told apart at a glance
@@ -882,7 +927,7 @@ fn find_file_branch_marker(last: bool) -> &'static str {
 }
 
 fn find_section_name_in(cell: &str) -> &str {
-    cell.trim_start_matches([' ', '\u{251c}', '\u{2514}', '\u{2500}', '\u{25ab}', BOXED_MARKER]).trim()
+    cell.trim_start_matches([' ', '\u{251c}', '\u{2514}', '\u{2500}', '\u{2502}', '\u{25ab}', BOXED_MARKER]).trim()
 }
 
 fn split_off_the_branch(cell: &str) -> (&str, &str) {
@@ -1072,10 +1117,10 @@ fn format_markdown_lines(theme: &Theme, groups: &[Group], total: &Stats, print_t
     draw_markdown_table(&columns, &rows, &kinds)
 }
 
-// A markdown cell keeps no leading space, so the depth of a row has to be spelled out
+// A markdown cell keeps no run of spaces, so the depth of a row and the gap after a '│' are spelled out
 fn indent_for_markdown(cell: &str) -> String {
-    let depth = cell.len() - cell.trim_start_matches(' ').len();
-    "&nbsp;".repeat(depth * 2) + cell.trim_start_matches(' ')
+    let rest = cell.trim_start_matches([' ', '\u{2502}']);
+    cell[..cell.len() - rest.len()].replace(' ', "&nbsp;&nbsp;") + rest
 }
 
 fn escape_markdown_cell(cell: &str) -> String {
@@ -1225,6 +1270,7 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
 struct ComparedRow {
     name: String,
     kind: RowKind,
+    depth: usize,
     baseline: Stats,
     subject: Stats
 }
@@ -1259,8 +1305,8 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
                 config.view.top_n, config.view.counting)
                 .0.into_iter()
                 .flat_map(|change| {
-                    let mut rows = vec![ComparedRow { name: indent.to_owned() + &change.name,
-                            kind: RowKind::Language, baseline: change.baseline.clone(), subject: change.subject.clone() }];
+                    let mut rows = vec![ComparedRow { name: indent.to_owned() + &change.name, kind: RowKind::Language,
+                            depth: 0, baseline: change.baseline.clone(), subject: change.subject.clone() }];
                     rows.extend(create_compared_parts(&change, baseline_nested, subject_nested,
                             baseline_tests, subject_tests, config.view.tests_breakdown, indent));
                     if let (Some(by_file), Some(bases)) = (by_file, bases.as_ref()) {
@@ -1287,8 +1333,8 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
         Some(pairs) => for pair in pairs {
             let (before, now) = (ShownFigures::of_module(pair.before, without_tests),
                     ShownFigures::of_module(pair.now, without_tests));
-            rows.push(ComparedRow { name: pair.name.unwrap_or(UNNAMED_MODULE_NAME).to_owned(),
-                    kind: RowKind::Module, baseline: before.total.clone().into_owned(), subject: now.total.clone().into_owned() });
+            rows.push(ComparedRow { name: pair.name.unwrap_or(UNNAMED_MODULE_NAME).to_owned(), kind: RowKind::Module,
+                    depth: 0, baseline: before.total.clone().into_owned(), subject: now.total.clone().into_owned() });
             let (of_module, hidden) = languages_of(&before.per_language, &now.per_language,
                     &pair.before.nested_languages, &pair.now.nested_languages, &pair.before.tests, &pair.now.tests,
                     &files_of(std::slice::from_ref(pair.before)),
@@ -1305,13 +1351,13 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
             files_hidden += hidden;
         }
     }
-    rows.push(ComparedRow { name: TOTAL_NAME.to_owned(), kind: RowKind::Total,
+    rows.push(ComparedRow { name: TOTAL_NAME.to_owned(), kind: RowKind::Total, depth: 0,
             baseline: ShownFigures::of_run(baseline, without_tests).total.into_owned(),
             subject: ShownFigures::of_run(subject, without_tests).total.into_owned() });
     let (tests_before, tests_now) = (calculate_sum_of_tests(&baseline.tests), calculate_sum_of_tests(&subject.tests));
     if !config.view.hidden.tests && !without_tests && (tests_before.stats.lines > 0 || tests_now.stats.lines > 0) {
         rows.push(ComparedRow { name: format!("{BRANCH_INDENT}{}{TESTS_NAME}", find_branch_marker(true)),
-                kind: RowKind::Tests, baseline: tests_before.stats, subject: tests_now.stats });
+                kind: RowKind::Tests, depth: 0, baseline: tests_before.stats, subject: tests_now.stats });
     }
 
     (rows, files_hidden)
@@ -1325,7 +1371,7 @@ fn create_compared_file_rows(files: Vec<super::diff::FileStatsChange>, complete:
     files.into_iter().enumerate().map(|(at, file)| ComparedRow {
         name: format!("{indent}{BRANCH_INDENT}{}{}",
                 find_file_branch_marker(at + 1 == count && complete), elide_long_path(&file.path)),
-        kind: RowKind::File, baseline: file.baseline, subject: file.subject
+        kind: RowKind::File, depth: 0, baseline: file.baseline, subject: file.subject
     }).collect()
 }
 
@@ -1371,30 +1417,40 @@ fn create_compared_parts(change: &super::diff::LanguageStatsChange,
     names.dedup();
     names.sort_by_key(|name| std::cmp::Reverse(now.and_then(|x| x.get(name)).map_or(0, |x| x.lines)));
     let has_sections = !names.is_empty();
+    let has_tests = tested_before.is_some() || tested_now.is_some();
 
-    let of = |sections: Option<&HashMap<String, Stats>>, name: &str|
-            sections.and_then(|x| x.get(name)).cloned().unwrap_or_default();
-    let mut rows = names.into_iter().map(|name| {
-        let (was, is) = (of(before, &name), of(now, &name));
-        (name, was, is, RowKind::Nested)
-    }).collect::<Vec<_>>();
-    if tested_before.is_some() || tested_now.is_some() {
-        let of = |tests: Option<&TestCode>| tests.map(|tests| tests.stats.clone()).unwrap_or_default();
-        rows.push((TESTS_NAME.to_owned(), of(tested_before), of(tested_now), RowKind::Tests));
+    let mut rows = Vec::new();
+    let mut depth = 0;
+    if nests_under_production(has_sections, has_tests, breakdown) {
+        rows.push(ComparedRow { name: PRODUCTION_NAME.to_owned(), kind: RowKind::Production, depth,
+                baseline: calculate_own_share(&change.baseline, None, tested_before),
+                subject: calculate_own_share(&change.subject, None, tested_now) });
+        depth += 1;
     }
-
     let (own_before, own_now) = (calculate_own_share(&change.baseline, before, tested_before),
             calculate_own_share(&change.subject, now, tested_now));
     if (own_before.lines > 0 || own_now.lines > 0)
             && let Some((name, kind)) = find_own_share_name(&change.name, has_sections, breakdown) {
-        rows.insert(0, (name, own_before, own_now, kind));
+        rows.push(ComparedRow { name, kind, depth, baseline: own_before, subject: own_now });
+    }
+    let of = |sections: Option<&HashMap<String, Stats>>, name: &str|
+            sections.and_then(|x| x.get(name)).cloned().unwrap_or_default();
+    rows.extend(names.into_iter().map(|name| {
+        let (baseline, subject) = (of(before, &name), of(now, &name));
+        ComparedRow { name, kind: RowKind::Nested, depth, baseline, subject }
+    }));
+    if has_tests {
+        let of = |tests: Option<&TestCode>| tests.map(|tests| tests.stats.clone()).unwrap_or_default();
+        rows.push(ComparedRow { name: TESTS_NAME.to_owned(), kind: RowKind::Tests, depth: 0,
+                baseline: of(tested_before), subject: of(tested_now) });
     }
 
-    let count = rows.len();
-    rows.into_iter().enumerate().map(|(at, (name, baseline, subject, kind))| ComparedRow {
-            name: format!("{indent}{BRANCH_INDENT}{}{name}", find_branch_marker(at + 1 == count)),
-            kind, baseline, subject })
-            .collect()
+    let branches = format_branches(rows.iter().map(|row| row.depth));
+    for (row, branch) in rows.iter_mut().zip(branches) {
+        row.name = format!("{indent}{BRANCH_INDENT}{branch}{}", row.name);
+    }
+
+    rows
 }
 
 // The languages are the rows the table printed, so one cut governs both and the block cannot name a
@@ -1544,14 +1600,15 @@ fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: View
                          slot: paint_change(theme, before.bytes, now.bytes, &format_signed_size(theme, before.bytes, now.bytes)) }]
     };
 
-    let drawn = rows.iter().map(|row| (row.name.clone(), cells(&row.baseline, &row.subject))).collect::<Vec<_>>();
+    let drawn = rows.iter().map(|row| (row.name.clone(), row.depth, cells(&row.baseline, &row.subject)))
+            .collect::<Vec<_>>();
     let kinds = rows.iter().map(|row| row.kind).collect::<Vec<_>>();
     columns[0].header = determine_name_header_for(&kinds).to_owned();
 
     let mask = create_shown_mask(&columns, hidden);
     let mut columns = keep_shown(columns, &mask);
     let drawn = drawn.into_iter()
-            .map(|(name, cells)| (name, keep_shown(cells, &mask[1..]))).collect::<Vec<_>>();
+            .map(|(name, depth, cells)| (name, depth, keep_shown(cells, &mask[1..]))).collect::<Vec<_>>();
     mark_sorted_column(theme, &mut columns, sort_by);
 
     draw_boxed_table(theme, &columns, &drawn, &kinds, ColumnKind::Change)
@@ -2018,11 +2075,14 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
     }
 
     let described = create_named_rows(groups, print_total, notes);
-    let rows = described.iter().map(|row| match find_row_figures(row, total, model) {
-        Some(figures) => format_row_of(theme, &row.cell, &figures),
-        // A note takes the name cell and leaves the columns empty
-        None => (row.cell.clone(),
-                (0..column_count - 1).map(|_| BoxedCell { number: String::new(), slot: String::new() }).collect())
+    let rows = described.iter().map(|row| {
+        let (name, cells) = match find_row_figures(row, total, model) {
+            Some(figures) => format_row_of(theme, &row.cell, &figures),
+            // A note takes the name cell and leaves the columns empty
+            None => (row.cell.clone(),
+                    (0..column_count - 1).map(|_| BoxedCell { number: String::new(), slot: String::new() }).collect())
+        };
+        (name, usize::from(row.under_production.is_some()), cells)
     }).collect::<Vec<_>>();
     let kinds = described.iter().map(|row| row.kind).collect::<Vec<_>>();
 
@@ -2032,8 +2092,8 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
     let slot_hidden = columns.iter().skip(1)
             .map(|column| hides_the_percentage_of(hidden, column.kind)).collect::<Vec<_>>();
     let mut rows = rows.into_iter()
-            .map(|(name, cells)| (name, keep_shown(cells, &mask[1..]))).collect::<Vec<_>>();
-    for (_, cells) in &mut rows {
+            .map(|(name, depth, cells)| (name, depth, keep_shown(cells, &mask[1..]))).collect::<Vec<_>>();
+    for (_, _, cells) in &mut rows {
         for (cell, is_hidden) in cells.iter_mut().zip(&slot_hidden) {
             if *is_hidden {
                 cell.slot.clear();
@@ -2058,7 +2118,7 @@ fn span_across(theme: &Theme, text: &str, inner_widths: &[usize], pad: usize, bo
 // comparison with a change. A column whose slots are all empty is drawn without one.
 struct BoxedCell { number: String, slot: String }
 
-fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, Vec<BoxedCell>)],
+fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, usize, Vec<BoxedCell>)],
         kinds: &[RowKind], slot: ColumnKind) -> Vec<String>
 {
     const SLOT_GAP : usize = 2;
@@ -2077,13 +2137,13 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, Vec<Boxe
     let with_figures = headers.len() - 1;
     // A note spans the whole frame, so it is not what any one column has to be wide enough for
     let name_width = rows.iter().zip(kinds.iter()).filter(|(_, kind)| **kind != RowKind::Note)
-            .map(|((name, _), _)| calculate_widest_visible_line(name)).max().unwrap_or(0)
+            .map(|((name, _, _), _)| calculate_widest_visible_line(name)).max().unwrap_or(0)
             .max(calculate_widest_visible_line(name_title));
     // Measured with the escape sequences skipped, since the size cell colors its own unit and a
     // comparison's change cells arrive painted by their direction
-    let number_widths = (0..with_figures).map(|i| rows.iter().map(|(_,cells)| calculate_widest_visible_line(&cells[i].number)).max().unwrap_or(0))
+    let number_widths = (0..with_figures).map(|i| rows.iter().map(|(_, _, cells)| calculate_widest_visible_line(&cells[i].number)).max().unwrap_or(0))
             .collect::<Vec<_>>();
-    let slot_widths = (0..with_figures).map(|i| rows.iter().map(|(_,cells)| calculate_widest_visible_line(&cells[i].slot)).max().unwrap_or(0))
+    let slot_widths = (0..with_figures).map(|i| rows.iter().map(|(_, _, cells)| calculate_widest_visible_line(&cells[i].slot)).max().unwrap_or(0))
             .collect::<Vec<_>>();
 
     let inner_widths = std::iter::once(name_width).chain((0..with_figures).map(|i| {
@@ -2116,7 +2176,7 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, Vec<Boxe
 
     let longest_section = rows.iter().zip(kinds.iter())
             .filter(|(_, kind)| kind.is_sub_row())
-            .map(|((name, _), _)| calculate_widest_visible_line(find_section_name_in(name)))
+            .map(|((name, _, _), _)| calculate_widest_visible_line(find_section_name_in(name)))
             .max().unwrap_or(0);
     let mut lines = vec![frame("┌", "┬", "┐", "─", BORDER_OUTER, false)];
 
@@ -2136,7 +2196,7 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, Vec<Boxe
     // The lines that bound the body, and the line that opens a module's section, are solid and in
     // the frame's shade. Everything inside is dashed and dim, the notes included, since those are
     // read with the rows and not with the total.
-    for (position, (name, cells)) in rows.iter().enumerate() {
+    for (position, (name, depth, cells)) in rows.iter().enumerate() {
         let kind = kinds[position];
         let is_body = !matches!(kind, RowKind::Module | RowKind::Total);
         // A module's name row is closed on both sides and not only above: without the second rule
@@ -2171,7 +2231,7 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, Vec<Boxe
             let marker = if kind == RowKind::File {BOXED_FILE_MARKER} else {BOXED_MARKER};
             let text = format!("{marker} {}", find_section_name_in(name));
             let indent = inner_widths[0].saturating_sub(2 + longest_section);
-            " ".repeat(if kind == RowKind::File {indent} else {indent / 2}) + &text
+            " ".repeat(if kind == RowKind::File {indent} else {indent / 2 + 2 * depth}) + &text
         } else {
             name.clone()
         };
@@ -2248,15 +2308,16 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
                     content_info.calculate_comment_lines(columns.model));
             lines.push(columns.append_size(&theme.arrow, &row, &format_size(theme, content_info.bytes), block_width));
             let parts = find_parts_of(group, lang_name, content_info);
+            for (part, branch) in parts.iter().zip(format_branches(parts.iter().map(|part| part.depth))) {
+                lines.push(format_list_sub_row(theme, columns, indent, &branch, &part.name, &part.stats, part.kind, block_width));
+            }
             let of_language = group.files.get(lang_name.as_str());
             let files = of_language.map(|rows| rows.shown.as_slice()).unwrap_or_default();
             let complete = of_language.is_none_or(|rows| rows.hidden == 0);
-            let (parts_end, files_end) = (parts.len(), parts.len() + files.len());
-            for (at, (branch_name, stats, kind)) in parts.iter().map(|(part, stats, kind)| (part.as_str(), Cow::Borrowed(stats), *kind))
-                    .chain(files.iter().map(|(path, file)| (path.as_ref(), find_shown_stats_of(file, group.leaves_tests_out()), RowKind::File)))
-                    .enumerate() {
-                let last = at + 1 == parts_end || (at + 1 == files_end && complete);
-                lines.push(format_list_sub_row(theme, columns, indent, branch_name, &stats, kind, last, block_width));
+            for (at, (path, file)) in files.iter().enumerate() {
+                let branch = find_file_branch_marker(at + 1 == files.len() && complete);
+                lines.push(format_list_sub_row(theme, columns, indent, branch, path,
+                        &find_shown_stats_of(file, group.leaves_tests_out()), RowKind::File, block_width));
             }
             if should_print_keywords {
                 let keywords = get_keywords_as_str(theme, &content_info.keyword_occurences, None, columns.calculate_words_start(), block_width);
@@ -2270,10 +2331,9 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
     lines
 }
 
-fn format_list_sub_row(theme: &Theme, columns: &Columns, indent: &str, name: &str, stats: &Stats,
-        kind: RowKind, last: bool, block_width: usize) -> String
+fn format_list_sub_row(theme: &Theme, columns: &Columns, indent: &str, branch: &str, name: &str, stats: &Stats,
+        kind: RowKind, block_width: usize) -> String
 {
-    let branch = if kind == RowKind::File {find_file_branch_marker(last)} else {find_branch_marker(last)};
     let styles = SubRowStyles::of(theme, kind);
     let painted_name = format!("{indent}{BRANCH_INDENT}{}{}", styles.branch.paint(branch), styles.name.paint(name));
     let row = columns.format_nested_row(theme, &styles, &painted_name,
@@ -2332,10 +2392,11 @@ impl Columns {
                 // The markers are measured and not assumed, so changing one cannot leave this column
                 // a character short of what gets drawn in it.
                 let under = indent + BRANCH_INDENT.len();
-                let branch = under + calculate_widest_visible_line(find_branch_marker(false));
-                for (part, stats, _) in find_parts_of(group, name, content_info) {
-                    columns.name = columns.name.max(calculate_widest_visible_line(&part) + branch);
-                    columns.measure(&stats);
+                let parts = find_parts_of(group, name, content_info);
+                for (part, branch) in parts.iter().zip(format_branches(parts.iter().map(|part| part.depth))) {
+                    columns.name = columns.name.max(under + calculate_widest_visible_line(&branch)
+                            + calculate_widest_visible_line(&part.name));
+                    columns.measure(&part.stats);
                 }
                 let file_branch = under + calculate_widest_visible_line(find_file_branch_marker(false));
                 for (path, file) in group.files.get(name.as_str()).map(|rows| rows.shown.as_slice()).unwrap_or_default() {
@@ -2499,7 +2560,8 @@ fn format_sum_lines(theme: &Theme, per_language: &HashMap<String,Stats>, total: 
             total.calculate_comment_lines(columns.model));
     lines.push(columns.append_size(&theme.arrow, &row, &format_size(theme, total.bytes), block_width));
     if let Some(tests) = tests {
-        lines.push(format_list_sub_row(theme, columns, "", TESTS_NAME, tests, RowKind::Tests, true, block_width));
+        lines.push(format_list_sub_row(theme, columns, "", find_branch_marker(true), TESTS_NAME, tests, RowKind::Tests,
+                block_width));
     }
 
     if should_print_keywords {
@@ -3220,6 +3282,20 @@ mod tests {
         reading
     }
 
+    fn attach_sections(mut reading: crate::diff::Reading, sections: HashMap<String, HashMap<String, Stats>>)
+            -> crate::diff::Reading
+    {
+        reading.result.modules[0].nested_languages = sections.clone();
+        reading.result.nested_languages = sections;
+        reading
+    }
+
+    // JavaScript grew since and Python is new, so a section that only one reading holds is drawn too
+    fn earlier_sections() -> HashMap<String, HashMap<String, Stats>> {
+        hashmap!["HTML".to_owned() => hashmap![
+                "JavaScript".to_owned() => crate::test_support::plain_stats_of(2, 3600, 180, 164, 0, hashmap![])]]
+    }
+
     fn render_every_layout() -> String {
         // Not left to the absence of a terminal: CLICOLOR_FORCE overrides that, and the verification
         // protocol tells the reader to export it, so the same shell that ran a manual comparison
@@ -3329,6 +3405,8 @@ mod tests {
                 format_table_lines(theme, &with_tests_split, &total, true, &[], shown)));
         cases.push(("boxed, with tests split".to_owned(),
                 format_boxed_lines(theme, &with_tests_split, &total, true, &[], shown)));
+        cases.push(("markdown, with tests split".to_owned(),
+                format_markdown_lines(theme, &with_tests_split, &total, true, &[], shown)));
 
         // Java is tests whole, so it has no row with the tests removed
         let removed = ShownFigures::of(&content_info, &total, &tests, true);
@@ -3534,8 +3612,11 @@ mod tests {
         cases.push(("comparison, with files, boxed".to_owned(),
                 headed(format_boxed_comparison_lines(theme, &rows, ViewSettings::of(&config)), &before, &now)));
 
-        let (before, now) = (attach_tests(reading_of("older.json", EARLIER, without_modules(&earlier)), earlier_tests()),
-                attach_tests(reading_of("newer.json", LATER, without_modules(&modules)), sample_tests()));
+        let (before, now) = (
+                attach_sections(attach_tests(reading_of("older.json", EARLIER, without_modules(&earlier)), earlier_tests()),
+                        earlier_sections()),
+                attach_sections(attach_tests(reading_of("newer.json", LATER, without_modules(&modules)), sample_tests()),
+                        sample_sections()));
         let (rows, _) = create_compared_rows(None, &before.result, &now.result, None, &config);
         cases.push(("comparison, with tests".to_owned(),
                 headed(format_comparison_lines(theme, &rows, ViewSettings::of(&config)), &before, &now)));
@@ -3546,6 +3627,10 @@ mod tests {
         let (rows, _) = create_compared_rows(None, &before.result, &now.result, None, &split);
         cases.push(("comparison, with tests split".to_owned(),
                 headed(format_comparison_lines(theme, &rows, ViewSettings::of(&split)), &before, &now)));
+        cases.push(("comparison, with tests split, boxed".to_owned(),
+                headed(format_boxed_comparison_lines(theme, &rows, ViewSettings::of(&split)), &before, &now)));
+        cases.push(("comparison, with tests split, markdown".to_owned(),
+                format_markdown_comparison_lines(theme, &rows, ViewSettings::of(&split))));
 
         // The same two readings with a second axis through them, which is shown because they named
         // the same modules
@@ -3805,7 +3890,7 @@ mod tests {
     fn a_header_that_arrives_painted_is_measured_by_what_it_draws() {
         let theme = Theme::default();
         let painted = format!("\u{1b}[38;2;181;169;138m{SORTED_DESCENDING}\u{1b}[0m Lines");
-        let rows = vec![("Rust".to_owned(), vec![
+        let rows = vec![("Rust".to_owned(), 0, vec![
                 BoxedCell { number: "18".to_owned(), slot: "100.00%".to_owned() },
                 BoxedCell { number: "9,355".to_owned(), slot: "100.00%".to_owned() }])];
 
@@ -3903,16 +3988,16 @@ mod tests {
                 files: HashMap::new(), total: Cow::Borrowed(&total), baseline: None };
         let whole = content_info.get("HTML").unwrap();
         let sections = find_parts_of(&group, "HTML", whole);
-        assert_eq!(format!("HTML {SHELL_SUFFIX}"), sections[0].0, "the shell is not the first row");
+        assert_eq!(format!("HTML {SHELL_SUFFIX}"), sections[0].name, "the shell is not the first row");
         assert_eq!(vec!["JavaScript".to_owned(), "Python".to_owned()],
-                sections[1..].iter().map(|(name, _, _)| name.clone()).collect::<Vec<_>>(),
+                sections[1..].iter().map(|part| part.name.clone()).collect::<Vec<_>>(),
                 "the sections are not ordered by lines");
         let code_of = |stats: &Stats| stats.calculate_code_lines(CountingModel::Content);
-        assert_eq!(whole.lines - 300, sections[0].1.lines);
-        assert_eq!(code_of(whole) - 273, code_of(&sections[0].1));
+        assert_eq!(whole.lines - 300, sections[0].stats.lines);
+        assert_eq!(code_of(whole) - 273, code_of(&sections[0].stats));
         // Every column answers "of the container", so the file count of a section is how many of its
         // files hold that section, and the shell is in all of them
-        assert_eq!(whole.files, sections[0].1.files);
+        assert_eq!(whole.files, sections[0].stats.files);
 
         // A document holding sections larger than their container must not take the run down. Built
         // by hand and not through the helper, whose job is to refuse counts no file could have
@@ -3924,7 +4009,7 @@ mod tests {
         let group = Group { name: None, languages: vec!["HTML".to_owned()], hidden: 0,
                 per_language: Cow::Borrowed(&content_info), nested: &broken, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share,
                 files: HashMap::new(), total: Cow::Borrowed(&total), baseline: None };
-        let shell = &find_parts_of(&group, "HTML", whole)[0].1;
+        let shell = &find_parts_of(&group, "HTML", whole)[0].stats;
         for model in [CountingModel::Content, CountingModel::Region] {
             assert!(shell.calculate_code_lines(model) + shell.calculate_comment_lines(model) <= shell.lines,
                     "under {} the shell holds more code and comments than it has lines: {shell:?}",
@@ -3942,6 +4027,69 @@ mod tests {
         let own = calculate_own_share(&whole, Some(&sections), Some(&tests));
         assert_eq!((3, 250), (own.files, own.lines));
         assert_eq!(hashmap!["structs".to_owned() => 6, "enums".to_owned() => 2], own.keyword_occurences);
+    }
+
+    #[test]
+    fn under_split_the_sections_of_a_container_hang_under_its_production_row_and_take_their_shares_of_it() {
+        fn group_of<'a>(content_info: &'a HashMap<String, Stats>, total: &'a Stats,
+                sections: &'a HashMap<String, HashMap<String, Stats>>, tests: &'a HashMap<String, TestCode>,
+                tests_breakdown: TestsBreakdown) -> Group<'a>
+        {
+            Group { name: None, languages: vec!["HTML".to_owned()], hidden: 0, per_language: Cow::Borrowed(content_info),
+                    nested: sections, tests, tests_breakdown, files: HashMap::new(), total: Cow::Borrowed(total), baseline: None }
+        }
+        colored::control::set_override(false);
+
+        let (_, content_info, total) = sample_data();
+        let (sections, tests) = (sample_sections(), sample_tests());
+        let own = format!("HTML {SHELL_SUFFIX}");
+        let shape = |names: &[(&str, usize)]| names.iter().map(|(name, depth)| ((*name).to_owned(), *depth)).collect::<Vec<_>>();
+        let shape_of = |group: &Group| find_parts_of(group, "HTML", &content_info["HTML"]).into_iter()
+                .map(|part| (part.name, part.depth)).collect::<Vec<_>>();
+        let nested = shape(&[(&own, 1), ("JavaScript", 1), ("Python", 1)]);
+        let mut split = shape(&[("production", 0)]);
+        split.extend(nested.iter().cloned());
+        split.extend(shape(&[("tests", 0)]));
+        assert_eq!(split, shape_of(&group_of(&content_info, &total, &sections, &tests, TestsBreakdown::Split)));
+        assert_eq!(shape(&[(&own, 0), ("JavaScript", 0), ("Python", 0), ("tests", 0)]),
+                shape_of(&group_of(&content_info, &total, &sections, &tests, TestsBreakdown::Share)));
+        assert_eq!(shape(&[(&own, 0), ("JavaScript", 0), ("Python", 0)]),
+                shape_of(&group_of(&content_info, &total, &sections, &NO_TESTS, TestsBreakdown::Split)));
+        assert_eq!(vec!["└─ ", "    └─ "], format_branches([0, 1]));
+
+        // HTML holds 396 lines, 40 of them tests
+        let groups = [group_of(&content_info, &total, &sections, &tests, TestsBreakdown::Split)];
+        let rows = create_named_rows(&groups, false, &[]);
+        assert_eq!(vec!["HTML", " ├─ production", " │   ├─ HTML itself", " │   ├─ JavaScript", " │   └─ Python", " └─ tests"],
+                rows.iter().map(|row| row.cell.as_str()).collect::<Vec<_>>());
+        let against = rows.iter().skip(1)
+                .map(|row| find_row_figures(row, &total, CountingModel::Content).unwrap().against_lines).collect::<Vec<_>>();
+        assert_eq!(vec![396, 356, 356, 356, 396], against);
+
+        let comparison_under = |config: &crate::config_manager::Configuration| crate::diff::Comparison::of(
+                attach_sections(attach_tests(reading_of("older.json", "2026-07-30T14:22:07+03:00",
+                        without_modules(&earlier_modules())), earlier_tests()), earlier_sections()),
+                attach_sections(attach_tests(reading_of("newer.json", "2026-08-06T09:41:00+03:00",
+                        without_modules(&sample_modules())), sample_tests()), sample_sections()),
+                config, Vec::new());
+        let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        config.view.tests_breakdown = TestsBreakdown::Split;
+        for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
+            for output in [config_manager::OutputFormat::Text, config_manager::OutputFormat::Markdown] {
+                config.view.layout = layout;
+                config.view.output = output;
+                let comparison = comparison_under(&config);
+                crate::present::present(&comparison.subject.result.clone(), Some(&comparison), &config);
+            }
+        }
+        let comparison = comparison_under(&config);
+        let (rows, _) = create_compared_rows(None, &comparison.baseline.result, &comparison.subject.result, None, &config);
+        let under_html = rows.iter().skip_while(|row| row.name != "HTML").skip(1)
+                .take_while(|row| row.kind != RowKind::Language).collect::<Vec<_>>();
+        assert_eq!(split, under_html.iter().map(|row| (find_section_name_in(&row.name).to_owned(), row.depth))
+                .collect::<Vec<_>>());
+        assert_eq!((396, 356), (under_html[0].baseline.lines, under_html[0].subject.lines),
+                "the production row is the language less its tests on each side, and HTML had none before");
     }
 
     #[test]
@@ -3980,7 +4128,7 @@ mod tests {
                     let rust = &groups[0].per_language["Rust"];
                     assert_eq!(if left_out {9008 - 2140} else {9008}, rust.lines, "{breakdown:?}, hidden {hidden}");
                     assert_eq!(if left_out || hidden {0} else {1}, find_parts_of(&groups[0], "Rust", rust).iter()
-                            .filter(|(_, _, kind)| *kind == RowKind::Tests).count(), "{breakdown:?}, hidden {hidden}");
+                            .filter(|part| part.kind == RowKind::Tests).count(), "{breakdown:?}, hidden {hidden}");
                 }
             }
         }
