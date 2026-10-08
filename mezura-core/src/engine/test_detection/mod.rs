@@ -904,6 +904,25 @@ mod tests {
     }
 
     #[test]
+    fn a_file_marker_inside_the_test_code_a_marker_opened_belongs_to_that_test() {
+        let language = Language::new("Both", ["bo"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
+                .with_tests(["unittest"], &[]).with_test_file_markers(["@Test"]);
+        let marker_of = |source: &str| {
+            let mut walk = TestWalk::of(&language, source, true, TestsByPath::Nothing)?;
+            let mut line_start = 0;
+            for line in source.split_inclusive('\n') {
+                let raw_line = line.trim_end_matches('\n');
+                let code = [(0, raw_line.trim_ascii().len())];
+                walk.observe_line(line_start, raw_line, true, &code, LineClass::WordsInCode, raw_line.len());
+                line_start += line.len();
+            }
+            walk.get_file_marker()
+        };
+        assert_eq!(None, marker_of("int x;\nunittest { @Test }\nint y;\n"), "an annotation inside a test block made the file whole");
+        assert_eq!(Some((26, 0)), marker_of("unittest { @Test }\nint y; @Test void t();\n"));
+    }
+
+    #[test]
     fn a_language_with_no_markers_or_a_file_with_none_gets_no_walk() {
         let d = Language::new("D", ["d"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
                 .with_tests(["unittest"], &[]);

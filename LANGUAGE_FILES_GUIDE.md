@@ -298,10 +298,12 @@ own, so the byte before it and the byte after it may be no letter, digit or unde
 byte after it may not be a `.` either. That is why C#'s are written with the bracket open: `[Test`
 matches `[Test]`, `[Test, Order(1)]` and `[Test(Description = "x")]`, and refuses `[TestFixture]`,
 which gets a line of its own, an indexer `map[Test]`, and a collection expression `[Test.Of(a)]`.
-A marker inside a string or a comment is text. List only what a test framework defines and no
-production library writes: `@Before` is AspectJ's as much as JUnit 4's, so it is not on Java's
-list. A file a `!` pattern of `--tests` took back is not read for these, since the `!` answered
-the question they answer.
+A marker inside a string or a comment is text. Beside `MARKERS`, a file marker inside the test code
+one of them opened belongs to that test and leaves the rest of the file as it was, since an
+annotation inside a test block says nothing about the code around it. List only what a test
+framework defines and no production library writes: `@Before` is AspectJ's as much as JUnit 4's,
+so it is not on Java's list. A file a `!` pattern of `--tests` took back is not read for these,
+since the `!` answered the question they answer.
 
 `FILE NAMES` takes three shapes only: `*suffix`, `prefix*` and a whole name, case-sensitive. It is
 for a name the toolchain defines, the way the go tool builds `*_test.go` only for `go test` and a
