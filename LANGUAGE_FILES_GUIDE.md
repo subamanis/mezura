@@ -64,6 +64,7 @@ Three things to know before you start:
 | `Multi line raw string symbols` *(opt)* | Crosses lines, nothing escapes | `` ` `` |
 | `Paired string openers` *(opt)* | Opens with one symbol, closes with another | `r#" @"` |
 | `Paired string closers` | Their closers, in the same order | `"# "` |
+| `Paired strings escaped by doubling` *(opt)* | The openers of the pairs whose closer written twice is one quote of the text | `@"` |
 | `Escape character` | Required by any language that declares a string. See below | `\` |
 | `Line continuation` *(opt)* | Joins a line to the next when it ends the line | `\` |
 | `Continues` | What the joining reaches: `strings`, `comments`, or both | `strings comments` |
@@ -131,6 +132,12 @@ the file when the backslash is declared as an escape and SQL has none.
 This says which character escapes, not where it is obeyed. Whether it works inside one form that
 crosses lines is decided by the block that form sits in, above. A language with no strings at all,
 like HTML, can leave the block out.
+
+A pair has no escape character inside it, and some write their closer twice for one quote of the
+text: `""` inside C#'s and F#'s `@"..."`. The openers of those pairs go under `Paired strings
+escaped by doubling`, right after the closers, and naming an opener no pair declares refuses the
+file. A string that opens and closes with the same symbol needs nothing of the kind, since
+`'it''s'` read as two strings side by side is the same reading.
 
 ## Which comment block
 

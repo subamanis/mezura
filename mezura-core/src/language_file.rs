@@ -102,6 +102,7 @@ const MULTILINE_STRINGS        : &str = "Multi line string symbols";
 const MULTILINE_RAW_STRINGS    : &str = "Multi line raw string symbols";
 const PAIRED_STRING_OPENERS    : &str = "Paired string openers";
 const PAIRED_STRING_CLOSERS    : &str = "Paired string closers";
+const PAIRED_STRINGS_ESCAPED_BY_DOUBLING : &str = "Paired strings escaped by doubling";
 const CHARACTER_LITERALS       : &str = "Character literal symbols";
 const ESCAPE_CHARACTER         : &str = "Escape character";
 const ESCAPES_NOTHING          : &str = "none";
@@ -359,8 +360,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     }
 
     // Strings that open with one symbol and close with another, 'r#"' with '"#'. The two value
-    // lines are lists paired by position, the shape the multiline comment block also has. Nothing
-    // escapes inside one, which is the reason such a form has a distinct opener at all.
+    // lines are lists paired by position, the shape the multiline comment block also has. No escape
+    // byte works inside one, which is the reason such a form has a distinct opener at all.
     let mut string_pairs = Vec::new();
     if header == PAIRED_STRING_OPENERS {
         let openers = split_line_on_whitespace(&read_value_line(lines)?);
@@ -368,6 +369,15 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         let closers = split_line_on_whitespace(&read_value_line(lines)?);
         if closers.len() != openers.len() {return None;}
         string_pairs = openers.into_iter().zip(closers).collect::<Vec<_>>();
+        header = read_next_header(lines)?;
+    }
+    let mut doubling_openers = Vec::new();
+    if header == PAIRED_STRINGS_ESCAPED_BY_DOUBLING {
+        doubling_openers = split_line_on_whitespace(&read_value_line(lines)?);
+        if doubling_openers.is_empty()
+                || !doubling_openers.iter().all(|named| string_pairs.iter().any(|(open, _)| open == named)) {
+            return None;
+        }
         header = read_next_header(lines)?;
     }
 
@@ -580,8 +590,12 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             .with_symbols(string_symbols)
             .with_char_literals(char_literals)
             .with_multiline_strings(multiline_strings)
-            .with_raw_multiline_strings(raw_multiline_strings)
-            .with_string_pairs(&string_pairs);
+            .with_raw_multiline_strings(raw_multiline_strings);
+    let strings = string_pairs.iter().fold(strings, |strings, pair| if doubling_openers.contains(&pair.0) {
+        strings.with_string_pairs_escaped_by_doubling(std::slice::from_ref(pair))
+    } else {
+        strings.with_string_pairs(std::slice::from_ref(pair))
+    });
 
     let mut language = Language::new(lang_name, extensions, strings, comment_symbols,
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
@@ -1188,6 +1202,29 @@ pl      Perl, Prolog
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
             assert!(language.strings.get_multiline_strings().iter().any(|crossing| !crossing.escapes),
                     "{name} lost its raw crossing string declaration");
+        }
+    }
+
+    #[test]
+    fn a_pair_escaped_by_doubling_is_named_by_an_opener_the_file_declared() {
+        let good = "Language\nVerbatimlike\n\nExtensions\nvbl\n\nString symbols\n\"\n\n\
+                Paired string openers\n@\" r\"\nPaired string closers\n\" \"\n\
+                Paired strings escaped by doubling\n@\"\n\nEscape character\n\\\n\nComment symbols\n//\n";
+        let parsed = parse_language(good).expect("the declaration must parse");
+        let doubling = MultilineString { escapes_by_doubling: true, ..MultilineString::of("@\"", "\"") };
+        assert_eq!(vec![doubling, MultilineString::of("r\"", "\"")], parsed.strings.get_multiline_strings());
+
+        let undeclared = good.replace("doubling\n@\"", "doubling\n$\"");
+        assert!(parse_language(&undeclared).is_none(), "an opener no pair declared was accepted");
+        let empty = good.replace("doubling\n@\"", "doubling\n");
+        assert!(parse_language(&empty).is_none());
+        let without_pairs = good.replace("Paired string openers\n@\" r\"\nPaired string closers\n\" \"\n", "");
+        assert!(parse_language(&without_pairs).is_none(), "the block was accepted with no pair above it");
+
+        for name in ["C#.txt", "F#.txt"] {
+            let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
+            assert!(language.strings.get_multiline_strings().iter().any(|crossing| crossing.escapes_by_doubling),
+                    "{name} lost its pair escaped by doubling");
         }
     }
 

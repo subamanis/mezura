@@ -17,6 +17,8 @@ Paired string openers
 @" @$"
 Paired string closers
 " "
+Paired strings escaped by doubling
+@" @$"
 
 Escape character
 \

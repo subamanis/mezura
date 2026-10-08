@@ -1834,7 +1834,7 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language
 -> (LineInfo, OpenedHere)
 {
     scan_line(line, candidates, language, buffers);
-    let swallowing_opener = resolve_string_delimiters(language, open_str_symbol, buffers, cancelled);
+    let swallowing_opener = resolve_string_delimiters(language, line.as_bytes(), open_str_symbol, buffers, cancelled);
     let ScanBuffers { strings: str_indices, string_symbols: str_symbols, comments: comment_indices,
             com_starts: com_start_indices, com_ends: com_end_indices, code_ranges, .. } = buffers;
 
@@ -2248,7 +2248,7 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
 // cannot open, so a stray '"#' sitting in code is text and not the start of anything.
 // Answers with the position of an opener that dropped symbols no quote after it could close, and
 // was still open when the line ended. An opener named in 'cancelled' is passed over.
-fn resolve_string_delimiters(language: &Language, open_str_symbol: Option<u8>,
+fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_symbol: Option<u8>,
     buffers: &mut ScanBuffers, cancelled: &[usize]) -> Option<usize>
 {
     let ScanBuffers { raw_strings, strings, string_symbols, .. } = buffers;
@@ -2269,9 +2269,14 @@ fn resolve_string_delimiters(language: &Language, open_str_symbol: Option<u8>,
                     dropped_a_symbol = true;
                     continue;
                 }
+                let closer = language.get_string_pair_of(symbol).1.as_bytes();
+                if language.string_escapes_by_doubling(symbol) && line_bytes[at + closer.len()..].starts_with(closer) {
+                    consumed_up_to = at + 2 * closer.len();
+                    continue;
+                }
                 open = None;
                 opened_at = None;
-                language.get_string_pair_of(symbol).1.len()
+                closer.len()
             }
             None => {
                 // A closer opens nothing, and neither does a raw symbol the language escaped.
@@ -2427,7 +2432,7 @@ mod tests {
     fn str_delimiters(line: &str, language: &Language, open_str_symbol: Option<u8>) -> (Vec<usize>, Vec<u8>) {
         let mut buffers = ScanBuffers::default();
         scan_line(line, Candidates::Unsearched, language, &mut buffers);
-        resolve_string_delimiters(language, open_str_symbol, &mut buffers, &[]);
+        resolve_string_delimiters(language, line.as_bytes(), open_str_symbol, &mut buffers, &[]);
         (buffers.strings, buffers.string_symbols)
     }
 
@@ -3134,7 +3139,12 @@ mod tests {
                     .with_string_pairs(&[("@\"", "\"")]),
             ["//"], &[("/*", "*/")], []));
 
-    // The shape of the shipped Rust file: a crossing quote, and the character literal beside it
+    static CSHARP_DOUBLING : LazyLock<Language> = LazyLock::new(|| Language::new(
+            "csharp-doubling", ["cs"], build_backslashed_quotes().with_multiline_strings(["\"\"\""])
+                    .with_string_pairs_escaped_by_doubling(&[("@\"", "\"")]),
+            ["//"], &[("/*", "*/")], []));
+
+    // The shape of the shipped Rust file, a crossing quote with the character literal beside it
     static RUST_CHARS : LazyLock<Language> = LazyLock::new(|| Language::new(
             "rust-chars", ["rs"], StringRules::escaping_with(b'\\').with_char_literals(["'"])
                     .with_multiline_strings(["\""]),
@@ -3353,6 +3363,20 @@ mod tests {
         // C#'s verbatim string closes at the plain quote its pair declares, backslash and all
         assert_eq!(TextInfo::from_slice_w_literal("var s =  + x;"),
                 bounds_multi(r#"var s = @"C:\temp\" + x;"#, &CSHARP_VERBATIM, None, None));
+    }
+
+    #[test]
+    fn a_doubled_closer_inside_a_pair_escaped_by_doubling_is_text() {
+        assert_eq!(TextInfo::from_slice_w_literal("var s =  + x;"),
+                bounds_multi(r#"var s = @"say ""hi"" now" + x;"#, &CSHARP_DOUBLING, None, None));
+        assert_eq!(TextInfo::from_slice_w_literal("var s = ;"),
+                bounds_multi(r#"var s = @"ends in a quote""";"#, &CSHARP_DOUBLING, None, None));
+        assert_eq!(TextInfo::new(Some("var s = ".to_owned()), true, None, Some(2)),
+                bounds_multi(r##"var s = @"one ""two"""##, &CSHARP_DOUBLING, None, None));
+        assert_eq!(TextInfo::from_slice_w_literal(";"),
+                bounds_multi(r#"// three ""four"" five";"#, &CSHARP_DOUBLING, None, Some(2)));
+        assert_ne!(Some(2), bounds_multi(r##"var s = @"one ""two"""##, &CSHARP_VERBATIM, None, None).open_str_symbol_after,
+                "a pair that does not escape by doubling carried its string past a doubled closer");
     }
 
     // One symbol at both ends says nothing about whether a backslash cancels it, and reading it off

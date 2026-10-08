@@ -1,4 +1,4 @@
-files=87 lines=1146 code=616 comments=268
+files=87 lines=1149 code=619 comments=268
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -22,8 +22,8 @@ C Header
   words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=0 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   structs=1
 C#
-  files=1 lines=18 code=12 comments=3
-  words_in_code=9 string_content=3 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
+  files=1 lines=21 code=15 comments=3
+  words_in_code=10 string_content=5 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   classes=1 interfaces=1 structs=1
 C++
   files=1 lines=13 code=7 comments=3

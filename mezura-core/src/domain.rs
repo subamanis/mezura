@@ -215,6 +215,12 @@ impl Language {
         symbol as usize >= self.strings.get_symbols().len() + self.strings.get_char_literals().len()
     }
 
+    pub(crate) fn string_escapes_by_doubling(&self, symbol: u8) -> bool {
+        let first_crossing = self.strings.get_symbols().len() + self.strings.get_char_literals().len();
+        (symbol as usize).checked_sub(first_crossing)
+                .is_some_and(|crossing| self.strings.get_multiline_strings()[crossing].escapes_by_doubling)
+    }
+
     // The one place that knows the numbering: a pair kind added later is one match arm here and not
     // seven pieces of arithmetic spread over two files.
     pub(crate) fn get_comment_pair_of(&self, symbol: u8) -> CommentPair<'_> {
@@ -348,6 +354,15 @@ impl StringRules {
         self
     }
 
+    /// The same, for pairs inside which the closer written twice is one quote of the text, C#'s
+    /// `@"` with `"`.
+    pub fn with_string_pairs_escaped_by_doubling(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
+        self.multiline.extend(pairs.iter().map(|(open, close)| MultilineString {
+            escapes_by_doubling: true, ..MultilineString::of(open.as_ref(), close.as_ref())
+        }));
+        self
+    }
+
     /// The byte that cancels the symbol after it, if this language has one.
     pub fn get_escape(&self) -> Option<u8> {
         self.escape
@@ -383,23 +398,25 @@ pub struct MultilineString {
     /// The text that closes it, the same as the opener for a symmetrical form.
     pub close : String,
     /// Whether the language's escape byte works inside it.
-    pub escapes : bool
+    pub escapes : bool,
+    /// Whether its closer written twice is one quote of the text, C#'s `""` inside `@"..."`.
+    pub escapes_by_doubling : bool
 }
 
 impl MultilineString {
     /// One symbol at both ends, escapes obeyed inside.
     pub fn escaping(symbol: &str) -> MultilineString {
-        MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: true }
+        MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: true, escapes_by_doubling: false }
     }
 
     /// One symbol at both ends, nothing escaping inside.
     pub fn raw(symbol: &str) -> MultilineString {
-        MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: false }
+        MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: false, escapes_by_doubling: false }
     }
 
     /// Different text at each end, which is raw by construction.
     pub fn of(open: &str, close: &str) -> MultilineString {
-        MultilineString { open: open.to_owned(), close: close.to_owned(), escapes: false }
+        MultilineString { open: open.to_owned(), close: close.to_owned(), escapes: false, escapes_by_doubling: false }
     }
 }
 

@@ -27,6 +27,9 @@ New:
   names the files that declare it as a module, the one holding the marker last, and
   `TestFileRule::FileMarker` the annotation found in its code with its line.
 - `.t` files are counted as Perl.
+- `MultilineString::escapes_by_doubling` and `StringRules::with_string_pairs_escaped_by_doubling`,
+  read from `Paired strings escaped by doubling`, for a pair whose closer written twice is one quote
+  of the text, `""` inside C#'s and F#'s `@"..."`.
 
 Changed:
 
@@ -34,9 +37,9 @@ Changed:
   at any depth below the folder that holds the target and no folder above it, a pattern starting
   with `./` or `../` or written as a full path names one place, a trailing `/` means a folder
   only, `x/**` means the folder `x`, and names are matched with their case.
-- `EngineConfig`, `Language`, `ExplainedLine`, `FileExplanation`, `RunResult`, `ModuleResult` and
-  `FileEntry` gained public fields, so a struct literal of any of them written outside the crate
-  stops compiling until it names them.
+- `EngineConfig`, `Language`, `ExplainedLine`, `FileExplanation`, `RunResult`, `ModuleResult`,
+  `FileEntry` and `MultilineString` gained public fields, so a struct literal of any of them
+  written outside the crate stops compiling until it names them.
 
 Fixes:
 
