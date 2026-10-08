@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use memchr::memmem;
 
 use crate::{Language, LineClass, TestFileName};
+use crate::engine::file_parser::BYTE_ORDER_MARK;
 use crate::engine::is_the_same_name;
 use crate::engine::path_patterns::{PathPatternMatcher, PatternMatch};
 
@@ -190,8 +191,11 @@ impl<'a> TestWalk<'a> {
         ranges.iter().any(|&(from, to)| from <= in_line && in_line + width <= to)
     }
 
+    // The last byte of a byte order mark is above ASCII, which would read as a letter glued to a
+    // marker opening the file
     fn stands_as_a_word(&self, at: usize, width: usize) -> bool {
-        let before = at.checked_sub(1).map(|i| self.contents[i]);
+        let opens_the_file = at == 0 || (at == BYTE_ORDER_MARK.len() && self.contents.starts_with(BYTE_ORDER_MARK));
+        let before = (!opens_the_file).then(|| self.contents[at - 1]);
         let after = self.contents.get(at + width).copied();
         !before.is_some_and(is_word_byte) && !after.is_some_and(is_word_byte)
     }
@@ -654,6 +658,13 @@ mod tests {
         assert!(matches!(walk.read_marker(22, "unittest", 0, &ranges), Some(Marker::Extent { after: 30 })));
         assert!(walk.read_marker(39, "unittest", 0, &ranges).is_none());
         assert!(walk.read_marker(22, "unittest", 0, &[(0, 10)]).is_none());
+
+        let read_first = |source: &str| {
+            let walk = TestWalk::of(&language, source, true, TestsByPath::Nothing).unwrap();
+            walk.read_marker(3, "unittest", 0, &[(0, source.len())])
+        };
+        assert_eq!(Some(Marker::Extent { after: 11 }), read_first("\u{feff}unittest { }"), "a byte order mark hid the marker");
+        assert_eq!(None, read_first("€unittest { }"));
     }
 
     #[test]
@@ -882,6 +893,8 @@ mod tests {
         assert_eq!(Some((10, 1)), marker_of("[Factory] [Fact(Skip = \"x\")]", &[(0, 28)]));
         assert_eq!(None, marker_of("@TestOnly void t() {}", &[(0, 21)]));
         assert_eq!(None, marker_of("x@Test", &[(0, 6)]));
+        assert_eq!(Some((3, 0)), marker_of("\u{feff}@Test void t() {}", &[(0, 20)]), "a byte order mark hid the marker");
+        assert_eq!(None, marker_of("€@Test", &[(0, 8)]));
         assert_eq!(None, marker_of("list[Fact]", &[(0, 10)]), "an indexer was taken for an attribute");
         assert_eq!(None, marker_of("[Fact.Create(a)]", &[(0, 16)]), "a member access was taken for an attribute");
         assert_eq!(None, marker_of("@Test in a comment", &[(6, 18)]), "a marker outside the code ranges was taken");

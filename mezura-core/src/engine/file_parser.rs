@@ -22,6 +22,7 @@ use crate::engine::masks::is_ascii;
 use crate::engine::masks::BLOCK_BYTES;
 use crate::engine::test_detection::{Declaration, ModuleDeclarations, TestScope, TestWalk, TestsByPath};
 
+pub(crate) const BYTE_ORDER_MARK : &[u8] = b"\xef\xbb\xbf";
 pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
 #[cfg(unix)]
@@ -934,7 +935,7 @@ fn first_lines_of(buf: &str, lines: usize) -> &[u8] {
 
 // A byte order mark is not whitespace, so left in place it defeats every line-start rule.
 fn strip_bom(bytes: &[u8]) -> &[u8] {
-    bytes.strip_prefix(b"\xef\xbb\xbf".as_slice()).unwrap_or(bytes)
+    bytes.strip_prefix(BYTE_ORDER_MARK).unwrap_or(bytes)
 }
 
 fn first_line_of(head: &[u8]) -> &[u8] {

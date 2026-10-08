@@ -114,7 +114,8 @@ and every trap it is known to fall into, written adversarially: a test module th
 in a file proves nothing about the rule. Go and Perl hold a file of the name their toolchain defines
 and one that matches none. `java-annotations`, `kotlin-annotations` and `csharp-attributes` hold no
 build file at all: a file an annotation makes test code whole, one holding only a setup annotation,
-one with the annotation's arguments and a list of attributes, and a production file carrying every
+one with the annotation's arguments and a list of attributes, a C# one whose attribute opens the
+file behind a byte order mark, and a production file carrying every
 trap the word rule has to refuse, the annotation in a comment, in a string and in a text block,
 `@VisibleForTesting`, `@TestOnly`, Room's `@Ignore`, `[Category]`, an indexer and a collection
 expression. The other trees hold a build file with the directory it makes test code,

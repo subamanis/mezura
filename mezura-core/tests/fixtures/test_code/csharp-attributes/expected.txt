@@ -4,4 +4,5 @@ src/Parser.cs none
 src/ParserFacts.cs whole
 src/ParserCases.cs whole
 src/ParserFixture.cs whole
+src/ParserSuite.cs whole
 src/ParserTraits.cs none # wrong, an attribute written after a comma is not read
