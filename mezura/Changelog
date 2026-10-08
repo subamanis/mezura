@@ -38,6 +38,8 @@ Bugfixes:
   -> A full-path pattern works under a folder with brackets in its name and in any letter case.
   -> The note of '--diff' that took 'hide keywords' from a document no longer asks for a value to be
       typed that no command can type.
+  -> A C# interpolated verbatim string written '@$"' is read as a string across its lines, so a
+      '//' inside it is no longer a comment.
   -> In the table, the boxed table and a comparison, the branch before a nested language or a file
       takes the theme's 'nested-branch' or 'file-branch' color, as it already did in the list.
 
