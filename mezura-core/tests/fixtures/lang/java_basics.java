@@ -1,4 +1,4 @@
-// mezura-expect lines=19 code=10 comments=3 classes=2 interfaces=1
+// mezura-expect lines=20 code=11 comments=3 classes=2 interfaces=1
 package demo;
 
 /* block
@@ -8,6 +8,7 @@ public interface Greeter {
 }
 
 public class Hello implements Greeter {
+    char quote = '"'; String opener = "/*";
     public String greet() {
         return "// not a comment";
     }

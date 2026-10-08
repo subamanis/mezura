@@ -7,6 +7,9 @@ kt kts
 String symbols
 "
 
+Character literal symbols
+'
+
 Multi line raw string symbols
 """
 

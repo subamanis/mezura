@@ -1331,7 +1331,7 @@ pl      Perl, Prolog
         assert!(parse_language(&empty).is_none());
 
         // the shipped declarations that use the block
-        for name in ["Rust.txt", "D.txt"] {
+        for name in ["Rust.txt", "D.txt", "Java.txt", "Kotlin.txt", "C#.txt"] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
             assert_eq!(vec!["'".to_owned()], language.strings.get_char_literals(),
                     "{name} lost its character literal declaration");

@@ -44,6 +44,8 @@ Bugfixes:
       typed that no command can type.
   -> A C# interpolated verbatim string written '@$"' is read as a string across its lines, so a
       '//' inside it is no longer a comment.
+  -> In Java, Kotlin and C# a quote written as a character, '"', no longer opens a string, which
+      could turn the rest of the file into comment lines.
   -> In the table, the boxed table and a comparison, the branch before a nested language or a file
       takes the theme's 'nested-branch' or 'file-branch' color, as it already did in the list.
 

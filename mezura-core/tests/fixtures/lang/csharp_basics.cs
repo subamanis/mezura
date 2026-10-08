@@ -1,4 +1,4 @@
-// mezura-expect lines=17 code=11 comments=3 extra=3 classes=1 structs=1 interfaces=1
+// mezura-expect lines=18 code=12 comments=3 extra=3 classes=1 structs=1 interfaces=1
 using System;
 
 /* a block
@@ -8,6 +8,7 @@ interface IThing { }
 class Thing : IThing {
     struct Point { }
     string a = "// not a comment";
+    char quote = '"'; string opener = "/*";
     string b = @"C:\not\escaped";
     string d = @$"{a}
 second line";
