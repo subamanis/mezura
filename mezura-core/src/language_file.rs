@@ -122,6 +122,7 @@ const NESTED_LANGUAGE_DEFAULT  : &str = "Nested language default";
 const TESTS                    : &str = "Tests";
 const TEST_MARKERS             : &str = "MARKERS";
 const TEST_MODULES             : &str = "MODULES";
+const TEST_FILE_MARKERS        : &str = "FILE MARKERS";
 const TEST_FILE_NAMES          : &str = "FILE NAMES";
 const KEYWORD                  : &str = "Keyword";
 const KEYWORD_NAME             : &str = "NAME";
@@ -518,11 +519,13 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines);
     }
 
-    // Any of the three may be absent, all three may not, and the module word needs the markers,
-    // since a declaration is a seed only on a line a marker opened. A name of any other shape
+    // Any of the four may be absent, all four may not. The module word needs the markers, since a
+    // declaration is a seed only on a line a marker opened, and refuses the file markers, since no
+    // rule says what a file one of those made test code declares. A name of any other shape
     // refuses the file.
     let mut test_markers = Vec::new();
     let mut module_keyword = None;
+    let mut test_file_markers = Vec::new();
     let mut test_file_names = Vec::new();
     if header.as_deref() == Some(TESTS) {
         header = read_next_header(lines);
@@ -538,13 +541,19 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             module_keyword = Some(word.clone());
             header = read_next_header(lines);
         }
+        if header.as_deref() == Some(TEST_FILE_MARKERS) {
+            if module_keyword.is_some() {return None;}
+            test_file_markers = split_line_on_whitespace(&read_value_line(lines)?);
+            if test_file_markers.is_empty() {return None;}
+            header = read_next_header(lines);
+        }
         if header.as_deref() == Some(TEST_FILE_NAMES) {
             let written = split_line_on_whitespace(&read_value_line(lines)?);
             if written.is_empty() {return None;}
             test_file_names = written.iter().map(|name| TestFileName::of(name)).collect::<Option<Vec<_>>>()?;
             header = read_next_header(lines);
         }
-        if test_markers.is_empty() && module_keyword.is_none() && test_file_names.is_empty() {return None;}
+        if test_markers.is_empty() && module_keyword.is_none() && test_file_markers.is_empty() && test_file_names.is_empty() {return None;}
     }
 
     let mut keywords = Vec::new();
@@ -588,7 +597,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             .with_filenames(&filenames)
             .with_shebangs(&shebangs)
             .with_identification(&identifying_line_starts, &identifying_line_contains)
-            .with_tests(&test_markers, &test_file_names))
+            .with_tests(&test_markers, &test_file_names)
+            .with_test_file_markers(&test_file_markers))
 }
 
 /// Reads the file that settles contested extensions, and the lines of it that did not parse.
@@ -1276,10 +1286,32 @@ pl      Perl, Prolog
                 String symbols\n\n\nComment symbols\n//\n";
         assert!(parse_language(misplaced).is_none());
 
+        let file_markers_alone = good.replace("    MARKERS\n    #[ #![\n    MODULES\n    mod\n    FILE NAMES\n    tests.rs *_test.rs test_*\n",
+                "    FILE MARKERS\n    @Test [Fact\n");
+        let parsed = parse_language(&file_markers_alone).expect("file markers alone must parse");
+        assert_eq!(vec!["@Test".to_owned(), "[Fact".to_owned()], parsed.test_file_markers);
+        assert!(parsed.test_markers.is_empty() && parsed.test_file_names.is_empty());
+        let beside_markers_and_names = good.replace("    MODULES\n    mod\n    FILE NAMES\n", "    FILE MARKERS\n    @Test\n    FILE NAMES\n");
+        let parsed = parse_language(&beside_markers_and_names).expect("file markers between the markers and the names must parse");
+        assert_eq!((vec!["@Test".to_owned()], 2, 3), (parsed.test_file_markers, parsed.test_markers.len(), parsed.test_file_names.len()));
+        let beside_modules = good.replace("    FILE NAMES\n", "    FILE MARKERS\n    @Test\n    FILE NAMES\n");
+        assert!(parse_language(&beside_modules).is_none(), "FILE MARKERS beside MODULES was accepted");
+        let empty_file_markers = beside_markers_and_names.replace("    @Test\n", "    \n");
+        assert!(parse_language(&empty_file_markers).is_none(), "FILE MARKERS with nothing under it was accepted");
+        let after_the_names = good.replace("    MODULES\n    mod\n", "")
+                .replace("    tests.rs *_test.rs test_*\n", "    tests.rs *_test.rs test_*\n    FILE MARKERS\n    @Test\n");
+        assert!(parse_language(&after_the_names).is_none(), "FILE MARKERS after FILE NAMES was accepted");
+
         let rust = parse_language_file(LANGUAGES_DIR.to_owned() + "Rust.txt").unwrap();
         assert_eq!((vec!["#[".to_owned(), "#![".to_owned()], Some("mod".to_owned())), (rust.test_markers, rust.module_keyword));
+        assert!(rust.test_file_markers.is_empty());
         let d = parse_language_file(LANGUAGES_DIR.to_owned() + "D.txt").unwrap();
         assert_eq!((vec!["unittest".to_owned()], None), (d.test_markers, d.module_keyword));
+        for (file, marker) in [("Java.txt", "@Test"), ("Kotlin.txt", "@BeforeTest"), ("C#.txt", "[Fact")] {
+            let language = parse_language_file(LANGUAGES_DIR.to_owned() + file).unwrap();
+            assert!(language.test_file_markers.iter().any(|found| found == marker), "{file} does not declare {marker}");
+            assert!(language.test_markers.is_empty() && language.module_keyword.is_none(), "{file}");
+        }
     }
 
     #[test]

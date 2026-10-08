@@ -1,0 +1,6 @@
+[Java]
+src/main/java/ParserCheck.java whole
+src/main/java/Parser.java none
+src/main/java/ParserLifecycle.java whole
+src/main/java/ParserShapes.java whole
+src/test/java/ParserTest.java whole # by the marker, since no build file names src/test

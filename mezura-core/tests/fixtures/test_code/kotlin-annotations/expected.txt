@@ -1,0 +1,4 @@
+[Kotlin]
+src/main/kotlin/ParserCheck.kt whole
+src/main/kotlin/Parser.kt none
+src/main/kotlin/ParserSetup.kt whole

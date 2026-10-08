@@ -16,14 +16,16 @@ New:
   `Tests` block of a language file, and `TestFileName` for the three shapes a name takes.
   `Language::module_keyword` and `Language::with_module_keyword` carry the word that declares a
   module living in another file, `mod` for Rust, so that a file declared on a line of test code
-  is test code whole.
+  is test code whole. `Language::test_file_markers` and `Language::with_test_file_markers` carry
+  the annotations that make a whole file test code, `@Test` for Java, read from `FILE MARKERS`.
 - `PathPatterns`, the patterns of the exclusions and of the test code together with the directory
   their names are read from, and `PatternError` for one that does not parse. The warning code
   `pattern-matched-nothing` reports a pattern that names nothing on disk, a place outside every
   target, or a name nothing matched.
 - `FileExplanation::test_file_rule` names the rule that made a whole file test code, as a
   `TestFileRule`, and `ExplainedLine::in_test` marks each line of it. `TestFileRule::DeclaredModule`
-  names the files that declare it as a module, the one holding the marker last.
+  names the files that declare it as a module, the one holding the marker last, and
+  `TestFileRule::FileMarker` the annotation found in its code with its line.
 - `.t` files are counted as Perl.
 
 Changed:

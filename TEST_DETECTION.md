@@ -33,6 +33,18 @@ language file, under `Tests`, and the [language files guide](LANGUAGE_FILES_GUID
 This is certain because the compiler reads the same marker: what `#[cfg(test)]` covers is what
 `cargo build` leaves out.
 
+Java, Kotlin and C# write tests as ordinary classes, and the test runner collects them by an
+annotation or an attribute: `@Test`, `@BeforeEach`, `[Fact]`, `[Test]`, `[TestFixture]`. One of
+those in the code of a file makes the whole file test code, since the class around a test method,
+its fields, its setup and its helpers, is the test class. The list is explicit and lives in the
+language file under `FILE MARKERS`: an annotation earns its place when a test framework defines it
+and no production library writes the same name, so `@VisibleForTesting`, `@TestOnly` and `[Category]`
+are not on it. The marker has to stand as a word of its own, so `@TestOnly` is not `@Test` and
+`[TestFixture]` is not `[Test]`, and one inside a string, a comment or a text block is text.
+
+This is certain because the runner collects tests by the same name and nothing else uses it: a
+`@Test` method can only sit in a test class.
+
 ### 2. Names the toolchain defines
 
 `*_test.go` and Perl's `*.t`. The go tool compiles a `_test.go` file for `go test` and for nothing
@@ -122,8 +134,10 @@ The rules in short, with the whole of them under `--tests` in [COMMANDS.md](COMM
 - A trailing `/` means a folder only, so `tests/` leaves a script named `tests` alone. `x/**`
   means the folder `x`, and `**` alone a whole target.
 - A `!` takes back the folder or file it names, from a build file or from an earlier pattern.
-  What a marker inside a file says stays: a `#[cfg(test)]` under `!vendor/` is still test code,
-  and so is a file another file declares as a module under a marker.
+  What a marker that opens lines says stays: a `#[cfg(test)]` under `!vendor/` is still test code,
+  and so is a file another file declares as a module under a marker. A marker that makes a whole
+  file test code, `@Test`, is off under a `!`, since the `!` answers that very question: a corpus
+  of JUnit files kept as test data stays data under `--tests "!cases/"`.
 - A pattern that names nothing on disk, and a name with a slash that matched nothing, are reported.
 - In PowerShell, quote the whole list or escape each comma with a backtick.
 
@@ -252,19 +266,82 @@ counts it.
 **Found.** `*.t` anywhere, whole, and `t/` beside a `Makefile.PL`, a `Build.PL` or a `dist.ini`.
 `xt/` is declared.
 
-### Java, Kotlin, Scala and Groovy
+### Java and Kotlin
 
 **Found.** `src/test/` beside a `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`,
 `settings.gradle.kts` or `build.sbt`, and every `src/test/` below a `settings.gradle`,
-`settings.gradle.kts` or `build.sbt`. JUnit, TestNG, Spock, ScalaTest and specs2 all live there, so
-no framework is named. `mezura ./core/src` finds the `core/pom.xml` above it and counts `src/test`
-the same.
+`settings.gradle.kts` or `build.sbt`. `mezura ./core/src` finds the `core/pom.xml` above it and
+counts `src/test` the same.
 
-**Missed on purpose.** A test class under `src/main`, or a `*Test.java` anywhere outside
-`src/test`. A `test/` beside a `pom.xml` with no `src` above it, since Maven compiles nothing from
-it. A Gradle source set other than `test`, and a `testSourceDirectory` Maven was pointed elsewhere,
-are declared, with `!src/test/` where the default was moved away from. A file holding `@Test`
-outside the test directory is planned, as a marker that makes the whole file tests.
+Anywhere else, a file is test code whole when its code holds one of the annotations the runners
+collect tests by: `@Test` (JUnit 4 and 5, TestNG, kotlin.test and the annotations the JDK's own
+test libraries name so), `@ParameterizedTest`, `@RepeatedTest`, `@TestFactory`, `@BeforeEach`,
+`@AfterEach`, `@BeforeAll`, `@AfterAll`, `@BeforeClass`, `@AfterClass`, `@BeforeMethod`,
+`@AfterMethod`, `@DataProvider` and `@RunWith`, and for Kotlin `@BeforeTest` and `@AfterTest` as
+well. So a test class under `src/main`, a base class holding only a `@BeforeEach`, a TestNG
+provider class and a JUnit 4 suite are found without a test directory and without a name. The
+annotation may carry arguments, `@Test(expected = IllegalStateException.class)`. Measured over the
+53,144 Java files of the JDK: 4,545 files hold one of these, and one of them sits outside `test/`,
+a javadoc snippet file holding a test method as an example.
+
+**Missed**, each with what mezura answers today:
+
+- JUnit 3, a class extending `TestCase` with no annotation, and Kotest's spec classes, `FunSpec`,
+  `StringSpec` and the rest, which register tests inside a lambda: production unless the test
+  directory or a pattern says otherwise.
+- A test class holding only a Spring slice annotation, `@SpringBootTest`, `@WebMvcTest`, and no
+  `@Test` of its own: production, since those start with another word.
+- A fully qualified `@org.junit.Test`, a space or a comment between the `@` and the name,
+  `@ Test`, the two on separate lines, and `@Test`: production.
+- A `*Test.java` outside `src/test` holding no annotation: production, since the name is a
+  convention; `--tests "*Test.java"` declares it.
+
+**Refused**, and why: `@Before` and `@After` are AspectJ's advice annotations and sit on Spring
+aspects; `@Rule` is Easy Rules'; `@Ignore` is Android Room's and Realm's, on entity fields;
+`@Nested` is Gradle's, on task properties; `@Category` is the JDK's own, in `jdk.jfr`; `@ExtendWith`
+and `@TestTemplate` appear in the main source of test-support libraries as meta-annotations. A test
+class carrying only one of those is missed on purpose.
+
+A `test/` beside a `pom.xml` with no `src` above it, since Maven compiles nothing from it, a Gradle
+source set other than `test`, and a `testSourceDirectory` Maven was pointed elsewhere, are declared,
+with `!src/test/` where the default was moved away from.
+
+### Scala and Groovy
+
+**Found.** The same `src/test/` directories as Java, where ScalaTest, specs2 and Spock live.
+
+**Missed on purpose.** A test class outside `src/test`, since ScalaTest and Spock collect tests by
+a base class, `AnyFunSuite`, `Specification`, and a base class is a name any library can define.
+`@Test` of JUnit in a Scala or Groovy file outside `src/test` is production too.
+
+### C#
+
+**Found.** A file is test code whole when its code holds one of the attributes the runners collect
+tests by: NUnit's `[Test]`, `[TestFixture]`, `[TestCase]`, `[TestCaseSource]`, `[SetUp]`,
+`[TearDown]` and `[OneTimeSetUp]`, Unity's `[UnityTest]`, xUnit's `[Fact]` and `[Theory]`, and
+MSTest's `[TestClass]`, `[TestMethod]` and `[TestInitialize]`. The attribute may carry arguments or
+sit first in a list, `[Fact(Skip = "slow")]`, `[Test, Order(1)]`. `[TestFixture]` and
+`[TestClass]` catch a fixture whose tests use a custom attribute, and the setup attributes catch a
+base fixture that holds no test. Measured over the 14,427 C# files of four Unity projects: every
+file holding one of these outside a test directory is a test, samples of the test framework and
+base fixtures shipped in `Editor/` folders among them, and `[UnityTest]` alone finds 17 files
+nothing else does.
+
+No build file defines a test directory, since a `.csproj` names its test projects by convention
+alone; `--tests "*Tests/,*.Test/"` declares them.
+
+**Missed**, each with what mezura answers today:
+
+- An attribute written after another in one list, `[Trait("Category", "Slow"), Fact]`: the
+  file is production unless another attribute of the list sits first somewhere in it.
+- An attribute written with its suffix, `[TestAttribute]`, fully qualified, `[NUnit.Framework.Test]`,
+  with a space, `[ Test ]`, or with a target, `[method: Test]`: production.
+
+**Refused**, and why: `[Category]` is `System.ComponentModel.Category`, on Unity runtime code;
+`[Ignore]` is sqlite-net's, on model classes; `[InlineData]`, `[DataRow]` and `[ClassInitialize]`
+only ever sit beside an attribute already on the list. An indexer over a variable named `Test`,
+`map[Test]`, and a collection expression over a type named `Fact`, `[Fact.Create(a)]`, are code
+and mark nothing.
 
 ### Swift
 
@@ -306,7 +383,7 @@ literal `-endif.` is a kind no shipped language has yet.
 **Found.** `tests/` beside a `DESCRIPTION` and a `NAMESPACE`, both, since an Octave package carries
 a `DESCRIPTION` too. testthat's `tests/testthat/` is under it.
 
-### JavaScript, TypeScript, Python, PHP, Ruby, C#, C and C++
+### JavaScript, TypeScript, Python, PHP, Ruby, C and C++
 
 Nothing by path: their build files define no test directory. Everything is declared, with the
 ready patterns above. vitest's in-source tests, `if (import.meta.vitest) { }`, are code. Python's
@@ -324,9 +401,10 @@ that is a layout rule the parser has no business guessing. Refused.
 - **Doc tests.** A `///` fenced block in Rust, a `>>>` in a Python docstring, an `iex>` in Elixir:
   every one of those lines is a comment, and a line is one thing.
 - **Tests a macro or a build script generates.** What is counted is what is written.
-- **A framework's names compiled into the program.** `describe`, `it`, `pytest`, `TEST_CASE`,
-  `@Test`: every one is a claim about somebody's project, and the failure is silent miscounting.
-  What is declared lives in the language file or in `--tests`, visible and editable.
+- **A framework's names compiled into the program.** `describe`, `it`, `pytest`, `TEST_CASE`:
+  every one is a claim about somebody's project, and the failure is silent miscounting. What is
+  taken lives in the language file, the annotations of Java, Kotlin and C# under `FILE MARKERS`,
+  or in `--tests`, visible and editable.
 - **Test code inside a nested section.** vitest in the `<script>` of a `.vue` is JavaScript inside
   Vue, and stays so. The other way round, a `<script>` inside a file that is tests whole goes to
   the tests of the container with the rest of the file and is no section, and the keywords inside
@@ -360,7 +438,8 @@ that is a layout rule the parser has no business guessing. Refused.
   without it, so no row appears on either side, and says so.
 - **`--explain`.** Every line of test code is marked `test code`, the totals say how many, and a
   file that is test code whole names the rule that decided it: the test directory with its build
-  file, the name, the pattern, or the file that declares it as a module under a marker. The
-  document carries `in_test` on those lines and the rule under `test_file`.
+  file, the name, the pattern, the file that declares it as a module under a marker, or the
+  annotation in its code with its line. The document carries `in_test` on those lines and the rule
+  under `test_file`.
 - **Keywords** are counted over the whole language, its test code included, and shown once under
   it. The ones found inside the test code are counted apart as well.

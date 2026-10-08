@@ -373,13 +373,13 @@ pub struct EngineConfig {
     /// decides anything, a contested extension included.
     pub detect_shebangs: bool,
     /// Whether test code is told apart from the rest, which is the lines a language's markers
-    /// open, the files its toolchain names as tests, and the files under the test directory of a
-    /// build tool. True by default.
+    /// open, the files its file markers make test code whole, the files its toolchain names as
+    /// tests, and the files under the test directory of a build tool. True by default.
     pub detect_tests: bool,
     /// Patterns declaring which files and directories are test code whole, beside what
     /// [`Self::detect_tests`] finds on its own. A `!` pattern takes a file or a directory back
-    /// from a rule or an earlier pattern and switches the toolchain's file names off for it, while
-    /// what a language's markers say stays. Nothing while detection is off.
+    /// from a rule or an earlier pattern and switches the toolchain's file names and the file
+    /// markers off for it, while the markers that open lines stay. Nothing while detection is off.
     pub test_patterns: PathPatterns
 }
 

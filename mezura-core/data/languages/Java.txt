@@ -20,6 +20,10 @@ Multi line comment start
 Multi line comment end
 */
 
+Tests
+    FILE MARKERS
+    @Test @ParameterizedTest @RepeatedTest @TestFactory @BeforeEach @AfterEach @BeforeAll @AfterAll @BeforeClass @AfterClass @BeforeMethod @AfterMethod @DataProvider @RunWith
+
 Keyword
     NAME
     classes

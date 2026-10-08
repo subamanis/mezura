@@ -25,6 +25,10 @@ Multi line comment start
 Multi line comment end
 */
 
+Tests
+    FILE MARKERS
+    [Test [TestFixture [TestCase [TestCaseSource [UnityTest [SetUp [TearDown [OneTimeSetUp [Fact [Theory [TestClass [TestMethod [TestInitialize
+
 Keyword
     NAME
     classes

@@ -183,8 +183,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     The last pattern that matches decides. '--tests spec,!spec/fixtures' declares 'spec' and
     takes its fixtures back, and '--tests !vendor/' keeps a vendored project's tests out even
     where its build file names them. The tests a build file or a file name finds on their own
-    stay found beside the patterns, and so do the markers inside a file and a file another file
-    declares as a module under a marker, which a '!' never reaches.
+    stay found beside the patterns, and so do the markers that open lines inside a file and a
+    file another file declares as a module under a marker, which a '!' never reaches. A marker
+    that makes a whole file test code, '@Test' in Java, is off under a '!'.
 
     In a project's own configuration the patterns are read from the project directory, so they
     say the same thing from wherever inside the project the command is typed. '--hide tests'
@@ -604,10 +605,10 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
       nested-languages  the rows that break a container file down, so a '.vue' weighs whole on
                       the Vue row with no sign of the TypeScript and CSS inside it
       tests           the rows that split a language into its test code and the rest. Test code
-                      is what a language's markers open, the files its toolchain names as tests,
-                      the files under the test directory of a build tool, and what '--tests'
-                      declares. This one also stops the detection, patterns included, which is
-                      the other name that makes a run faster
+                      is what a language's markers open or mark whole, the files its toolchain
+                      names as tests, the files under the test directory of a build tool, and
+                      what '--tests' declares. This one also stops the detection, patterns
+                      included, which is the other name that makes a run faster
       files           the files column of the details rows
       comments        the comments column of the details rows
       extra           the third column of the details rows, which is what '--counting content'
@@ -1198,8 +1199,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     the document under 'left_out_of_a_scan'; the named file itself is always counted. A line of
     test code is marked 'test code' and counted below the totals, and a file that is test code as a
     whole, or that a '!' pattern of '--tests' took back, names the rule that decided it: a build
-    tool's test directory, its name, the pattern, or the file that declares it as a module under
-    a marker. The document carries 'in_test' on those lines and the rule under 'test_file'.
+    tool's test directory, its name, the pattern, the file that declares it as a module under a
+    marker, or the annotation in its code with its line. The document carries 'in_test' on those
+    lines and the rule under 'test_file'.
 
       mezura src/main.rs --explain
       mezura src/page.vue --explain --counting region

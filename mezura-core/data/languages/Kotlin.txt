@@ -20,6 +20,10 @@ Self-nesting comment start
 Self-nesting comment end
 */
 
+Tests
+    FILE MARKERS
+    @Test @ParameterizedTest @RepeatedTest @TestFactory @BeforeEach @AfterEach @BeforeAll @AfterAll @BeforeClass @AfterClass @BeforeMethod @AfterMethod @DataProvider @RunWith @BeforeTest @AfterTest
+
 Keyword
     NAME
     classes

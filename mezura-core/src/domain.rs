@@ -53,6 +53,8 @@ pub struct Language {
     pub test_markers : Vec<String>,
     /// Which file names are test files, `*_test.go` for Go.
     pub test_file_names : Vec<TestFileName>,
+    /// What makes a whole file test code when found in its code, `@Test` for Java.
+    pub test_file_markers : Vec<String>,
     /// The word that declares a module living in another file, `mod` for Rust, so that a file
     /// declared under a test marker is counted as test code whole.
     pub module_keyword : Option<String>,
@@ -89,6 +91,7 @@ impl Language {
             identifying_line_contains : Vec::new(),
             test_markers : Vec::new(),
             test_file_names : Vec::new(),
+            test_file_markers : Vec::new(),
             module_keyword : None,
             scan_plan : OnceLock::new()
         }
@@ -130,6 +133,12 @@ impl Language {
     {
         self.test_markers.extend(owned_strings(markers));
         self.test_file_names.extend(file_names.iter().cloned());
+        self
+    }
+
+    /// Declares what makes a whole file test code when found in its code, `@Test` for Java.
+    pub fn with_test_file_markers(mut self, markers: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.test_file_markers.extend(owned_strings(markers));
         self
     }
 

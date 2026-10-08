@@ -321,7 +321,7 @@ fn describe_test_file_rule(rule: &TestFileRule, language: &str) -> Option<String
                 '--tests' pattern '{pattern}' matches it.")),
         TestFileRule::DeclaredNotTests { pattern, matched_folder } => Some(format!("The '--tests' pattern \
                 '{pattern}'{} says this file is not test code, even if its folder or its name would make it so. \
-                Lines inside a test marker still count as tests.", matched_folder.as_ref()
+                Lines inside a marker that opens test code still count as tests.", matched_folder.as_ref()
                         .map(|folder| format!(" matches the folder '{folder}' and")).unwrap_or_default())),
         TestFileRule::DeclaredModule { declared_by } => match declared_by.as_slice() {
             [] => None,
@@ -330,6 +330,8 @@ fn describe_test_file_rule(rule: &TestFileRule, language: &str) -> Option<String
                     '{marked}' declares that one under a test marker.", between.iter()
                             .map(|file| format!("'{file}' declares that one, ")).collect::<String>()))
         },
+        TestFileRule::FileMarker { marker, line } => Some(format!("The whole file is test code: '{marker}' on line {line} \
+                is one of the names a test runner collects tests by, and a file of {language} holding one is test code whole.")),
         _ => None
     }
 }
@@ -349,6 +351,8 @@ fn build_test_file_entry(rule: &TestFileRule) -> Option<String> {
                 "{{\"rule\":\"declared_not_tests\",\"pattern\":\"{}\"{}}}", escape(pattern), matched(matched_folder))),
         TestFileRule::DeclaredModule { declared_by } => Some(format!("{{\"rule\":\"declared_module\",\"declared_by\":[{}]}}",
                 declared_by.iter().map(|file| format!("\"{}\"", escape(file))).collect::<Vec<_>>().join(","))),
+        TestFileRule::FileMarker { marker, line } => Some(format!("{{\"rule\":\"file_marker\",\"marker\":\"{}\",\"line\":{line}}}",
+                escape(marker))),
         _ => None
     }
 }
@@ -434,12 +438,12 @@ mod tests {
         assert_eq!(Some("The whole file is test code: the '--tests' pattern '*.spec.rs' matches it.".to_owned()),
                 describe_test_file_rule(&TestFileRule::Declared { pattern: "*.spec.rs".to_owned(), matched_folder: None }, "Rust"));
         assert_eq!(Some("The '--tests' pattern '!spec/fixtures/' matches the folder 'D:/dev/proj/spec/fixtures' and says \
-                this file is not test code, even if its folder or its name would make it so. Lines inside a test marker \
-                still count as tests.".to_owned()),
+                this file is not test code, even if its folder or its name would make it so. Lines inside a marker that \
+                opens test code still count as tests.".to_owned()),
                 describe_test_file_rule(&TestFileRule::DeclaredNotTests { pattern: "!spec/fixtures/".to_owned(),
                         matched_folder: Some("D:/dev/proj/spec/fixtures".to_owned()) }, "Rust"));
         assert_eq!(Some("The '--tests' pattern '!a.rs' says this file is not test code, even if its folder or its \
-                name would make it so. Lines inside a test marker still count as tests.".to_owned()),
+                name would make it so. Lines inside a marker that opens test code still count as tests.".to_owned()),
                 describe_test_file_rule(&TestFileRule::DeclaredNotTests { pattern: "!a.rs".to_owned(), matched_folder: None }, "Rust"));
         let declared_by = |files: &[&str]| TestFileRule::DeclaredModule { declared_by: owned(files) };
         assert_eq!(Some("The whole file is test code: 'D:/proj/src/lib.rs' declares it as a module under a test marker.".to_owned()),
@@ -451,6 +455,9 @@ mod tests {
                 that one, and 'd.rs' declares that one under a test marker.".to_owned()),
                 describe_test_file_rule(&declared_by(&["a.rs", "b.rs", "c.rs", "d.rs"]), "Rust"));
         assert_eq!(None, describe_test_file_rule(&declared_by(&[]), "Rust"));
+        assert_eq!(Some("The whole file is test code: '[Fact' on line 7 is one of the names a test runner collects tests by, \
+                and a file of C# holding one is test code whole.".to_owned()),
+                describe_test_file_rule(&TestFileRule::FileMarker { marker: "[Fact".to_owned(), line: 7 }, "C#"));
 
         assert_eq!(None, format_test_count(0));
         assert_eq!(Some("1 of them is test code".to_owned()), format_test_count(1));
@@ -487,5 +494,7 @@ mod tests {
         assert_eq!(Some(r#"{"rule":"declared_module","declared_by":["D:/proj/src/tests.rs","D:/proj/src/lib.rs"]}"#.to_owned()),
                 build_test_file_entry(&TestFileRule::DeclaredModule { declared_by: vec!["D:/proj/src/tests.rs".to_owned(),
                         "D:/proj/src/lib.rs".to_owned()] }));
+        assert_eq!(Some(r#"{"rule":"file_marker","marker":"@Test","line":12}"#.to_owned()),
+                build_test_file_entry(&TestFileRule::FileMarker { marker: "@Test".to_owned(), line: 12 }));
     }
 }

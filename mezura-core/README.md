@@ -19,8 +19,9 @@ readings, and `count_not_code` counts such a file anyway while leaving the ident
 Bundled and generated files are set aside the same way, under `count_minified` and
 `count_generated`, and `RunResult::skipped_files` names every file that was, by the reason it was
 set aside for. The test code of each language is counted apart, in `RunResult::tests`: what the
-language's own markers open, what its toolchain names as tests, what the test directory of a build
-tool holds, and what `EngineConfig::test_patterns` declares. `detect_tests` turns it off.
+language's own markers open or make test code whole, what its toolchain names as tests, what the
+test directory of a build tool holds, and what `EngineConfig::test_patterns` declares.
+`detect_tests` turns it off.
 
 This is the library. For the command line program, the report it prints and the settings it takes,
 see the [main README](https://github.com/subamanis/mezura).

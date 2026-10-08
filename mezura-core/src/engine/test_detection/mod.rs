@@ -46,7 +46,9 @@ const JVM_BUILD_ROOTS : [&str; 3] = ["build.sbt", "settings.gradle", "settings.g
 pub(crate) struct TestWalk<'a> {
     contents: &'a [u8],
     markers: &'a [String],
-    candidates: Vec<(usize, u8)>,
+    file_markers: &'a [String],
+    // The index counts the markers first and the file markers after them
+    candidates: Vec<(usize, u16)>,
     next: usize,
     state: State,
     // The offset the scan of the open extent resumes from, which can sit past the current line
@@ -55,24 +57,29 @@ pub(crate) struct TestWalk<'a> {
     // An 'if' under an attribute owns its 'else' arms. After a word such as D's 'unittest', or
     // after a cfg_if's 'if #[cfg(test)]', the 'else' is the branch built without it.
     else_continues: bool,
+    // The offset and the index of the first file marker found in code
+    file_marker: Option<(usize, usize)>,
 }
 
 impl<'a> TestWalk<'a> {
-    pub(crate) fn of(language: &'a Language, contents: &'a str, enabled: bool) -> Option<TestWalk<'a>> {
-        if !enabled { return None; }
+    pub(crate) fn of(language: &'a Language, contents: &'a str, enabled: bool, by_path: TestsByPath) -> Option<TestWalk<'a>> {
+        if !enabled || by_path == TestsByPath::WholeFile { return None; }
         let markers = language.test_markers.as_slice();
-        if markers.is_empty() { return None; }
+        let file_markers = match by_path {
+            TestsByPath::TakenBack => &[][..],
+            _ => language.test_file_markers.as_slice()
+        };
+        if markers.is_empty() && file_markers.is_empty() { return None; }
 
         let bytes = contents.as_bytes();
         let mut candidates = Vec::new();
-        for (index, marker) in markers.iter().enumerate() {
-            candidates.extend(memmem::find_iter(bytes, marker.as_bytes()).map(|at| (at, index as u8)));
-        }
+        find_candidates(bytes, markers, 0, &mut candidates);
+        find_candidates(bytes, file_markers, markers.len(), &mut candidates);
         if candidates.is_empty() { return None; }
         candidates.sort_unstable();
 
-        Some(TestWalk { contents: bytes, markers, candidates, next: 0, state: State::Idle, cursor: 0,
-                held: Vec::new(), else_continues: false })
+        Some(TestWalk { contents: bytes, markers, file_markers, candidates, next: 0, state: State::Idle, cursor: 0,
+                held: Vec::new(), else_continues: false, file_marker: None })
     }
 
     // Whether the line just classified is test code. The ranges are offsets into the line with its
@@ -104,12 +111,19 @@ impl<'a> TestWalk<'a> {
                     while self.candidates.get(self.next).is_some_and(|(at, _)| *at < floor) {
                         self.next += 1;
                     }
-                    let Some(&(at, marker)) = self.candidates.get(self.next) else { return is_test };
+                    let Some(&(at, index)) = self.candidates.get(self.next) else { return is_test };
                     if at >= line_end { return is_test; }
                     self.next += 1;
-                    let Some(found) = self.read_marker(at, &self.markers[marker as usize], base, ranges) else { continue };
+                    let index = index as usize;
+                    if let Some(in_file_markers) = index.checked_sub(self.markers.len()) {
+                        if self.file_marker.is_none() && self.is_file_marker_at(at, &self.file_markers[in_file_markers], base, ranges) {
+                            self.file_marker = Some((at, in_file_markers));
+                        }
+                        continue;
+                    }
+                    let Some(found) = self.read_marker(at, &self.markers[index], base, ranges) else { continue };
                     is_test = true;
-                    self.else_continues = attribute::is_opener(&self.markers[marker as usize]);
+                    self.else_continues = attribute::is_opener(&self.markers[index]);
                     match found {
                         // A depth of one is the block around the marker, so a file with no such
                         // block runs to its end
@@ -147,25 +161,39 @@ impl<'a> TestWalk<'a> {
         self.held.drain(..)
     }
 
+    pub(crate) fn get_file_marker(&self) -> Option<(usize, usize)> {
+        self.file_marker
+    }
+
     fn read_marker(&self, at: usize, marker: &str, base: usize, ranges: &[(usize, usize)]) -> Option<Marker> {
-        let in_line = at - base;
-        let width = marker.len();
-        if !ranges.iter().any(|&(from, to)| from <= in_line && in_line + width <= to) {
-            return None;
-        }
+        if !self.lies_in_code(at, marker.len(), base, ranges) { return None; }
         if attribute::is_opener(marker) {
             return attribute::read(self.contents, at);
         }
-        let before = at.checked_sub(1).map(|i| self.contents[i]);
-        let after = self.contents.get(at + width).copied();
-        if before.is_some_and(is_word_byte) || after.is_some_and(is_word_byte) {
-            return None;
-        }
-        let end = at + width;
+        if !self.stands_as_a_word(at, marker.len()) { return None; }
+        let end = at + marker.len();
         Some(match find_scope_colon(self.contents, end) {
             Some(past_colon) => Marker::RestOfScope { after: past_colon },
             None => Marker::Extent { after: end }
         })
+    }
+
+    // A file marker names an annotation, an attribute or a type, so a member access after it,
+    // '[Fact.Create(a)]' in a collection expression, is none
+    fn is_file_marker_at(&self, at: usize, marker: &str, base: usize, ranges: &[(usize, usize)]) -> bool {
+        self.lies_in_code(at, marker.len(), base, ranges) && self.stands_as_a_word(at, marker.len())
+                && self.contents.get(at + marker.len()) != Some(&b'.')
+    }
+
+    fn lies_in_code(&self, at: usize, width: usize, base: usize, ranges: &[(usize, usize)]) -> bool {
+        let in_line = at - base;
+        ranges.iter().any(|&(from, to)| from <= in_line && in_line + width <= to)
+    }
+
+    fn stands_as_a_word(&self, at: usize, width: usize) -> bool {
+        let before = at.checked_sub(1).map(|i| self.contents[i]);
+        let after = self.contents.get(at + width).copied();
+        !before.is_some_and(is_word_byte) && !after.is_some_and(is_word_byte)
     }
 
     // Every bracket moves the depth, and an opener or a terminator counts only at depth zero. The
@@ -258,6 +286,15 @@ impl<'a> TestWalk<'a> {
     }
 }
 
+// What the path rules said of a file before it is read. Under 'TakenBack' the markers that open
+// lines still count and the markers that make a whole file test code do not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TestsByPath {
+    Nothing,
+    WholeFile,
+    TakenBack,
+}
+
 // A directory a build tool compiles for tests alone makes every file under it a test file. What a
 // '!' pattern leaves is 'DeclaredNotTests', which also switches the toolchain's file names off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -318,11 +355,14 @@ impl TestScope {
         }
     }
 
-    pub(crate) fn is_test_file(self, file_name: &str, names: &[TestFileName]) -> bool {
+    pub(crate) fn judge_file(self, file_name: &str, names: &[TestFileName]) -> TestsByPath {
         match self {
-            TestScope::Tests => true,
-            TestScope::DeclaredNotTests => false,
-            TestScope::Ordinary | TestScope::JvmSources => names.iter().any(|name| name.matches(file_name))
+            TestScope::Tests => TestsByPath::WholeFile,
+            TestScope::DeclaredNotTests => TestsByPath::TakenBack,
+            TestScope::Ordinary | TestScope::JvmSources => match names.iter().any(|name| name.matches(file_name)) {
+                true => TestsByPath::WholeFile,
+                false => TestsByPath::Nothing
+            }
         }
     }
 }
@@ -549,6 +589,26 @@ fn find_two_level_directories() -> impl Iterator<Item = (&'static str, &'static 
     BUILD_TOOLS.iter().flat_map(|tool| tool.test_directories).filter_map(|directory| directory.split_once('/'))
 }
 
+// The caller sorts, since the walk reads the candidates in file order
+fn find_candidates(bytes: &[u8], markers: &[String], first_index: usize, into: &mut Vec<(usize, u16)>) {
+    for (index, marker) in markers.iter().enumerate() {
+        let Some(&first) = marker.as_bytes().first() else { continue };
+        let shares_the_first_byte = |other: &String| other.as_bytes().first() == Some(&first);
+        if markers[..index].iter().any(shares_the_first_byte) { continue; }
+        if markers[index + 1..].iter().any(shares_the_first_byte) {
+            for at in memchr::memchr_iter(first, bytes) {
+                for (other, candidate) in markers.iter().enumerate() {
+                    if shares_the_first_byte(candidate) && bytes[at..].starts_with(candidate.as_bytes()) {
+                        into.push((at, (first_index + other) as u16));
+                    }
+                }
+            }
+        } else {
+            into.extend(memmem::find_iter(bytes, marker.as_bytes()).map(|at| (at, (first_index + index) as u16)));
+        }
+    }
+}
+
 // D's 'version(unittest)' with a colon after it, which covers the rest of its scope
 fn find_scope_colon(bytes: &[u8], from: usize) -> Option<usize> {
     let mut at = from;
@@ -588,7 +648,7 @@ mod tests {
         let language = Language::new("D", ["d"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
                 .with_tests(["unittest"], &[]);
         let source = "unittests { } version(unittest) { } my_unittest";
-        let walk = TestWalk::of(&language, source, true).unwrap();
+        let walk = TestWalk::of(&language, source, true, TestsByPath::Nothing).unwrap();
         let ranges = [(0, source.len())];
         assert!(walk.read_marker(0, "unittest", 0, &ranges).is_none());
         assert!(matches!(walk.read_marker(22, "unittest", 0, &ranges), Some(Marker::Extent { after: 30 })));
@@ -601,7 +661,7 @@ mod tests {
         let language = Language::new("D", ["d"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
                 .with_tests(["unittest"], &[]);
         let source = "version(unittest) : int a; version(unittest) { }";
-        let walk = TestWalk::of(&language, source, true).unwrap();
+        let walk = TestWalk::of(&language, source, true, TestsByPath::Nothing).unwrap();
         let ranges = [(0, source.len())];
         assert_eq!(walk.read_marker(8, "unittest", 0, &ranges), Some(Marker::RestOfScope { after: 19 }));
         assert_eq!(walk.read_marker(35, "unittest", 0, &ranges), Some(Marker::Extent { after: 43 }));
@@ -660,12 +720,13 @@ mod tests {
         assert!(!BuildFilesSeen::is_a_build_file(b"Cargo.lock"));
 
         let names = [TestFileName::of("*_test.go").unwrap()];
-        assert!(Tests.is_test_file("main.go", &names));
-        assert!(Ordinary.is_test_file("parser_test.go", &names));
-        assert!(JvmSources.is_test_file("parser_test.go", &names));
-        assert!(!Ordinary.is_test_file("parser.go", &names));
-        assert!(!Ordinary.is_test_file("parser_test.go", &[]));
-        assert!(!TestScope::DeclaredNotTests.is_test_file("parser_test.go", &names), "a '!' left the toolchain's name on");
+        assert_eq!(TestsByPath::WholeFile, Tests.judge_file("main.go", &names));
+        assert_eq!(TestsByPath::WholeFile, Ordinary.judge_file("parser_test.go", &names));
+        assert_eq!(TestsByPath::WholeFile, JvmSources.judge_file("parser_test.go", &names));
+        assert_eq!(TestsByPath::Nothing, Ordinary.judge_file("parser.go", &names));
+        assert_eq!(TestsByPath::Nothing, Ordinary.judge_file("parser_test.go", &[]));
+        assert_eq!(TestsByPath::TakenBack, TestScope::DeclaredNotTests.judge_file("parser_test.go", &names),
+                "a '!' left the toolchain's name on");
         assert_eq!(TestScope::DeclaredNotTests.of_child("tests", seen(&["Cargo.toml"]), false), TestScope::DeclaredNotTests,
                 "a Cargo.toml below a '!' turned it back");
         assert_eq!(TestScope::DeclaredNotTests.of_child("src", nothing, true), TestScope::DeclaredNotTests);
@@ -781,13 +842,63 @@ mod tests {
     }
 
     #[test]
+    fn markers_sharing_a_first_byte_are_found_at_the_same_places_as_markers_searched_alone() {
+        let source = "#[test] x #![cfg(test)] #[ unittest #[ #![ u";
+        let owned = |markers: &[&str]| markers.iter().map(|marker| (*marker).to_owned()).collect::<Vec<_>>();
+        let one_by_one = |markers: &[String]| {
+            let mut found = markers.iter().enumerate()
+                    .flat_map(|(index, marker)| memmem::find_iter(source.as_bytes(), marker.as_bytes()).map(move |at| (at, index as u16)))
+                    .collect::<Vec<_>>();
+            found.sort_unstable();
+            found
+        };
+        let grouped = |markers: &[String], first_index: usize| {
+            let mut found = Vec::new();
+            find_candidates(source.as_bytes(), markers, first_index, &mut found);
+            found.sort_unstable();
+            found
+        };
+        for markers in [owned(&["#[", "#!["]), owned(&["#[", "unittest", "#!["]), owned(&["unittest"]), owned(&["#![", "#["])] {
+            assert_eq!(one_by_one(&markers), grouped(&markers, 0), "{markers:?}");
+        }
+        assert_eq!(vec![(0, 0), (10, 1), (24, 0), (36, 0), (39, 1)], grouped(&owned(&["#[", "#!["]), 0));
+        assert_eq!(vec![(0, 3), (10, 4), (24, 3), (36, 3), (39, 4)], grouped(&owned(&["#[", "#!["]), 3));
+        let mut none = Vec::new();
+        find_candidates(b"int x;", &owned(&["#[", "#!["]), 0, &mut none);
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn a_file_marker_in_code_standing_as_a_word_is_recorded_once_and_a_file_taken_back_is_not_scanned_for_one() {
+        let language = Language::new("Annotated", ["an"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
+                .with_test_file_markers(["@Test", "[Fact"]);
+        let marker_of = |source: &str, ranges: &[(usize, usize)]| {
+            let mut walk = TestWalk::of(&language, source, true, TestsByPath::Nothing)?;
+            walk.observe_line(0, source, true, ranges, LineClass::WordsInCode, source.len());
+            walk.get_file_marker()
+        };
+        assert_eq!(Some((0, 0)), marker_of("@Test void t() {}", &[(0, 17)]));
+        assert_eq!(Some((4, 1)), marker_of("x = [Fact] [Fact]", &[(0, 17)]), "the second find was recorded over the first");
+        assert_eq!(Some((10, 1)), marker_of("[Factory] [Fact(Skip = \"x\")]", &[(0, 28)]));
+        assert_eq!(None, marker_of("@TestOnly void t() {}", &[(0, 21)]));
+        assert_eq!(None, marker_of("x@Test", &[(0, 6)]));
+        assert_eq!(None, marker_of("list[Fact]", &[(0, 10)]), "an indexer was taken for an attribute");
+        assert_eq!(None, marker_of("[Fact.Create(a)]", &[(0, 16)]), "a member access was taken for an attribute");
+        assert_eq!(None, marker_of("@Test in a comment", &[(6, 18)]), "a marker outside the code ranges was taken");
+        assert!(TestWalk::of(&language, "@Test", true, TestsByPath::TakenBack).is_none(), "a file a '!' took back was scanned");
+        assert!(TestWalk::of(&language, "@Test", true, TestsByPath::WholeFile).is_none());
+        assert!(TestWalk::of(&language, "int x;", true, TestsByPath::Nothing).is_none());
+    }
+
+    #[test]
     fn a_language_with_no_markers_or_a_file_with_none_gets_no_walk() {
         let d = Language::new("D", ["d"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
                 .with_tests(["unittest"], &[]);
         let c = Language::new("C", ["c"], crate::StringRules::escaping_nothing(), ["//"], &[], []);
-        assert!(TestWalk::of(&c, "unittest { }", true).is_none());
-        assert!(TestWalk::of(&d, "int x;", true).is_none());
-        assert!(TestWalk::of(&d, "unittest { }", false).is_none());
-        assert!(TestWalk::of(&d, "unittest { }", true).is_some());
+        assert!(TestWalk::of(&c, "unittest { }", true, TestsByPath::Nothing).is_none());
+        assert!(TestWalk::of(&d, "int x;", true, TestsByPath::Nothing).is_none());
+        assert!(TestWalk::of(&d, "unittest { }", false, TestsByPath::Nothing).is_none());
+        assert!(TestWalk::of(&d, "unittest { }", true, TestsByPath::Nothing).is_some());
+        assert!(TestWalk::of(&d, "unittest { }", true, TestsByPath::TakenBack).is_some(), "a '!' switched the markers that open lines off");
     }
 }

@@ -77,7 +77,7 @@ Three things to know before you start:
 | `Nested language start` *(opt)* | Openers of sections written in another language | `<script <style` |
 | `Nested language end` | Their closers, in the same order | `</script> </style>` |
 | `Nested language default` | The extension each section falls to when its tag names none | `js css` |
-| `Tests` *(opt)* | What a test starts with, and which file names are test files | see below |
+| `Tests` *(opt)* | What a test starts with, what makes a whole file one, and which file names are test files | see below |
 | `Keyword` *(opt, repeatable)* | What to count beside the lines | see below |
 
 A block marked *(opt)* can be left out entirely. One that has "in the same order" under it comes
@@ -246,9 +246,10 @@ Everything that needs those lives inside the blocks and carries its own language
 ## Test code
 
 Some languages put tests in the same file as the code. Declare what a test starts with, and the
-lines from there to the end of that item go to a `tests` row under the language. Where the
-toolchain itself gives test files a name, declare the name, and every line of those files goes to
-the same row.
+lines from there to the end of that item go to a `tests` row under the language. Where a test
+runner collects tests by an annotation, declare the annotation, and every line of a file holding
+one goes to the same row. Where the toolchain itself gives test files a name, declare the name,
+and every line of those files goes there too.
 
 ```
 Tests
@@ -260,13 +261,20 @@ Tests
 
 ```
 Tests
+    FILE MARKERS
+    [Test [TestFixture [Fact [Theory
+```
+
+```
+Tests
     FILE NAMES
     *_test.go
 ```
 
-Any of the three can be left out, in the order `MARKERS`, `MODULES`, `FILE NAMES` when more than
-one is there. A block with none refuses the file, and so does `MODULES` without `MARKERS`, since a
-declaration counts only on a line a marker opened.
+Any of the four can be left out, in the order `MARKERS`, `MODULES`, `FILE MARKERS`, `FILE NAMES`
+when more than one is there. A block with none refuses the file, and so does `MODULES` without
+`MARKERS`, since a declaration counts only on a line a marker opened. `MODULES` and `FILE MARKERS`
+do not go together either, since no rule says what a file an annotation made test code declares.
 
 `MARKERS` is what is searched for. `#[` and `#![` are read as Rust attributes: any attribute with
 `test` in its name starts a test, `#[cfg(...)]` starts one when its predicate has `test` outside a
@@ -282,6 +290,18 @@ whole, and so every file that one declares in turn. The file is found the way ru
 `x.rs` or `x/mod.rs` beside a `lib.rs`, `main.rs` or `mod.rs`, under a folder named after any
 other file, and beside it for a crate root, with an inline `mod outer { }` adding `outer/`. A
 declaration under `#[path = "..."]` is not followed.
+
+`FILE MARKERS` are the annotations a test runner collects tests by, `@Test` for Java, `[Fact` for
+C#, and the first one found in the code of a file makes the whole file test code: the class around
+a test method is the test class. A marker is matched as written and has to stand as a word of its
+own, so the byte before it and the byte after it may be no letter, digit or underscore, and the
+byte after it may not be a `.` either. That is why C#'s are written with the bracket open: `[Test`
+matches `[Test]`, `[Test, Order(1)]` and `[Test(Description = "x")]`, and refuses `[TestFixture]`,
+which gets a line of its own, an indexer `map[Test]`, and a collection expression `[Test.Of(a)]`.
+A marker inside a string or a comment is text. List only what a test framework defines and no
+production library writes: `@Before` is AspectJ's as much as JUnit 4's, so it is not on Java's
+list. A file a `!` pattern of `--tests` took back is not read for these, since the `!` answered
+the question they answer.
 
 `FILE NAMES` takes three shapes only: `*suffix`, `prefix*` and a whole name, case-sensitive. It is
 for a name the toolchain defines, the way the go tool builds `*_test.go` only for `go test` and a

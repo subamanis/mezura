@@ -1364,6 +1364,42 @@ fn a_module_declared_under_a_marker_is_test_code_whole_and_so_is_what_it_declare
 }
 
 #[test]
+fn a_negative_pattern_switches_the_file_markers_off_for_what_it_names() {
+    let root = std::env::temp_dir().join("mezura-test-file-marker-patterns");
+    let _ = std::fs::remove_dir_all(&root);
+    let proj = root.join("proj");
+    for dir in ["src", "vendor"] {
+        std::fs::create_dir_all(proj.join(dir)).unwrap();
+    }
+    std::fs::write(proj.join("src").join("Marked.java"), "class Marked {\n    @Test\n    void t() {}\n}\n").unwrap();
+    std::fs::write(proj.join("src").join("Plain.java"), "class Plain {\n    String s = \"@Test\";\n}\n").unwrap();
+    std::fs::write(proj.join("vendor").join("Vendored.java"), "class Vendored {\n    @Test void t() {}\n}\n").unwrap();
+    let proj_str = proj.to_string_lossy().replace('\\', "/");
+    let counted = |patterns: &[&str], detect_tests: bool| {
+        let config = EngineConfig { detect_tests, collect_files: true, threads: Threads::new(1, 4),
+                test_patterns: mezura_core::PathPatterns::of(patterns), ..EngineConfig::new([proj_str.as_str()]) };
+        let (languages, _) = Languages::shipped(&config);
+        let result = run(&config, languages).unwrap();
+        let files = &result.modules[0].files["Java"];
+        let test_lines_of = |name: &str| files.iter()
+                .find(|file| std::path::Path::new(&file.path).file_name() == Some(name.as_ref()))
+                .unwrap().tests.as_ref().map_or(0, |tests| tests.lines);
+        let per_file = ["Marked.java", "Plain.java", "Vendored.java"].map(test_lines_of);
+        let row = result.tests.get("Java").map(|tests| (tests.stats.files, tests.stats.lines, tests.whole_files));
+        assert_eq!(10, result.per_language["Java"].lines, "the lines of the language moved with the patterns {patterns:?}");
+        (per_file, row)
+    };
+
+    assert_eq!(([4, 0, 3], Some((2, 7, 2))), counted(&[], true));
+    assert_eq!(([4, 0, 0], Some((1, 4, 1))), counted(&["!vendor/"], true), "a '!' left the file marker on");
+    assert_eq!(([0, 0, 3], Some((1, 3, 1))), counted(&["!*.java", "vendor/"], true), "a later pattern did not declare the folder whole");
+    assert_eq!(([4, 3, 3], Some((3, 10, 3))), counted(&["**"], true));
+    assert_eq!(([0, 0, 0], None), counted(&[], false));
+
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn a_pattern_declares_test_code_whole_and_a_later_negative_takes_it_back_while_the_markers_stay() {
     let root = std::env::temp_dir().join("mezura-test-patterns");
     let _ = std::fs::remove_dir_all(&root);

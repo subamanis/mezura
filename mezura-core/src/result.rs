@@ -25,7 +25,8 @@ pub struct RunResult {
     /// container files the section language appeared in.
     pub nested_languages: HashMap<String, HashMap<String, Stats>>,
     /// The test code of each language, found as an extent under a marker inside an ordinary file
-    /// or as a whole file the path rules name. Already inside `per_language`, which it breaks down.
+    /// or as a whole file the path rules or a file marker name. Already inside `per_language`,
+    /// which it breaks down.
     /// A language with none has no entry, and the map is empty when
     /// [`crate::EngineConfig::detect_tests`] is off.
     pub tests: HashMap<String, TestCode>,

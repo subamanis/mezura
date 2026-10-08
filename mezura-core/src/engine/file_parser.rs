@@ -20,7 +20,7 @@ use crate::domain::{CommentPair, FileStats, LineContinuation};
 use crate::engine::masks::MaskFinder;
 use crate::engine::masks::is_ascii;
 use crate::engine::masks::BLOCK_BYTES;
-use crate::engine::test_detection::{Declaration, ModuleDeclarations, TestScope, TestWalk};
+use crate::engine::test_detection::{Declaration, ModuleDeclarations, TestScope, TestWalk, TestsByPath};
 
 pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
 
@@ -168,28 +168,28 @@ pub(crate) fn parse_file(path: &Path, size: u64, lang_name: &str, buf: &mut Vec<
     let lang_name = resolved.as_deref().unwrap_or(lang_name);
     let language = lookup.languages.get(lang_name).unwrap();
     // Decided after the language is known, since a contested extension is only identified from here on
-    let whole_file_is_tests = config.detect_tests && is_a_test_file(path, test_scope, language);
+    let tests_by_path = if config.detect_tests { judge_tests_by_path(path, test_scope, language) } else { TestsByPath::Nothing };
     let report = parse_lines::<false>(contents, language, lookup, matchers, config, buffers,
-            whole_file_is_tests, &mut ExplainLog::default());
+            tests_by_path, &mut ExplainLog::default());
     if let Some(t) = at { buffers.timing.parse_nanos += phase_timing::nanos_since(t); }
 
     Ok(FileOutcome::Counted(report, resolved))
 }
 
-pub(crate) fn is_a_test_file(path: &Path, test_scope: TestScope, language: &Language) -> bool {
+pub(crate) fn judge_tests_by_path(path: &Path, test_scope: TestScope, language: &Language) -> TestsByPath {
     let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
-    test_scope.is_test_file(file_name, &language.test_file_names)
+    test_scope.judge_file(file_name, &language.test_file_names)
 }
 
 // What '--explain' calls. One file, read exactly as a counting run reads it, with the log switched
 // on. Keywords are skipped whatever the configuration says, since they cannot move a line's class.
 pub(crate) fn explain_parsed_file(contents: String, lang_name: &str, lookup: &NestedLanguageLookup,
-    config: &EngineConfig, whole_file_is_tests: bool) -> (String, FileReport, ExplainLog)
+    config: &EngineConfig, tests_by_path: TestsByPath) -> (String, FileReport, ExplainLog)
 {
     let config = EngineConfig { count_keywords: false, ..config.clone() };
     let mut log = ExplainLog::default();
     let report = parse_lines::<true>(&contents, lookup.languages.get(lang_name).unwrap(), lookup,
-            &mut KeywordMatchers::default(), &config, &mut ParseBuffers::default(), whole_file_is_tests, &mut log);
+            &mut KeywordMatchers::default(), &config, &mut ParseBuffers::default(), tests_by_path, &mut log);
     (contents, report, log)
 }
 
@@ -199,7 +199,7 @@ pub(crate) fn read_module_declarations(contents: &str, language: &Language, look
 {
     let config = EngineConfig { count_keywords: false, ..config.clone() };
     parse_lines::<false>(contents, language, lookup, &mut KeywordMatchers::default(), &config,
-            &mut ParseBuffers::default(), false, &mut ExplainLog::default()).declarations
+            &mut ParseBuffers::default(), TestsByPath::Nothing, &mut ExplainLog::default()).declarations
 }
 
 enum HeldFile {
@@ -1182,6 +1182,8 @@ impl CarriedRecord {
 pub(crate) struct ExplainLog {
     records: Vec<LineRecord>,
     languages: Vec<String>,
+    // The offset and the index of the file marker that made the whole file test code
+    file_marker: Option<(usize, usize)>,
 }
 
 pub(crate) struct LineRecord {
@@ -1215,6 +1217,18 @@ impl ExplainLog {
         for record in self.records.iter_mut().rev().take(count) { record.in_test = true; }
     }
 
+    fn note_file_marker(&mut self, found: (usize, usize)) {
+        self.file_marker = Some(found);
+    }
+
+    pub(crate) fn get_file_marker(&self) -> Option<(usize, usize)> {
+        self.file_marker
+    }
+
+    pub(crate) fn into_parts(self) -> (Vec<LineRecord>, Vec<String>) {
+        (self.records, self.languages)
+    }
+
     #[cfg(test)]
     pub(crate) fn get_language_name_of(&self, record: &LineRecord) -> &str {
         &self.languages[record.language as usize]
@@ -1223,10 +1237,6 @@ impl ExplainLog {
     #[cfg(test)]
     pub(crate) fn records(&self) -> &[LineRecord] {
         &self.records
-    }
-
-    pub(crate) fn into_parts(self) -> (Vec<LineRecord>, Vec<String>) {
-        (self.records, self.languages)
     }
 }
 
@@ -1240,7 +1250,7 @@ struct SectionBucket<'a> {
 
 fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup: &NestedLanguageLookup,
     matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
-    whole_file_is_tests: bool, log: &mut ExplainLog) -> FileReport
+    tests_by_path: TestsByPath, log: &mut ExplainLog) -> FileReport
 {
     let ParseBuffers { scan, alias_indices, code_spans, test_ranges, .. } = buffers;
     let mut shell_stats = if config.count_keywords { FileStats::with_keywords(&language.keywords) }
@@ -1250,8 +1260,8 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
 
     // Nothing but the keyword search reads the spans, so a language with no keywords builds none
     let collecting_spans = config.count_keywords && matchers.for_language(language).is_some();
-    // A file that is tests from end to end needs no extent followed, since nothing can be more
-    let mut test_walk = if whole_file_is_tests { None } else { TestWalk::of(language, contents, config.detect_tests) };
+    let whole_file_is_tests = tests_by_path == TestsByPath::WholeFile;
+    let mut test_walk = TestWalk::of(language, contents, config.detect_tests, tests_by_path);
     let mut declarations = match &language.module_keyword {
         Some(keyword) if config.detect_tests && !whole_file_is_tests => Some(ModuleDeclarations::of(keyword, contents)),
         _ => None
@@ -1373,14 +1383,18 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     }
 
     // The rows under a language add up to it, so a section's line in a test file goes to the tests alone
-    if whole_file_is_tests {
+    let file_marker = test_walk.as_ref().and_then(TestWalk::get_file_marker);
+    if whole_file_is_tests || file_marker.is_some() {
         for bucket in buckets.drain(..) {
             shell_stats.lines += bucket.stats.lines;
             shell_stats.classes.add(&bucket.stats.classes);
         }
         test_stats = shell_stats.clone();
         test_bytes = contents.len();
-        if EXPLAIN { log.mark_last_lines_as_test(test_stats.lines); }
+        if EXPLAIN {
+            log.mark_last_lines_as_test(test_stats.lines);
+            if let Some(found) = file_marker { log.note_file_marker(found); }
+        }
     }
 
     FileReport {
@@ -2507,7 +2521,7 @@ mod tests {
         parse_lines::<false>(contents, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
                 extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
                 &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default(),
-                false, &mut ExplainLog::default()).into_whole()
+                TestsByPath::Nothing, &mut ExplainLog::default()).into_whole()
     }
 
     fn c_like_with_a_splice() -> Language {
@@ -3385,7 +3399,7 @@ mod tests {
     {
         let lookup = NestedLanguageLookup { languages, extension_to_name: extensions, set_aside: &NO_SET_ASIDE };
         parse_lines::<false>(contents, shell, &lookup, &mut KeywordMatchers::default(),
-                &EngineConfig::default(), &mut ParseBuffers::default(), false, &mut ExplainLog::default())
+                &EngineConfig::default(), &mut ParseBuffers::default(), TestsByPath::Nothing, &mut ExplainLog::default())
     }
 
     #[test]
@@ -4226,7 +4240,7 @@ mod tests {
                     .unwrap_or_else(|x| panic!("{name} could not be counted: {x}"));
             let raw = std::fs::read_to_string(&path)
                     .unwrap_or_else(|x| panic!("{name} could not be read: {x}"));
-            let (contents, explained, log) = explain_parsed_file(raw, lang_name.as_ref(), &shipped_lookup(), &config, false);
+            let (contents, explained, log) = explain_parsed_file(raw, lang_name.as_ref(), &shipped_lookup(), &config, TestsByPath::Nothing);
 
             // The spans of every line partition its trimmed text: they start at the first byte of
             // text, touch each other with no gap and no overlap, and stop at the last. A blank
@@ -4568,7 +4582,7 @@ mod tests {
         let mut log = ExplainLog::default();
         parse_lines::<true>(contents, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
                 extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
-                &mut KeywordMatchers::default(), config, &mut ParseBuffers::default(), false, &mut log);
+                &mut KeywordMatchers::default(), config, &mut ParseBuffers::default(), TestsByPath::Nothing, &mut log);
         log.records().iter().enumerate().filter(|(_, record)| record.in_test).map(|(at, _)| at + 1).collect()
     }
 
@@ -4610,7 +4624,7 @@ mod tests {
         let report = parse_lines::<false>(source, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
                 extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
                 &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default(),
-                false, &mut ExplainLog::default());
+                TestsByPath::Nothing, &mut ExplainLog::default());
         let tests = report.tests.unwrap();
         assert_eq!(tests.stats.lines, 7);
         assert_eq!(tests.stats.classes.calculate_lines(), 7);
@@ -4851,19 +4865,48 @@ mod tests {
     }
 
     #[test]
+    fn a_file_marker_in_code_makes_the_file_test_code_whole_and_a_pattern_taking_the_file_back_switches_it_off() {
+        let language = LANGUAGE_MAP_REF.get("Java").unwrap();
+        let lookup = NestedLanguageLookup { languages: &NO_SET_ASIDE, extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE };
+        let parse = |source: &str, by_path: TestsByPath, config: &EngineConfig| {
+            let mut log = ExplainLog::default();
+            let report = parse_lines::<true>(source, language, &lookup, &mut KeywordMatchers::default(), config,
+                    &mut ParseBuffers::default(), by_path, &mut log);
+            (report, log)
+        };
+        let marked = "class A {\n    // @Test in a comment\n    String s = \"@Test\";\n    @Test\n    void t() {}\n}\n";
+        let only_text = "class A {\n    // @Test in a comment\n    String s = \"@Test\";\n}\n";
+
+        let (report, log) = parse(marked, TestsByPath::Nothing, &EngineConfig::default());
+        let tests = report.tests.as_ref().unwrap();
+        assert_eq!((6, marked.len()), (tests.stats.lines, tests.bytes));
+        assert_eq!((&report.shell.classes, &report.shell.keyword_occurences), (&tests.stats.classes, &tests.stats.keyword_occurences));
+        assert!(!tests.stats.keyword_occurences.is_empty(), "the keywords of the file were not copied to its tests");
+        assert!(log.records().iter().all(|record| record.in_test));
+        assert_eq!(Some((marked.find("@Test\n").unwrap(), 0)), log.get_file_marker());
+
+        let (report, log) = parse(marked, TestsByPath::TakenBack, &EngineConfig::default());
+        assert!(report.tests.is_none() && log.get_file_marker().is_none(), "a '!' pattern left the file marker on");
+        let (report, _) = parse(marked, TestsByPath::Nothing, &EngineConfig { detect_tests: false, ..EngineConfig::default() });
+        assert!(report.tests.is_none());
+        let (report, log) = parse(only_text, TestsByPath::Nothing, &EngineConfig::default());
+        assert!(report.tests.is_none() && log.get_file_marker().is_none(), "a marker in a comment or a string was read");
+    }
+
+    #[test]
     fn a_file_of_test_code_whole_keeps_its_sections_in_its_own_row() {
         let (languages, extensions) = section_fixture();
         let lookup = NestedLanguageLookup { languages: &languages, extension_to_name: &extensions, set_aside: &NO_SET_ASIDE };
         let contents = "<p>hello</p>\n<script>\nvar s = \"x\";\n</script>\n<style>\n/* css */\n</style>\n";
-        let parse = |whole_file_is_tests| parse_lines::<false>(contents, &web_shell(), &lookup,
+        let parse = |by_path| parse_lines::<false>(contents, &web_shell(), &lookup,
                 &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default(),
-                whole_file_is_tests, &mut ExplainLog::default());
+                by_path, &mut ExplainLog::default());
 
-        let ordinary = parse(false);
+        let ordinary = parse(TestsByPath::Nothing);
         assert_eq!(2, ordinary.sections.len());
         let whole = ordinary.into_whole();
 
-        let of_tests = parse(true);
+        let of_tests = parse(TestsByPath::WholeFile);
         assert!(of_tests.sections.is_empty(), "a line of a test file went to the row of its section");
         assert_eq!((whole.lines, &whole.classes), (of_tests.shell.lines, &of_tests.shell.classes));
         let tests = of_tests.tests.unwrap();
@@ -4885,21 +4928,21 @@ mod tests {
             "    struct Second;\n",
             "}\n");
         let language = LANGUAGE_MAP_REF.get("Rust").unwrap();
-        let parse = |whole_file_is_tests, config: &EngineConfig| parse_lines::<false>(source, language, &shipped_lookup(),
-                &mut KeywordMatchers::default(), config, &mut ParseBuffers::default(), whole_file_is_tests,
+        let parse = |by_path, config: &EngineConfig| parse_lines::<false>(source, language, &shipped_lookup(),
+                &mut KeywordMatchers::default(), config, &mut ParseBuffers::default(), by_path,
                 &mut ExplainLog::default());
         let counted = |stats: FileStats| content_info_of(stats, "Rust").keyword_occurences;
         let of = |structs, enums| hashmap!("structs".to_owned() => structs, "enums".to_owned() => enums, "traits".to_owned() => 0);
 
-        let marked = parse(false, &EngineConfig::default());
+        let marked = parse(TestsByPath::Nothing, &EngineConfig::default());
         assert_eq!(of(2, 1), counted(marked.tests.unwrap().stats));
         assert_eq!(of(4, 1), counted(marked.shell));
 
-        let whole = parse(true, &EngineConfig::default());
+        let whole = parse(TestsByPath::WholeFile, &EngineConfig::default());
         assert_eq!(whole.shell.keyword_occurences, whole.tests.as_ref().unwrap().stats.keyword_occurences);
         assert_eq!(of(4, 1), counted(whole.tests.unwrap().stats));
 
-        let hidden = parse(false, &EngineConfig { count_keywords: false, ..EngineConfig::default() });
+        let hidden = parse(TestsByPath::Nothing, &EngineConfig { count_keywords: false, ..EngineConfig::default() });
         assert!(hidden.tests.unwrap().stats.keyword_occurences.is_empty());
     }
 

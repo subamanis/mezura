@@ -2,10 +2,10 @@ use std::path::Path;
 
 use crate::{EngineConfig, Language, LineClass, LineClasses, ScanSkip, Span, TestFileName};
 use crate::domain::CommentPair;
-use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file, find_scan_skip, is_a_test_file};
+use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file, find_scan_skip, judge_tests_by_path};
 use crate::engine::path_patterns::{PathPatternMatcher, TakingBack};
 use crate::engine::targets::{find_names_root_of_path, normalise_separators};
-use crate::engine::test_detection::{DirectoryScope, FilesOnDisk, TestScope, find_declaring_chain, find_test_directory_along};
+use crate::engine::test_detection::{DirectoryScope, FilesOnDisk, TestScope, TestsByPath, find_declaring_chain, find_test_directory_along};
 use crate::languages::Languages;
 
 /// One file read line by line, as [`explain_file`] answers it.
@@ -20,8 +20,8 @@ pub struct FileExplanation {
     /// or None where it would count it. A file given by name is counted either way.
     pub left_out_of_a_scan: Option<ScanSkip>,
     /// What decided the file as a whole, the rule that made every line of it test code or the `!`
-    /// pattern that declared it none. None where no rule reached it, so that only a marker makes a
-    /// line of it test code, and while test detection is off.
+    /// pattern that declared it none. None where no rule reached it, so that only a marker opening
+    /// lines makes a line of it test code, and while test detection is off.
     pub test_file_rule: Option<TestFileRule>,
     /// The file as it was read, so a caller can show each line beside its answer.
     pub contents: String,
@@ -51,7 +51,8 @@ pub enum TestFileRule {
         /// The folder above the file that the pattern matched. None where it matched the file itself.
         matched_folder: Option<String>
     },
-    /// A `!` pattern declares it no test code. A marker inside it still makes test code.
+    /// A `!` pattern declares it no test code. A marker opening lines inside it still makes test
+    /// code, a marker that makes a whole file test code does not.
     DeclaredNotTests {
         /// The pattern as the configuration holds it, its `!` included.
         pattern: String,
@@ -64,6 +65,13 @@ pub enum TestFileRule {
         /// The file that declares it, then the file declaring that one, up to the one whose
         /// declaration sits under the marker.
         declared_by: Vec<String>
+    },
+    /// A marker its language declares under `FILE MARKERS` sits in its code, `@Test` in Java.
+    FileMarker {
+        /// The marker as the language file spells it.
+        marker: String,
+        /// The line it was found on, counted from 1.
+        line: usize
     },
 }
 
@@ -190,11 +198,16 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
         extension_to_name: &nested_definitions.extension_to_name,
         set_aside: &nested_definitions.set_aside,
     };
-    let (whole_file_is_tests, test_file_rule) = match config.detect_tests {
+    let (tests_by_path, mut test_file_rule) = match config.detect_tests {
         true => decide_whole_file(path, config, by_name.get(lang_name.as_ref()).unwrap(), &nested_lookup)?,
-        false => (false, None)
+        false => (TestsByPath::Nothing, None)
     };
-    let (contents, report, log) = explain_parsed_file(contents, &lang_name, &nested_lookup, config, whole_file_is_tests);
+    let (contents, report, log) = explain_parsed_file(contents, &lang_name, &nested_lookup, config, tests_by_path);
+    if let Some((at, index)) = log.get_file_marker() {
+        test_file_rule = Some(TestFileRule::FileMarker {
+                marker: by_name.get(lang_name.as_ref()).unwrap().test_file_markers[index].clone(),
+                line: contents[..at].matches('\n').count() + 1 });
+    }
 
     let language = lang_name.to_string();
     let (records, names) = log.into_parts();
@@ -218,7 +231,7 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
 
 // The file is its own target, so a name pattern reads it from the folder above its own
 fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lookup: &NestedLanguageLookup)
-    -> Result<(bool, Option<TestFileRule>), ExplainError>
+    -> Result<(TestsByPath, Option<TestFileRule>), ExplainError>
 {
     let patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed)
             .map_err(ExplainError::InvalidTestPattern)?;
@@ -241,7 +254,7 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
     if scope != TestScope::Tests && language.module_keyword.is_some()
             && let Some(chain) = find_declaring_chain(file, &language.name, &mut files_on_disk) {
         let declared_by = chain.iter().map(|path| normalise_separators(&path.to_string_lossy()).into_owned()).collect();
-        return Ok((true, Some(TestFileRule::DeclaredModule { declared_by })));
+        return Ok((TestsByPath::WholeFile, Some(TestFileRule::DeclaredModule { declared_by })));
     }
     let rule = match (decided_by, scope) {
         (Some(at), _) => {
@@ -262,7 +275,7 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
             language.test_file_names.iter().find(|shape| shape.matches(name)).cloned().map(TestFileRule::FileName)
         }
     };
-    Ok((is_a_test_file(file, scope, language), rule))
+    Ok((judge_tests_by_path(file, scope, language), rule))
 }
 
 // The record holds symbol numbers, and what a reader gets is the symbol as the file spells it. The
@@ -478,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rule_that_makes_a_whole_file_test_code_is_named_and_a_marker_leaves_it_unnamed() {
+    fn the_rule_that_makes_a_whole_file_test_code_is_named_and_a_marker_opening_lines_leaves_it_unnamed() {
         let root = std::env::temp_dir().join("mezura-explain-test-rules");
         let _ = fs::remove_dir_all(&root);
         for (file, contents) in [("proj/Cargo.toml", ""),
@@ -489,6 +502,9 @@ mod tests {
                 ("proj/src/parser.spec.rs", "fn t() {}\n"),
                 ("proj/spec/fixtures/c.rs", "fn f() {}\n#[cfg(test)]\nmod tests {}\n"),
                 ("proj/go/parser_test.go", "package p\n"),
+                ("proj/src/Marked.java", "class Marked {\n    @Test\n    void t() {}\n}\n"),
+                ("proj/src/Plain.java", "class Plain {\n    String s = \"@Test\";\n}\n"),
+                ("proj/vendor/Vendored.java", "class Vendored {\n    @Test void t() {}\n}\n"),
                 ("jvm/settings.gradle", ""),
                 ("jvm/core/src/test/java/A.java", "class A {}\n")] {
             let path = root.join(file);
@@ -503,7 +519,8 @@ mod tests {
         };
         let default = EngineConfig::default();
         let declared = EngineConfig { test_patterns: crate::PathPatterns { patterns: vec!["spec/".to_owned(),
-                "!spec/fixtures/".to_owned(), "*.spec.rs".to_owned()], read_from: Some(at("proj")) }, ..EngineConfig::default() };
+                "!spec/fixtures/".to_owned(), "*.spec.rs".to_owned(), "!vendor/".to_owned()], read_from: Some(at("proj")) },
+                ..EngineConfig::default() };
         let declared_as_a_path = EngineConfig { test_patterns: crate::PathPatterns::of([at("proj/spec")]), ..EngineConfig::default() };
         let detection_off = EngineConfig { detect_tests: false, ..EngineConfig::default() };
 
@@ -523,6 +540,14 @@ mod tests {
         assert_eq!((Some(TestFileRule::DeclaredNotTests { pattern: "!spec/fixtures/".to_owned(),
                 matched_folder: Some(at("proj/spec/fixtures")) }), vec![false, true, true]), explain("proj/spec/fixtures/c.rs", &declared));
         assert_eq!((None, vec![false]), explain("proj/tests/a.rs", &detection_off));
+
+        let marked = Some(TestFileRule::FileMarker { marker: "@Test".to_owned(), line: 2 });
+        assert_eq!((marked.clone(), vec![true, true, true, true]), explain("proj/src/Marked.java", &default));
+        assert_eq!((None, vec![false, false, false]), explain("proj/src/Plain.java", &default));
+        assert_eq!((marked, vec![true, true, true]), explain("proj/vendor/Vendored.java", &default));
+        assert_eq!((Some(TestFileRule::DeclaredNotTests { pattern: "!vendor/".to_owned(), matched_folder: Some(at("proj/vendor")) }),
+                vec![false, false, false]), explain("proj/vendor/Vendored.java", &declared), "a '!' pattern left the file marker on");
+        assert_eq!((None, vec![false, false, false, false]), explain("proj/src/Marked.java", &detection_off));
 
         fs::remove_dir_all(&root).unwrap();
     }

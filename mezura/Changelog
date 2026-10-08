@@ -9,6 +9,10 @@ Main changes:
       beside a 'pom.xml', 'test' beside a 'mix.exs', and the same for Swift, Dart, Julia, Perl,
       Clojure, Erlang, Elm and R). Everything else can be manually declared or exempted with the
       new '--tests' flag. TEST_DETECTION.md says what is found for each language and what is missed.
+  -> A Java, Kotlin or C# file holding one of the annotations a test runner collects tests by,
+      '@Test', '@BeforeEach', '[Fact]', '[Test]', '[TestFixture]', is test code whole wherever it
+      sits. The lists are in the language files under 'FILE MARKERS'. A '!' pattern of '--tests'
+      switches them off for what it names.
   -> New '--tests': glob patterns for the files and directories to count as test code, a '!' in
       front of one taking back what an earlier pattern or a build tool declared, the last match
       winning.
