@@ -562,6 +562,15 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
                 '--by-file' follow, a file or a language that is tests whole getting no row.
                 When the whole run is tests, one sentence says so.
 
+    An HTML page holding a script, and a test page beside it, as each value draws their lines:
+
+        share                     split                         removed
+        HTML              20      HTML                  20      HTML              12
+         ├─ HTML itself    8       ├─ production        12       ├─ HTML itself    8
+         ├─ JavaScript     4       │   ├─ HTML itself    8       └─ JavaScript     4
+         └─ tests          8       │   └─ JavaScript     4
+                                   └─ tests              8
+
     Under 'share' and 'split' a 'tests' row under the total adds up the test code of every
     language. An HTML page, a '.vue' or any other file holding sections of other languages splits
     its language into rows, 'HTML itself' beside the sections, and under 'share' its 'tests' row
