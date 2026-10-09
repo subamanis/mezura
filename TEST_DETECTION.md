@@ -320,7 +320,8 @@ a base class, `AnyFunSuite`, `Specification`, and a base class is a name any lib
 tests by: NUnit's `[Test]`, `[TestFixture]`, `[TestCase]`, `[TestCaseSource]`, `[SetUp]`,
 `[TearDown]` and `[OneTimeSetUp]`, Unity's `[UnityTest]`, xUnit's `[Fact]` and `[Theory]`, and
 MSTest's `[TestClass]`, `[TestMethod]` and `[TestInitialize]`. The attribute may carry arguments or
-sit first in a list, `[Fact(Skip = "slow")]`, `[Test, Order(1)]`. `[TestFixture]` and
+sit first in a list, `[Fact(Skip = "slow")]`, `[Test, Order(1)]`, and other attribute lists may
+stand in front of it on its line, `[Category("Slow")] [Test]`. `[TestFixture]` and
 `[TestClass]` catch a fixture whose tests use a custom attribute, and the setup attributes catch a
 base fixture that holds no test. Measured over the 14,427 C# files of four Unity projects: every
 file holding one of these outside a test directory is a test, samples of the test framework and
@@ -336,12 +337,17 @@ alone; `--tests "*Tests/,*.Test/"` declares them.
   file is production unless another attribute of the list sits first somewhere in it.
 - An attribute written with its suffix, `[TestAttribute]`, fully qualified, `[NUnit.Framework.Test]`,
   with a space, `[ Test ]`, or with a target, `[method: Test]`: production.
+- An attribute with code in front of it on its line, the one-line
+  `class T { [Test] public void A() { } }`: production. Over the 14,450 C# files of this machine
+  all 8,415 test attributes stand at the start of their line or after another attribute list.
 
 **Refused**, and why: `[Category]` is `System.ComponentModel.Category`, on Unity runtime code;
 `[Ignore]` is sqlite-net's, on model classes; `[InlineData]`, `[DataRow]` and `[ClassInitialize]`
 only ever sit beside an attribute already on the list. An indexer over a variable named `Test`,
-`map[Test]`, and a collection expression over a type named `Fact`, `[Fact.Create(a)]`, are code
-and mark nothing.
+`map[Test]` or `grid[0][Test]`, a list pattern `args is [Test]`, a dictionary initializer
+`{ [Test] = 1 }` and a collection expression over a type named `Fact`, `[Fact.Create(a)]`, are code
+and mark nothing, since a marker written with its bracket counts only where nothing but other
+attribute lists stands in front of it on its line.
 
 ### Swift
 

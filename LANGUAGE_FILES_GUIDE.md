@@ -307,7 +307,9 @@ own, so the byte before it and the byte after it may be no letter, digit or unde
 byte after it may not be a `.` either. That is why C#'s are written with the bracket open: `[Test`
 matches `[Test]`, `[Test, Order(1)]` and `[Test(Description = "x")]`, and refuses `[TestFixture]`,
 which gets a line of its own, an indexer `map[Test]`, and a collection expression `[Test.Of(a)]`.
-A marker inside a string or a comment is text. Beside `MARKERS`, a file marker inside the test code
+A marker that starts with `[` counts only where nothing but other bracketed lists stands in front
+of it on its line, which is where an attribute sits, so `grid[0][Test]`, `args is [Test]` and
+`{ [Test] = 1 }` mark nothing. A marker inside a string or a comment is text. Beside `MARKERS`, a file marker inside the test code
 one of them opened belongs to that test and leaves the rest of the file as it was, since an
 annotation inside a test block says nothing about the code around it. List only what a test
 framework defines and no production library writes: `@Before` is AspectJ's as much as JUnit 4's,

@@ -1,8 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 
-/* A reader with no attribute of a test framework in its code: one in a comment, one in a string,
-   a collection expression over a type named Fact, and an indexer over a field named Test. */
+/* A reader with no test attribute in its code, only lookalikes in a comment, a string, a
+   collection expression, indexers and a dictionary key. */
 [Serializable]
 [Category("Readers")]
 class Parser
@@ -21,6 +22,10 @@ public void T() {{ }}
     public string Parse(string text) => text;
 
     public int Lookup(int[] map) => map[Test[0]];
+
+    public int Pick(int[][] grid) => grid[0][Test[1]];
+
+    Dictionary<int[], string> Names => new() { [Test] = "first" };
 }
 
 class Fact

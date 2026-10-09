@@ -184,6 +184,7 @@ impl<'a> TestWalk<'a> {
     fn is_file_marker_at(&self, at: usize, marker: &str, base: usize, ranges: &[(usize, usize)]) -> bool {
         self.lies_in_code(at, marker.len(), base, ranges) && self.stands_as_a_word(at, marker.len())
                 && self.contents.get(at + marker.len()) != Some(&b'.')
+                && (!marker.starts_with('[') || self.has_only_attributes_in_front(at, base, ranges))
     }
 
     fn lies_in_code(&self, at: usize, width: usize, base: usize, ranges: &[(usize, usize)]) -> bool {
@@ -198,6 +199,24 @@ impl<'a> TestWalk<'a> {
         let before = (!opens_the_file).then(|| self.contents[at - 1]);
         let after = self.contents.get(at + width).copied();
         !before.is_some_and(is_word_byte) && !after.is_some_and(is_word_byte)
+    }
+
+    fn has_only_attributes_in_front(&self, at: usize, base: usize, ranges: &[(usize, usize)]) -> bool {
+        let skipped = if base == 0 && self.contents.starts_with(BYTE_ORDER_MARK) { BYTE_ORDER_MARK.len() } else { 0 };
+        let mut depth = 0u32;
+        for &(from, to) in ranges {
+            let (from, to) = (from.max(skipped), to.min(at - base));
+            if from >= to { continue; }
+            for &byte in &self.contents[base + from..base + to] {
+                match byte {
+                    b'[' => depth += 1,
+                    b']' if depth > 0 => depth -= 1,
+                    _ if depth == 0 && !byte.is_ascii_whitespace() => return false,
+                    _ => ()
+                }
+            }
+        }
+        depth == 0
     }
 
     // Every bracket moves the depth, and an opener or a terminator counts only at depth zero. The
@@ -889,7 +908,13 @@ mod tests {
             walk.get_file_marker()
         };
         assert_eq!(Some((0, 0)), marker_of("@Test void t() {}", &[(0, 17)]));
-        assert_eq!(Some((4, 1)), marker_of("x = [Fact] [Fact]", &[(0, 17)]), "the second find was recorded over the first");
+        assert_eq!(Some((0, 1)), marker_of("[Fact] [Fact]", &[(0, 13)]), "the second find was recorded over the first");
+        assert_eq!(Some((16, 1)), marker_of("[Category(\"x\")] [Fact]", &[(0, 22)]));
+        assert_eq!(Some((8, 1)), marker_of("/* c */ [Fact]", &[(7, 14)]), "a comment in front was taken for code");
+        assert_eq!(None, marker_of("grid[0][Fact]", &[(0, 13)]), "an index after an index was taken for an attribute");
+        assert_eq!(None, marker_of("args is [Fact]", &[(0, 14)]));
+        assert_eq!(None, marker_of("new() { [Fact] = 1 }", &[(0, 20)]));
+        assert_eq!(None, marker_of("x = [Fact] [Fact]", &[(0, 17)]));
         assert_eq!(Some((10, 1)), marker_of("[Factory] [Fact(Skip = \"x\")]", &[(0, 28)]));
         assert_eq!(None, marker_of("@TestOnly void t() {}", &[(0, 21)]));
         assert_eq!(None, marker_of("x@Test", &[(0, 6)]));
