@@ -48,6 +48,8 @@ Bugfixes:
       could turn the rest of the file into comment lines.
   -> In C# and F# a doubled quote inside an '@"' string that crosses lines no longer ends it, so
       the lines below it are counted as the string they are.
+  -> In Kotlin and Scala a raw string whose text ends in a quote, '"""say "hi""""', ends at its last
+      three quotes, so what follows it on its line is no longer read as a string.
   -> In the table, the boxed table and a comparison, the branch before a nested language or a file
       takes the theme's 'nested-branch' or 'file-branch' color, as it already did in the list.
 

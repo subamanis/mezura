@@ -113,7 +113,9 @@ a whole string ending in a backslash, because a backtick string escapes nothing.
 
 Raw or not is a fact about the language, not about the symbol. The backtick escapes nothing in Go,
 Odin and D and does escape in a JavaScript template literal. `"""` is raw in Kotlin and Scala,
-escaping in Java, Swift and Python. Look it up rather than guessing, because getting it wrong is
+escaping in Java, Swift and Python. A raw form whose closer is one character written three times
+or more ends at the last of a run of them, since nothing escapes a quote in front of it: Kotlin's
+`"""say "hi""""` holds `say "hi"`. Look it up rather than guessing, because getting it wrong is
 silent: a `` `C:\` `` in the wrong block leaves the string open to the end of the file and every
 comment under it counts as code.
 

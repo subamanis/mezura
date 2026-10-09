@@ -216,9 +216,12 @@ impl Language {
     }
 
     pub(crate) fn string_escapes_by_doubling(&self, symbol: u8) -> bool {
-        let first_crossing = self.strings.get_symbols().len() + self.strings.get_char_literals().len();
-        (symbol as usize).checked_sub(first_crossing)
-                .is_some_and(|crossing| self.strings.get_multiline_strings()[crossing].escapes_by_doubling)
+        self.find_crossing_string(symbol).is_some_and(|crossing| crossing.escapes_by_doubling)
+    }
+
+    pub(crate) fn string_closes_at_the_end_of_a_run(&self, symbol: u8) -> bool {
+        self.find_crossing_string(symbol).is_some_and(|crossing| !crossing.escapes && crossing.close.len() >= 3
+                && crossing.close.bytes().all(|byte| byte == crossing.close.as_bytes()[0]))
     }
 
     // The one place that knows the numbering: a pair kind added later is one match arm here and not
@@ -264,6 +267,11 @@ impl Language {
             CommentPair::Leveled(pair) => pair.end_prefix.len() + level as usize + 1,
             CommentPair::Plain { end, .. } | CommentPair::Nesting { end, .. } => end.len()
         }
+    }
+
+    fn find_crossing_string(&self, symbol: u8) -> Option<&MultilineString> {
+        let first_crossing = self.strings.get_symbols().len() + self.strings.get_char_literals().len();
+        (symbol as usize).checked_sub(first_crossing).map(|crossing| &self.strings.get_multiline_strings()[crossing])
     }
 }
 

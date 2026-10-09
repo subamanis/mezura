@@ -2263,7 +2263,7 @@ fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_sy
         if at < consumed_up_to || (role == ROLE_OPEN && cancelled.contains(&at)) {
             continue;
         }
-        let length = match open {
+        let (at, length) = match open {
             Some(open_symbol) => {
                 if open_symbol != symbol || role == ROLE_OPEN {
                     dropped_a_symbol = true;
@@ -2274,9 +2274,14 @@ fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_sy
                     consumed_up_to = at + 2 * closer.len();
                     continue;
                 }
+                let quotes_in_front = if language.string_closes_at_the_end_of_a_run(symbol) {
+                    line_bytes[at + closer.len()..].iter().take_while(|byte| **byte == closer[0]).count()
+                } else {
+                    0
+                };
                 open = None;
                 opened_at = None;
-                closer.len()
+                (at + quotes_in_front, closer.len())
             }
             None => {
                 // A closer opens nothing, and neither does a raw symbol the language escaped.
@@ -2285,7 +2290,7 @@ fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_sy
                 open = Some(symbol);
                 opened_at = (role == ROLE_OPEN).then_some(at);
                 dropped_a_symbol = false;
-                language.get_string_pair_of(symbol).0.len()
+                (at, language.get_string_pair_of(symbol).0.len())
             }
         };
         consumed_up_to = at + length;
@@ -3144,6 +3149,10 @@ mod tests {
                     .with_string_pairs_escaped_by_doubling(&[("@\"", "\"")]),
             ["//"], &[("/*", "*/")], []));
 
+    static KOTLIN_RAW : LazyLock<Language> = LazyLock::new(|| Language::new(
+            "kotlin-raw", ["kt"], build_backslashed_quotes().with_raw_multiline_strings(["\"\"\""]),
+            ["//"], &[("/*", "*/")], []));
+
     // The shape of the shipped Rust file, a crossing quote with the character literal beside it
     static RUST_CHARS : LazyLock<Language> = LazyLock::new(|| Language::new(
             "rust-chars", ["rs"], StringRules::escaping_with(b'\\').with_char_literals(["'"])
@@ -3377,6 +3386,17 @@ mod tests {
                 bounds_multi(r#"// three ""four"" five";"#, &CSHARP_DOUBLING, None, Some(2)));
         assert_ne!(Some(2), bounds_multi(r##"var s = @"one ""two"""##, &CSHARP_VERBATIM, None, None).open_str_symbol_after,
                 "a pair that does not escape by doubling carried its string past a doubled closer");
+    }
+
+    #[test]
+    fn a_raw_closer_ends_at_the_last_of_a_run_of_its_quotes() {
+        assert_eq!(TextInfo::from_slice_w_literal("val s =  + x"),
+                bounds_multi(r#"val s = """He said "hi"""" + x"#, &KOTLIN_RAW, None, None));
+        assert_eq!(TextInfo::from_slice_w_literal(" + x"),
+                bounds_multi(r#"He said "hi"""" + x"#, &KOTLIN_RAW, None, Some(1)));
+        assert_eq!(TextInfo::from_slice_w_literal("x = "),
+                bounds_multi(r#"x = """a""""""b""""#, &PYTHON_FULL, None, None),
+                "an escaping form took the last three of a run, which joins two Python strings into one");
     }
 
     // One symbol at both ends says nothing about whether a backslash cancels it, and reading it off
