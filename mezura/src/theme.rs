@@ -2,6 +2,7 @@
 // defaults, the name lookup and the name listing, so a new one cannot be added to some of them and
 // forgotten in the rest.
 use std::sync::{LazyLock, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use colored::{Color, ColoredString, Colorize};
 use unicode_width::UnicodeWidthChar;
@@ -29,6 +30,7 @@ const BAR_SWEEP_MAGENTA: (u8, u8, u8) = (189, 19, 172);
 
 static ACTIVE_THEME: OnceLock<Theme> = OnceLock::new();
 static DEFAULT_THEME: LazyLock<Theme> = LazyLock::new(Theme::default);
+static ITALICS_HIDDEN: AtomicBool = AtomicBool::new(false);
 
 // Messages printed before the configuration exists (failed initialization, unreadable language
 // files) fall back to the defaults rather than being left unstyled
@@ -38,6 +40,10 @@ pub fn get_active() -> &'static Theme {
 
 pub fn set_active(theme: Theme) {
     let _ = ACTIVE_THEME.set(theme);
+}
+
+pub fn set_italics_hidden(hidden: bool) {
+    ITALICS_HIDDEN.store(hidden, Ordering::Relaxed);
 }
 
 // How a style gets its color: one color for everything it paints, or, where a run of cells is
@@ -134,7 +140,7 @@ impl Style {
         if self.bold {
             painted = painted.bold();
         }
-        if self.italic {
+        if self.italic && !ITALICS_HIDDEN.load(Ordering::Relaxed) {
             painted = painted.italic();
         }
         if self.underline {

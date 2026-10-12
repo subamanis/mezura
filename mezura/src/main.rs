@@ -121,6 +121,7 @@ fn main() -> ExitCode {
     if terminal_kind == "dumb" {
         control::set_override(false);
     }
+    crate::theme::set_italics_hidden(terminal_kind == "linux");
 
     // A pipe already strips the escape codes, but CLICOLOR_FORCE overrides that and would put them
     // inside the strings of the document, so the machine format turns them off itself
