@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::{EngineConfig, FileEntry, Language, Stats, TestCode};
 use crate::domain::FileStats;
-use crate::engine::file_parser::{NestedLanguageLookup, TestReport, read_module_declarations};
+use crate::engine::file_parser::{BYTE_ORDER_MARK, NestedLanguageLookup, TestReport, read_module_declarations};
 use crate::engine::modules::ModuleId;
 use crate::engine::targets::spell_out;
 use crate::engine::test_detection::{attribute, find_word_end, is_word_byte, is_word_start};
@@ -191,8 +191,12 @@ impl<'a> ModuleDeclarations<'a> {
         if self.open.is_empty() && !holds_the_keyword { return; }
         let Some(&(first, _)) = ranges.first() else { return };
         let line = &raw_line.as_bytes()[lead..];
-        if self.open.is_empty() && !matches!(line[first], b'm' | b'p' | b'#') { return; }
-        self.read_line(line_start, line, ranges, is_test, holds_the_keyword);
+        let first = match line_start + lead + first == 0 && line.starts_with(BYTE_ORDER_MARK) {
+            true => skip_whitespace(line, BYTE_ORDER_MARK.len()),
+            false => first
+        };
+        if self.open.is_empty() && !line.get(first).is_some_and(|byte| matches!(byte, b'm' | b'p' | b'#')) { return; }
+        self.read_line(line_start, line, ranges, is_test, holds_the_keyword, first);
         if !self.open.is_empty() {
             self.next_brace = memchr::memchr2(b'{', b'}', &self.contents[line_end..]).map_or(usize::MAX, |at| line_end + at);
         }
@@ -203,8 +207,8 @@ impl<'a> ModuleDeclarations<'a> {
     }
 
     fn read_line(&mut self, line_start: usize, line: &[u8], ranges: &[(usize, usize)], is_test: bool,
-            holds_the_keyword: bool) {
-        let opened = holds_the_keyword && self.read_declaration(line_start, line, ranges, is_test);
+            holds_the_keyword: bool, first: usize) {
+        let opened = holds_the_keyword && self.read_declaration(line_start, line, ranges, is_test, first);
         if self.open.is_empty() && !opened { return; }
         for &(from, to) in ranges {
             for at in memchr::memchr2_iter(b'{', b'}', &line[from..to]) {
@@ -222,8 +226,9 @@ impl<'a> ModuleDeclarations<'a> {
 
     // The attributes are read over the whole line, since a string inside one is no code range, and
     // what follows them has to sit inside one
-    fn read_declaration(&mut self, line_start: usize, line: &[u8], ranges: &[(usize, usize)], is_test: bool) -> bool {
-        let Some((mut at, names_a_path)) = skip_attributes(line, ranges[0].0) else { return false };
+    fn read_declaration(&mut self, line_start: usize, line: &[u8], ranges: &[(usize, usize)], is_test: bool,
+            first: usize) -> bool {
+        let Some((mut at, names_a_path)) = skip_attributes(line, first) else { return false };
         let Some(&(_, to)) = ranges.iter().find(|(from, to)| *from <= at && at < *to) else { return false };
         let code = &line[..to];
         if code[at..].starts_with(PUB) && !code.get(at + PUB.len()).is_some_and(|byte| is_word_byte(*byte)) {
@@ -264,7 +269,10 @@ impl<'a> ModuleDeclarations<'a> {
         while end > 0 {
             let line_end = end - 1;
             let start = memchr::memrchr(b'\n', &self.contents[..line_end]).map_or(0, |at| at + 1);
-            let line = self.contents[start..line_end].trim_ascii();
+            let line = match start {
+                0 => self.contents[..line_end].strip_prefix(BYTE_ORDER_MARK).unwrap_or(&self.contents[..line_end]),
+                _ => &self.contents[start..line_end]
+            }.trim_ascii();
             if line.is_empty() || COMMENT_STARTS.iter().any(|comment| line.starts_with(comment)) {
                 end = start;
                 continue;
@@ -556,6 +564,16 @@ mod tests {
     fn an_indented_declaration_is_read_through_its_lead() {
         let found = read(&[("    mod indented;", false), ("\tpub mod tabbed;", false), ("  #[cfg(unix)] mod attributed;", false)]);
         assert_eq!(vec![build_declaration("indented", &[], false), build_declaration("tabbed", &[], false), build_declaration("attributed", &[], false)], found);
+    }
+
+    #[test]
+    fn a_byte_order_mark_opening_the_file_hides_no_declaration() {
+        let found = read(&[("\u{feff}mod outer {", false), ("    mod inside;", true), ("}", false)]);
+        assert_eq!(vec![build_declaration("inside", &["outer"], true)], found);
+        let found = read(&[("\u{feff}#[path = \"x.rs\"]", false), ("mod below_it;", true), ("mod plain;", false)]);
+        assert_eq!(vec![build_declaration("plain", &[], false)], found);
+        let found = read(&[("\u{feff} #[cfg(test)] mod checks;", true)]);
+        assert_eq!(vec![build_declaration("checks", &[], true)], found);
     }
 
     #[test]
