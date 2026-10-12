@@ -262,8 +262,8 @@ impl<'a> ModuleDeclarations<'a> {
         }
     }
 
-    // An attribute spanning lines ends the look-back, so a path above one of those goes unseen and
-    // the declaration is followed to the default place
+    // The last line of an attribute spanning lines ends in ']'. That attribute is read whole, from the
+    // '#[' whose ']' ends the line, and the look-back goes on above it.
     fn is_under_a_path_attribute(&self, line_start: usize) -> bool {
         let mut end = line_start;
         while end > 0 {
@@ -278,6 +278,13 @@ impl<'a> ModuleDeclarations<'a> {
                 continue;
             }
             let Some((after, names_a_path)) = skip_attributes(line, 0) else { return false };
+            if after == 0 && line.ends_with(b"]") {
+                let close = start + self.contents[start..line_end].trim_ascii_end().len() - 1;
+                let Some((opener, names_a_path)) = self.find_attributes_closing_at(close, start) else { return false };
+                if names_a_path { return true; }
+                end = opener;
+                continue;
+            }
             let carries_an_item = after == 0
                     || (after < line.len() && !COMMENT_STARTS.iter().any(|comment| line[after..].starts_with(comment)));
             if carries_an_item { return false; }
@@ -285,6 +292,35 @@ impl<'a> ModuleDeclarations<'a> {
             end = start;
         }
         false
+    }
+
+    fn find_attributes_closing_at(&self, close: usize, end: usize) -> Option<(usize, bool)> {
+        let floor = close.saturating_sub(attribute::MOST_ATTRIBUTE_BYTES).min(end);
+        let mut found = None;
+        for at in memchr::memrchr_iter(b'#', &self.contents[floor..end]).map(|at| floor + at) {
+            let start = memchr::memrchr(b'\n', &self.contents[..at]).map_or(0, |newline| newline + 1);
+            let skipped = if start == 0 && self.contents.starts_with(BYTE_ORDER_MARK) { BYTE_ORDER_MARK.len() } else { start };
+            if skip_whitespace(self.contents, skipped) != at { continue; }
+            if let Some(names_a_path) = self.read_attributes_up_to(at, close) {
+                found = Some((start, names_a_path));
+            }
+        }
+        found
+    }
+
+    fn read_attributes_up_to(&self, from: usize, close: usize) -> Option<bool> {
+        let mut at = from;
+        let mut names_a_path = false;
+        while self.contents.get(at) == Some(&b'#') {
+            let open = at + 1 + usize::from(self.contents.get(at + 1) == Some(&b'!'));
+            if self.contents.get(open) != Some(&b'[') { return None; }
+            let name_start = skip_whitespace(self.contents, open + 1);
+            names_a_path |= &self.contents[name_start..find_word_end(self.contents, name_start)] == PATH_ATTRIBUTE;
+            let closing = attribute::find_matching_bracket(self.contents, open, b']')?;
+            if closing >= close { return (closing == close).then_some(names_a_path); }
+            at = skip_whitespace(self.contents, closing + 1);
+        }
+        None
     }
 }
 
@@ -558,6 +594,24 @@ mod tests {
                 ("mod aside;", None, true), (doc_line, Some(&[(0, 8), (11, doc_line.len())]), false),
                 ("#[cfg(test)] // mod inside_a_comment;", Some(&[(0, 12)]), true), ("mod after_a_comment;", None, true)]);
         assert_eq!(vec![build_declaration("documented", &[], false), build_declaration("after_a_comment", &[], true)], found);
+    }
+
+    #[test]
+    fn a_path_attribute_written_over_several_lines_is_read_whole() {
+        let found = read(&[("#[path =", true), ("    \"x.rs\"]", true), ("mod over_two_lines;", true),
+                ("#[cfg(test)]", true), ("#[path = concat!(", true), ("    \"x\",", true), ("    \".rs\")]", true),
+                ("mod over_three_lines;", true),
+                ("#[path = \"x.rs\"]", false), ("#[cfg(any(", false), ("    test,", false), ("    unix))]", false),
+                ("mod under_a_path_and_a_long_attribute;", false),
+                ("#[doc = \"a", false), ("]\"]", false), ("mod under_a_bracket_in_a_string;", false),
+                ("const LIST: &[u8] = &[", false), ("    1]", false), ("mod after_an_expression;", false),
+                ("#[cfg(any(", false), ("    test,", false), ("    unix))]", false), ("mod under_a_long_attribute;", false)]);
+        assert_eq!(vec![build_declaration("under_a_bracket_in_a_string", &[], false),
+                build_declaration("after_an_expression", &[], false), build_declaration("under_a_long_attribute", &[], false)], found);
+
+        let long_line = format!("static A: &[u8] = &[{}1]", "1, ".repeat(2_000));
+        assert_eq!(vec![build_declaration("after_a_long_line", &[], false)],
+                read(&[(long_line.as_str(), false), ("mod after_a_long_line;", false)]));
     }
 
     #[test]

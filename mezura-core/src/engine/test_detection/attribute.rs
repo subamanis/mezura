@@ -6,7 +6,7 @@ use memchr::memmem;
 use super::{Marker, begins_with, find_word_end, is_word_byte, is_word_start};
 
 // Past this many bytes an unclosed '#[' is a stray bracket
-const MOST_ATTRIBUTE_BYTES : usize = 4_096;
+pub(super) const MOST_ATTRIBUTE_BYTES : usize = 4_096;
 const OPENERS : [&str; 2] = ["#[", "#!["];
 const CFG : &[u8] = b"cfg";
 const CFG_ATTR : &[u8] = b"cfg_attr";
