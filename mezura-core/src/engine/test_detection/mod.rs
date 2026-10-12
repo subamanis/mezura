@@ -60,6 +60,8 @@ pub(crate) struct TestWalk<'a> {
     else_continues: bool,
     // The offset and the index of the first file marker found in code
     file_marker: Option<(usize, usize)>,
+    looks_ahead: bool,
+    next_brace: usize,
 }
 
 impl<'a> TestWalk<'a> {
@@ -79,8 +81,23 @@ impl<'a> TestWalk<'a> {
         if candidates.is_empty() { return None; }
         candidates.sort_unstable();
 
-        Some(TestWalk { contents: bytes, markers, file_markers, candidates, next: 0, state: State::Idle, cursor: 0,
-                held: Vec::new(), else_continues: false, file_marker: None })
+        let mut walk = TestWalk { contents: bytes, markers, file_markers, candidates: Vec::new(), next: 0, state: State::Idle,
+                cursor: 0, held: Vec::new(), else_continues: false, file_marker: None,
+                looks_ahead: language.nested_languages.is_empty(), next_brace: 0 };
+        candidates.retain(|&(at, index)| walk.could_be_counted(at, index as usize));
+        walk.candidates = candidates;
+        Some(walk)
+    }
+
+    fn could_be_counted(&self, at: usize, index: usize) -> bool {
+        match index.checked_sub(self.markers.len()) {
+            Some(in_file_markers) => {
+                let width = self.file_markers[in_file_markers].len();
+                self.stands_as_a_word(at, width) && self.contents.get(at + width) != Some(&b'.')
+            },
+            None if attribute::is_opener(&self.markers[index]) => attribute::read(self.contents, at).is_some(),
+            None => self.stands_as_a_word(at, self.markers[index].len())
+        }
     }
 
     // Whether the line just classified is test code. The ranges are offsets into the line with its
@@ -137,7 +154,7 @@ impl<'a> TestWalk<'a> {
                     }
                 },
                 State::Seeking { .. } => if !self.seek_opener(base, line, ranges) { return is_test; },
-                State::Inside { .. } => if !self.seek_closer(base, line, ranges) { return is_test; },
+                State::Inside { .. } => if !self.seek_closer(base, line, ranges, line_end) { return is_test; },
                 State::AfterClose => match self.look_past_closer(base, line, ranges) {
                     Look::Exhausted => {
                         if !is_test { self.held.push((class, bytes)); }
@@ -160,8 +177,14 @@ impl<'a> TestWalk<'a> {
     pub(crate) fn quiet_until(&self) -> usize {
         match self.state {
             State::Idle => self.candidates.get(self.next).map_or(usize::MAX, |(at, _)| *at),
+            State::Inside { .. } => self.next_brace,
             _ => 0
         }
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_inside(&self) -> bool {
+        matches!(self.state, State::Inside { .. })
     }
 
     pub(crate) fn take_held(&mut self) -> std::vec::Drain<'_, (LineClass, usize)> {
@@ -276,7 +299,7 @@ impl<'a> TestWalk<'a> {
         false
     }
 
-    fn seek_closer(&mut self, base: usize, line: &[u8], ranges: &[(usize, usize)]) -> bool {
+    fn seek_closer(&mut self, base: usize, line: &[u8], ranges: &[(usize, usize)], line_end: usize) -> bool {
         let State::Inside { mut depth } = self.state else { return false };
         for &(from, to) in ranges {
             let start = self.cursor.saturating_sub(base).max(from);
@@ -295,6 +318,10 @@ impl<'a> TestWalk<'a> {
             }
         }
         self.state = State::Inside { depth };
+        if self.looks_ahead {
+            let from = line_end.max(self.cursor);
+            self.next_brace = memchr::memchr2(b'{', b'}', &self.contents[from..]).map_or(usize::MAX, |at| from + at);
+        }
         false
     }
 
@@ -510,7 +537,7 @@ pub(super) enum Marker {
     Extent { after: usize },
 }
 
-pub(super) fn is_word_byte(byte: u8) -> bool {
+pub(super) const fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
 }
 

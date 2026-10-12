@@ -151,6 +151,7 @@ pub(crate) struct ModuleDeclarations<'a> {
     depth: u32,
     keyword_at: Vec<usize>,
     next: usize,
+    next_brace: usize,
 }
 
 impl<'a> ModuleDeclarations<'a> {
@@ -160,13 +161,17 @@ impl<'a> ModuleDeclarations<'a> {
             false => memchr::memmem::find_iter(contents.as_bytes(), keyword.as_bytes()).collect()
         };
         ModuleDeclarations { keyword: keyword.as_bytes(), contents: contents.as_bytes(), found: Vec::new(),
-                open: Vec::new(), depth: 0, keyword_at, next: 0 }
+                open: Vec::new(), depth: 0, keyword_at, next: 0, next_brace: 0 }
     }
 
     #[inline(always)]
     pub(crate) fn quiet_until(&self) -> usize {
-        if !self.open.is_empty() || self.keyword.is_empty() { return 0; }
-        self.keyword_at.get(self.next).copied().unwrap_or(usize::MAX)
+        if self.keyword.is_empty() { return 0; }
+        let keyword = self.keyword_at.get(self.next).copied().unwrap_or(usize::MAX);
+        match self.open.is_empty() {
+            true => keyword,
+            false => keyword.min(self.next_brace)
+        }
     }
 
     // The ranges are offsets into the line past its lead, the whitespace before its first byte. A
@@ -188,6 +193,9 @@ impl<'a> ModuleDeclarations<'a> {
         let line = &raw_line.as_bytes()[lead..];
         if self.open.is_empty() && !matches!(line[first], b'm' | b'p' | b'#') { return; }
         self.read_line(line_start, line, ranges, is_test, holds_the_keyword);
+        if !self.open.is_empty() {
+            self.next_brace = memchr::memchr2(b'{', b'}', &self.contents[line_end..]).map_or(usize::MAX, |at| line_end + at);
+        }
     }
 
     pub(crate) fn into_declarations(self) -> Vec<Declaration> {

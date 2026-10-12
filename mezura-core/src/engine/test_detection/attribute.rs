@@ -16,6 +16,26 @@ const NOT : &[u8] = b"not";
 const LINE_COMMENT : &[u8] = b"//";
 const BLOCK_COMMENT_START : &[u8] = b"/*";
 const BLOCK_COMMENT_END : &[u8] = b"*/";
+const SCAN_STOPS : [bool; 256] = byte_table(b"\"r/()[]");
+const NAME_BYTES : [bool; 256] = {
+    let mut table = [false; 256];
+    let mut byte = 0;
+    while byte < 256 {
+        table[byte] = is_word_byte(byte as u8) || byte == b':' as usize;
+        byte += 1;
+    }
+    table
+};
+
+const fn byte_table(bytes: &[u8]) -> [bool; 256] {
+    let mut table = [false; 256];
+    let mut at = 0;
+    while at < bytes.len() {
+        table[bytes[at] as usize] = true;
+        at += 1;
+    }
+    table
+}
 
 pub(super) fn is_opener(marker: &str) -> bool {
     OPENERS.iter().any(|opener| opener.len() == marker.len() && begins_with(marker.as_bytes(), opener.as_bytes()))
@@ -46,6 +66,10 @@ pub(super) fn find_matching_bracket(bytes: &[u8], open: usize, closer: u8) -> Op
     let mut at = open;
     while at < limit {
         let byte = bytes[at];
+        if !SCAN_STOPS[byte as usize] {
+            at += 1;
+            continue;
+        }
         if byte == b'"' || (byte == b'r' && starts_a_raw_string(bytes, at)) {
             at = skip_string(bytes, at, limit)?;
             continue;
@@ -112,7 +136,7 @@ fn split_name(body: &[u8]) -> (&[u8], &[u8]) {
     let mut at = 0;
     while at < body.len() && body[at].is_ascii_whitespace() { at += 1; }
     let start = at;
-    while at < body.len() && (is_word_byte(body[at]) || body[at] == b':') { at += 1; }
+    while at < body.len() && NAME_BYTES[body[at] as usize] { at += 1; }
     (&body[start..at], &body[at..])
 }
 
@@ -125,7 +149,8 @@ fn find_arguments(rest: &[u8]) -> Option<(usize, usize)> {
 }
 
 fn holds_test(name: &[u8]) -> bool {
-    name.windows(TEST.len()).any(|window| matches!(window, [b't', b'e', b's', b't']))
+    let test = u32::from_le_bytes(*b"test");
+    name.windows(4).any(|window| u32::from_le_bytes([window[0], window[1], window[2], window[3]]) == test)
 }
 
 // The word test as a term of its own, at a depth where no enclosing group is a not. A string is

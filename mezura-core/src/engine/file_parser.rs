@@ -15,7 +15,7 @@ use std::time::Instant;
 
 use memchr::memmem;
 
-use crate::{EngineConfig, Language, LineClass, NestedLanguage, ScanSkip, Span, SpanKind, phase_timing};
+use crate::{EngineConfig, Language, LineClass, LineClasses, NestedLanguage, ScanSkip, Span, SpanKind, phase_timing};
 use crate::domain::{CommentPair, FileStats, LineContinuation};
 use crate::engine::masks::MaskFinder;
 use crate::engine::masks::is_ascii;
@@ -1281,6 +1281,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     let mut test_stats = if collecting_spans && test_walk.is_some() { FileStats::with_keywords(&language.keywords) }
             else { FileStats::default() };
     let mut test_bytes = 0;
+    let mut quiet_lines: Option<(usize, LineClasses, usize)> = None;
 
     let mut shell = WalkState::default();
     let mut buckets: Vec<SectionBucket> = Vec::new();
@@ -1304,30 +1305,40 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         };
         let mut is_test = false;
         let line_end = line_start + raw_line.len();
-        if ranges_wanted && let Some(tests) = &mut test_walk && line_end > tests.quiet_until() {
-            let bytes = end_of_line(contents, line_start, raw_line) - line_start;
-            if tests.observe_line(line_start, raw_line, had_code, scan.lead, &scan.code_ranges, class, bytes) {
-                is_test = true;
-                let mut claimed = 1;
-                let mut from = line_start;
-                for (held_class, held_bytes) in tests.take_held() {
-                    test_stats.lines += 1;
-                    test_stats.classes.bump(held_class);
-                    test_bytes += held_bytes;
-                    from -= held_bytes;
-                    claimed += 1;
-                }
-                test_stats.lines += 1;
-                test_stats.classes.bump(class);
-                test_bytes += bytes;
-                if collecting_spans {
-                    let to = (line_start + bytes) as u32;
-                    match test_ranges.last_mut() {
-                        Some(last) if last.1 as usize == from => last.1 = to,
-                        _ => test_ranges.push((from as u32, to))
+        if ranges_wanted && let Some(tests) = &mut test_walk {
+            if line_end > tests.quiet_until() {
+                let bytes = end_of_line(contents, line_start, raw_line) - line_start;
+                if tests.observe_line(line_start, raw_line, had_code, scan.lead, &scan.code_ranges, class, bytes) {
+                    is_test = true;
+                    let mut claimed = 1;
+                    let mut from = line_start;
+                    for (held_class, held_bytes) in tests.take_held() {
+                        test_stats.lines += 1;
+                        test_stats.classes.bump(held_class);
+                        test_bytes += held_bytes;
+                        from -= held_bytes;
+                        claimed += 1;
+                    }
+                    match quiet_lines.take() {
+                        Some((lines, classes, quiet_from)) => {
+                            claimed = book_quiet_lines(&mut test_stats, &shell_stats, lines, &classes);
+                            test_bytes += line_start + bytes - quiet_from;
+                            from = quiet_from;
+                        },
+                        None => {
+                            test_stats.lines += 1;
+                            test_stats.classes.bump(class);
+                            test_bytes += bytes;
+                        }
+                    }
+                    if collecting_spans { extend_test_ranges(test_ranges, from, line_start + bytes); }
+                    if EXPLAIN { log.mark_last_lines_as_test(claimed); }
+                    if tests.is_inside() {
+                        quiet_lines = Some((shell_stats.lines, shell_stats.classes.clone(), line_start + bytes));
                     }
                 }
-                if EXPLAIN { log.mark_last_lines_as_test(claimed); }
+            } else {
+                is_test = tests.is_inside();
             }
         }
         if ranges_wanted && let Some(reader) = &mut declarations && had_code && line_end > reader.quiet_until() {
@@ -1383,6 +1394,13 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         }
     }
 
+    if let Some((lines, classes, quiet_from)) = quiet_lines {
+        let claimed = book_quiet_lines(&mut test_stats, &shell_stats, lines, &classes);
+        test_bytes += contents.len() - quiet_from;
+        if collecting_spans { extend_test_ranges(test_ranges, quiet_from, contents.len()); }
+        if EXPLAIN { log.mark_last_lines_as_test(claimed); }
+    }
+
     if config.count_keywords {
         if let Some(matcher) = matchers.for_language(language) {
             count_keywords(contents, code_spans, matcher, &mut shell_stats, alias_indices, test_ranges, Some(&mut test_stats));
@@ -1416,6 +1434,21 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         bytes: contents.len(),
         tests: (test_stats.lines > 0).then(|| Box::new(TestReport { stats: test_stats, bytes: test_bytes })),
         declarations: declarations.map(ModuleDeclarations::into_declarations)
+    }
+}
+
+fn book_quiet_lines(test_stats: &mut FileStats, shell_stats: &FileStats, lines: usize, classes: &LineClasses) -> usize {
+    let mut quiet = shell_stats.classes.clone();
+    quiet.subtract(classes);
+    test_stats.classes.add(&quiet);
+    test_stats.lines += shell_stats.lines - lines;
+    shell_stats.lines - lines
+}
+
+fn extend_test_ranges(test_ranges: &mut Vec<(u32, u32)>, from: usize, to: usize) {
+    match test_ranges.last_mut() {
+        Some(last) if last.1 as usize == from => last.1 = to as u32,
+        _ => test_ranges.push((from as u32, to as u32))
     }
 }
 
