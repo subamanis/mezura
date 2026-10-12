@@ -149,12 +149,24 @@ pub(crate) struct ModuleDeclarations<'a> {
     found: Vec<Declaration>,
     open: Vec<(Box<str>, u32)>,
     depth: u32,
+    keyword_at: Vec<usize>,
+    next: usize,
 }
 
 impl<'a> ModuleDeclarations<'a> {
     pub(crate) fn of(keyword: &'a str, contents: &'a str) -> Self {
+        let keyword_at = match keyword.is_empty() {
+            true => Vec::new(),
+            false => memchr::memmem::find_iter(contents.as_bytes(), keyword.as_bytes()).collect()
+        };
         ModuleDeclarations { keyword: keyword.as_bytes(), contents: contents.as_bytes(), found: Vec::new(),
-                open: Vec::new(), depth: 0 }
+                open: Vec::new(), depth: 0, keyword_at, next: 0 }
+    }
+
+    #[inline(always)]
+    pub(crate) fn quiet_until(&self) -> usize {
+        if !self.open.is_empty() || self.keyword.is_empty() { return 0; }
+        self.keyword_at.get(self.next).copied().unwrap_or(usize::MAX)
     }
 
     // The ranges are offsets into the line past its lead, the whitespace before its first byte. A
@@ -165,18 +177,26 @@ impl<'a> ModuleDeclarations<'a> {
     pub(crate) fn observe_line(&mut self, line_start: usize, raw_line: &str, lead: usize, ranges: &[(usize, usize)],
             is_test: bool)
     {
+        let line_end = line_start + raw_line.len();
+        let mut holds_the_keyword = self.keyword.is_empty();
+        while let Some(&at) = self.keyword_at.get(self.next) && at < line_end {
+            holds_the_keyword |= at >= line_start;
+            self.next += 1;
+        }
+        if self.open.is_empty() && !holds_the_keyword { return; }
         let Some(&(first, _)) = ranges.first() else { return };
         let line = &raw_line.as_bytes()[lead..];
         if self.open.is_empty() && !matches!(line[first], b'm' | b'p' | b'#') { return; }
-        self.read_line(line_start, line, ranges, is_test);
+        self.read_line(line_start, line, ranges, is_test, holds_the_keyword);
     }
 
     pub(crate) fn into_declarations(self) -> Vec<Declaration> {
         self.found
     }
 
-    fn read_line(&mut self, line_start: usize, line: &[u8], ranges: &[(usize, usize)], is_test: bool) {
-        let opened = self.read_declaration(line_start, line, ranges, is_test);
+    fn read_line(&mut self, line_start: usize, line: &[u8], ranges: &[(usize, usize)], is_test: bool,
+            holds_the_keyword: bool) {
+        let opened = holds_the_keyword && self.read_declaration(line_start, line, ranges, is_test);
         if self.open.is_empty() && !opened { return; }
         for &(from, to) in ranges {
             for at in memchr::memchr2_iter(b'{', b'}', &line[from..to]) {

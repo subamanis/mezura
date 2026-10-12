@@ -3,7 +3,7 @@
 // under the latter.
 use memchr::memmem;
 
-use super::{Marker, find_word_end, is_word_byte, is_word_start};
+use super::{Marker, begins_with, find_word_end, is_word_byte, is_word_start};
 
 // Past this many bytes an unclosed '#[' is a stray bracket
 const MOST_ATTRIBUTE_BYTES : usize = 4_096;
@@ -18,20 +18,23 @@ const BLOCK_COMMENT_START : &[u8] = b"/*";
 const BLOCK_COMMENT_END : &[u8] = b"*/";
 
 pub(super) fn is_opener(marker: &str) -> bool {
-    OPENERS.contains(&marker)
+    OPENERS.iter().any(|opener| opener.len() == marker.len() && begins_with(marker.as_bytes(), opener.as_bytes()))
 }
 
 // The arguments of a named attribute stay unread, so a path attribute naming a tests directory says nothing
 pub(super) fn read(contents: &[u8], at: usize) -> Option<Marker> {
     let inner = contents.get(at + 1) == Some(&b'!');
     let open = at + if inner { 2 } else { 1 };
+    let (name, rest) = split_name(&contents[open + 1..]);
+    let arguments_close = if name == CFG || name == CFG_ATTR {
+        let (from, to) = find_arguments(rest)?;
+        let says_test = holds_test(&rest[from..to]) && if name == CFG { predicate_says_test(&rest[from..to]) }
+                else { applies_a_test_attribute(&rest[from..to]) };
+        if !says_test { return None; }
+        Some(contents.len() - rest.len() + to)
+    } else if holds_test(name) || name == BENCH { None } else { return None };
     let close = find_matching_bracket(contents, open, b']')?;
-    let body = &contents[open + 1..close];
-    let (name, rest) = split_name(body);
-    let is_test = if name == CFG { find_arguments(rest).is_some_and(predicate_says_test) }
-            else if name == CFG_ATTR { find_arguments(rest).is_some_and(applies_a_test_attribute) }
-            else { holds_test(name) || name == BENCH };
-    if !is_test { return None; }
+    if arguments_close.is_some_and(|at| at > close) { return None; }
     let after = close + 1;
     Some(if inner { Marker::RestOfScope { after } } else { Marker::Extent { after } })
 }
@@ -47,7 +50,7 @@ pub(super) fn find_matching_bracket(bytes: &[u8], open: usize, closer: u8) -> Op
             at = skip_string(bytes, at, limit)?;
             continue;
         }
-        if let Some(past) = skip_comment(bytes, at, limit) {
+        if byte == b'/' && let Some(past) = skip_comment(bytes, at, limit) {
             at = past;
             continue;
         }
@@ -113,16 +116,16 @@ fn split_name(body: &[u8]) -> (&[u8], &[u8]) {
     (&body[start..at], &body[at..])
 }
 
-fn find_arguments(rest: &[u8]) -> Option<&[u8]> {
+fn find_arguments(rest: &[u8]) -> Option<(usize, usize)> {
     let mut at = 0;
     while at < rest.len() && rest[at].is_ascii_whitespace() { at += 1; }
     if rest.get(at) != Some(&b'(') { return None; }
     let close = find_matching_bracket(rest, at, b')')?;
-    Some(&rest[at + 1..close])
+    Some((at + 1, close))
 }
 
 fn holds_test(name: &[u8]) -> bool {
-    memmem::find(name, TEST).is_some()
+    name.windows(TEST.len()).any(|window| matches!(window, [b't', b'e', b's', b't']))
 }
 
 // The word test as a term of its own, at a depth where no enclosing group is a not. A string is
@@ -137,7 +140,7 @@ fn predicate_says_test(predicate: &[u8]) -> bool {
         if byte == b'"' {
             at = skip_string(predicate, at, predicate.len()).unwrap_or(predicate.len());
             last_word = &[];
-        } else if let Some(past) = skip_comment(predicate, at, predicate.len()) {
+        } else if byte == b'/' && let Some(past) = skip_comment(predicate, at, predicate.len()) {
             at = past;
         } else if byte == b'(' {
             if last_word == NOT && depth < 64 { not_groups |= 1 << depth; }
@@ -182,7 +185,7 @@ fn split_at_top_level_commas(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
     std::iter::from_fn(move || {
         if done { return None; }
         while at < bytes.len() {
-            if let Some(past) = skip_comment(bytes, at, bytes.len()) {
+            if bytes[at] == b'/' && let Some(past) = skip_comment(bytes, at, bytes.len()) {
                 at = past;
                 continue;
             }

@@ -1269,7 +1269,15 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     };
     // The plain path writes a line's code range only where the nested language search, the test
     // extent or the module declarations read it
-    let ranges_wanted = !language.nested_languages.is_empty() || test_walk.is_some() || declarations.is_some();
+    let sections_want_ranges = !language.nested_languages.is_empty();
+    let find_quiet_until = |test_walk: &Option<TestWalk>, declarations: &Option<ModuleDeclarations>| match sections_want_ranges {
+        true => 0,
+        false => match test_walk.as_ref().map_or(usize::MAX, TestWalk::quiet_until) {
+            0 => 0,
+            tests => tests.min(declarations.as_ref().map_or(usize::MAX, ModuleDeclarations::quiet_until))
+        }
+    };
+    let mut quiet_until = find_quiet_until(&test_walk, &declarations);
     let mut test_stats = if collecting_spans && test_walk.is_some() { FileStats::with_keywords(&language.keywords) }
             else { FileStats::default() };
     let mut test_bytes = 0;
@@ -1286,6 +1294,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                 None => break
             }
         };
+        let ranges_wanted = line_start + raw_line.len() > quiet_until;
         let (class, had_code) = if !has_candidates && shell.holds_nothing() {
             walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted, scan,
                     &shell, &mut shell_stats, code_spans, log)
@@ -1294,9 +1303,10 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                     Candidates::At(lines.positions(), 0), scan, &mut shell, &mut shell_stats, code_spans, log)
         };
         let mut is_test = false;
-        if let Some(tests) = &mut test_walk {
+        let line_end = line_start + raw_line.len();
+        if ranges_wanted && let Some(tests) = &mut test_walk && line_end > tests.quiet_until() {
             let bytes = end_of_line(contents, line_start, raw_line) - line_start;
-            if tests.observe_line(line_start, raw_line, had_code, &scan.code_ranges, class, bytes) {
+            if tests.observe_line(line_start, raw_line, had_code, scan.lead, &scan.code_ranges, class, bytes) {
                 is_test = true;
                 let mut claimed = 1;
                 let mut from = line_start;
@@ -1320,9 +1330,10 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                 if EXPLAIN { log.mark_last_lines_as_test(claimed); }
             }
         }
-        if let Some(reader) = &mut declarations && had_code {
+        if ranges_wanted && let Some(reader) = &mut declarations && had_code && line_end > reader.quiet_until() {
             reader.observe_line(line_start, raw_line, scan.lead, &scan.code_ranges, is_test);
         }
+        if ranges_wanted { quiet_until = find_quiet_until(&test_walk, &declarations); }
 
         // A region opener only counts where the shell left it as code, so one sitting inside a
         // comment or a string of the shell opens nothing

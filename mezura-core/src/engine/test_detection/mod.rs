@@ -86,7 +86,7 @@ impl<'a> TestWalk<'a> {
     // Whether the line just classified is test code. The ranges are offsets into the line with its
     // whitespace trimmed at both ends, and they are read only where the line held code. A yes may
     // also claim the lines held back since a closing brace, which 'take_held' hands out.
-    pub(crate) fn observe_line(&mut self, line_start: usize, raw_line: &str, has_code: bool,
+    pub(crate) fn observe_line(&mut self, line_start: usize, raw_line: &str, has_code: bool, lead: usize,
         ranges: &[(usize, usize)], class: LineClass, bytes: usize) -> bool
     {
         let line_end = line_start + raw_line.len();
@@ -99,10 +99,8 @@ impl<'a> TestWalk<'a> {
             }
         }
 
-        let from_start = raw_line.trim_ascii_start();
-        let base = line_start + raw_line.len() - from_start.len();
-        let line = from_start.trim_ascii_end().as_bytes();
-        let ranges: &[(usize, usize)] = if has_code { ranges } else { &[] };
+        let base = line_start + lead;
+        let (line, ranges): (&[u8], &[(usize, usize)]) = if has_code { (&raw_line.as_bytes()[lead..], ranges) } else { (&[], &[]) };
 
         let mut is_test = matches!(self.state, State::Seeking { .. } | State::Inside { .. });
         loop {
@@ -155,6 +153,14 @@ impl<'a> TestWalk<'a> {
                     }
                 }
             }
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn quiet_until(&self) -> usize {
+        match self.state {
+            State::Idle => self.candidates.get(self.next).map_or(usize::MAX, |(at, _)| *at),
+            _ => 0
         }
     }
 
@@ -512,6 +518,11 @@ pub(super) fn is_word_start(byte: u8) -> bool {
     byte.is_ascii_alphabetic() || byte == b'_' || byte >= 0x80
 }
 
+#[inline(always)]
+pub(super) fn begins_with(bytes: &[u8], word: &[u8]) -> bool {
+    bytes.len() >= word.len() && bytes.iter().zip(word).all(|(byte, wanted)| byte == wanted)
+}
+
 pub(super) fn find_word_end(bytes: &[u8], from: usize) -> usize {
     let mut at = from;
     while at < bytes.len() && is_word_byte(bytes[at]) { at += 1; }
@@ -619,9 +630,17 @@ fn find_candidates(bytes: &[u8], markers: &[String], first_index: usize, into: &
         let shares_the_first_byte = |other: &String| other.as_bytes().first() == Some(&first);
         if markers[..index].iter().any(shares_the_first_byte) { continue; }
         if markers[index + 1..].iter().any(shares_the_first_byte) {
+            let mut second_bytes = [false; 256];
+            for candidate in markers.iter().filter(|candidate| shares_the_first_byte(candidate)) {
+                match candidate.as_bytes().get(1) {
+                    Some(&second) => second_bytes[second as usize] = true,
+                    None => second_bytes = [true; 256]
+                }
+            }
             for at in memchr::memchr_iter(first, bytes) {
+                if bytes.get(at + 1).is_some_and(|second| !second_bytes[*second as usize]) { continue; }
                 for (other, candidate) in markers.iter().enumerate() {
-                    if shares_the_first_byte(candidate) && bytes[at..].starts_with(candidate.as_bytes()) {
+                    if shares_the_first_byte(candidate) && begins_with(&bytes[at..], candidate.as_bytes()) {
                         into.push((at, (first_index + other) as u16));
                     }
                 }
@@ -904,7 +923,7 @@ mod tests {
                 .with_test_file_markers(["@Test", "[Fact"]);
         let marker_of = |source: &str, ranges: &[(usize, usize)]| {
             let mut walk = TestWalk::of(&language, source, true, TestsByPath::Nothing)?;
-            walk.observe_line(0, source, true, ranges, LineClass::WordsInCode, source.len());
+            walk.observe_line(0, source, true, 0, ranges, LineClass::WordsInCode, source.len());
             walk.get_file_marker()
         };
         assert_eq!(Some((0, 0)), marker_of("@Test void t() {}", &[(0, 17)]));
@@ -938,7 +957,8 @@ mod tests {
             for line in source.split_inclusive('\n') {
                 let raw_line = line.trim_end_matches('\n');
                 let code = [(0, raw_line.trim_ascii().len())];
-                walk.observe_line(line_start, raw_line, true, &code, LineClass::WordsInCode, raw_line.len());
+                let lead = raw_line.len() - raw_line.trim_ascii_start().len();
+                walk.observe_line(line_start, raw_line, true, lead, &code, LineClass::WordsInCode, raw_line.len());
                 line_start += line.len();
             }
             walk.get_file_marker()
