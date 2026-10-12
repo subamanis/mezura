@@ -183,8 +183,8 @@ impl<'a> TestWalk<'a> {
     }
 
     #[inline(always)]
-    pub(crate) fn is_inside(&self) -> bool {
-        matches!(self.state, State::Inside { .. })
+    pub(crate) fn skips_lines_inside(&self) -> bool {
+        self.looks_ahead && matches!(self.state, State::Inside { .. })
     }
 
     pub(crate) fn take_held(&mut self) -> std::vec::Drain<'_, (LineClass, usize)> {

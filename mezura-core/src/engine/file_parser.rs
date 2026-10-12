@@ -1333,12 +1333,12 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                     }
                     if collecting_spans { extend_test_ranges(test_ranges, from, line_start + bytes); }
                     if EXPLAIN { log.mark_last_lines_as_test(claimed); }
-                    if tests.is_inside() {
+                    if tests.skips_lines_inside() {
                         quiet_lines = Some((shell_stats.lines, shell_stats.classes.clone(), line_start + bytes));
                     }
                 }
             } else {
-                is_test = tests.is_inside();
+                is_test = tests.skips_lines_inside();
             }
         }
         if ranges_wanted && let Some(reader) = &mut declarations && had_code && line_end > reader.quiet_until() {
