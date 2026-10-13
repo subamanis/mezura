@@ -67,10 +67,11 @@ const OTHERS_NAME : &str = "others";
 pub fn format_and_print_results(result: &RunResult, existing_log_content: &Option<String>,
         datetime_now: &DateTime<Local>, config: &Configuration)
 {
-    let RunResult {per_language, total, ..} = result;
+    let total = &result.total;
     let groups = create_groups_of(result, config);
-    let shown = ShownFigures::of(per_language, total, &result.tests, leaves_tests_out(config));
-    if leaves_tests_out(config) && shown.total.lines == 0 && total.lines > 0 {
+    let without_tests = leaves_tests_out(config);
+    let shown = ShownFigures::of_run(result, without_tests);
+    if without_tests && shown.total.lines == 0 && total.lines > 0 {
         let lines = if total.lines == 1 {"line"} else {"lines"};
         let files = if total.files == 1 {"file"} else {"files"};
         let verb = if total.lines == 1 {"is"} else {"are"};
@@ -196,8 +197,6 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
         words_in_comment: 12_638, punctuation_in_code: 9_100, punctuation_in_comment: 190,
         blank: 3_310, blank_in_comment: 130, blank_in_string: 140
     };
-    let (lines, code, comments) = (classes.calculate_lines(),
-            model.calculate_code_lines(&classes), model.calculate_comment_lines(&classes));
     let test_classes = mezura_core::LineClasses {
         words_in_code: 21_470, string_content: 1_310, comment_words_beside_code: 40,
         words_in_comment: 2_150, punctuation_in_code: 2_880, punctuation_in_comment: 30,
@@ -205,7 +204,7 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
     };
 
     let keywords = hashmap!("structs".to_owned() => 284usize, "traits".to_owned() => 31);
-    let per_language = hashmap!(NAME.to_owned() => Stats::new(FILES, BYTES, lines, classes, keywords.clone()));
+    let per_language = hashmap!(NAME.to_owned() => Stats::new(FILES, BYTES, classes.calculate_lines(), classes, keywords));
     let tests = hashmap!(NAME.to_owned() => TestCode { whole_files: 118,
             stats: Stats::new(TEST_FILES, TEST_BYTES, test_classes.calculate_lines(), test_classes, HashMap::new()) });
     let total = Stats::total_of(&per_language);
@@ -231,16 +230,7 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
         // Through the same 'Columns' a run builds, off the counts the tables were handed
         Layout::List => {
             let columns = Columns::of(&groups, &total, no_hides, model);
-            let width = columns.width(theme);
-            let row = columns.format_breakdown_row(theme, &theme.details_language_name.paint(NAME).to_string(),
-                    NAME.len(), FILES, lines, code, comments);
-            let mut rows = vec![columns.append_size(&theme.arrow, &row, &format_size(theme, BYTES), width)];
-            let parts = find_parts_of(&groups[0], NAME, &per_language[NAME]);
-            for (part, branch) in parts.iter().zip(format_branches(parts.iter().map(|part| part.depth))) {
-                rows.push(format_list_sub_row(theme, &columns, "", &branch, &part.name, &part.stats, part.kind, width));
-            }
-            rows.push(get_keywords_as_str(theme, &keywords, None, columns.calculate_words_start(), width));
-            rows
+            format_language_lines(theme, &groups[0], NAME, &columns, "", columns.width(theme), true)
         }
     }
 }
@@ -381,7 +371,7 @@ fn create_groups_of<'a>(result: &'a RunResult, config: &Configuration) -> Vec<Gr
     // claimed comes last.
     let without_tests = leaves_tests_out(config);
     let mut groups = result.modules.iter().map(|module| {
-        let shown = ShownFigures::of(&module.per_language, &module.total, &module.tests, without_tests);
+        let shown = ShownFigures::of_module(module, without_tests);
         let (languages, hidden) = find_shown_language_names(&shown.per_language, config);
         Group {
             name: module.name.as_deref(),
@@ -444,7 +434,7 @@ pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configurati
 
     let common_directory = find_common_directory_of(&result.targets);
     result.modules.iter().map(|module| {
-        let shown = ShownFigures::of(&module.per_language, &module.total, &module.tests, without_tests);
+        let shown = ShownFigures::of_module(module, without_tests);
         let (names, _) = find_shown_language_names(&shown.per_language, config);
 
         names.iter().filter_map(|name| {
@@ -690,9 +680,10 @@ fn take_out(shell: &mut Stats, sections: &Stats) {
     shell.lines = shell.classes.calculate_lines();
 }
 
-struct Part {
+struct Part<Figures = Stats> {
     name: String,
-    stats: Stats,
+    branch: String,
+    stats: Figures,
     kind: RowKind,
     depth: usize
 }
@@ -701,30 +692,50 @@ struct Part {
 // a line of a section or of the tests is taken out of the own share. A row that already left its
 // tests out has no tests to hang under it.
 fn find_parts_of(group: &Group, language: &str, row: &Stats) -> Vec<Part> {
-    let sections = group.nested.get(language);
     let tests = group.tests.get(language).filter(|_| !group.leaves_tests_out());
-    if sections.is_none() && tests.is_none() {
+    find_parts_on_each_side(language, [row], [group.nested.get(language)], [tests], group.tests_breakdown)
+            .into_iter().map(|Part { name, branch, stats: [stats], kind, depth }| Part { name, branch, stats, kind, depth })
+            .collect()
+}
+
+fn find_parts_on_each_side<const SIDES: usize>(language: &str, rows: [&Stats; SIDES],
+        sections: [Option<&HashMap<String, Stats>>; SIDES], tests: [Option<&TestCode>; SIDES],
+        breakdown: TestsBreakdown) -> Vec<Part<[Stats; SIDES]>>
+{
+    if sections.iter().all(Option::is_none) && tests.iter().all(Option::is_none) {
         return Vec::new();
     }
 
-    let has_sections = sections.is_some_and(|sections| !sections.is_empty());
+    let mut names = sections.iter().flatten().flat_map(|of_side| of_side.keys()).cloned().collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    names.sort_by_key(|name| std::cmp::Reverse(sections[SIDES - 1].and_then(|x| x.get(name)).map_or(0, |x| x.lines)));
+    let has_sections = !names.is_empty();
+    let has_tests = tests.iter().any(Option::is_some);
     let mut parts = Vec::new();
     let mut depth = 0;
-    if nests_under_production(has_sections, tests.is_some(), group.tests_breakdown) {
-        parts.push(Part { name: PRODUCTION_NAME.to_owned(), stats: calculate_own_share(row, None, tests),
+    if nests_under_production(has_sections, has_tests, breakdown) {
+        parts.push(Part { name: PRODUCTION_NAME.to_owned(), branch: String::new(),
+                stats: std::array::from_fn(|side| calculate_own_share(rows[side], None, tests[side])),
                 kind: RowKind::Production, depth });
         depth += 1;
     }
-    let shell = calculate_own_share(row, sections, tests);
-    if shell.lines > 0 && let Some((name, kind)) = find_own_share_name(language, has_sections, group.tests_breakdown) {
-        parts.push(Part { name, stats: shell, kind, depth });
+    let shells = std::array::from_fn(|side| calculate_own_share(rows[side], sections[side], tests[side]));
+    if shells.iter().any(|shell| shell.lines > 0)
+            && let Some((name, kind)) = find_own_share_name(language, has_sections, breakdown) {
+        parts.push(Part { name, branch: String::new(), stats: shells, kind, depth });
     }
-    let mut sorted = sections.into_iter().flatten().collect::<Vec<_>>();
-    sorted.sort_by(|(one, of_one), (other, of_other)| of_other.lines.cmp(&of_one.lines).then(one.cmp(other)));
-    parts.extend(sorted.into_iter().map(|(name, stats)| Part { name: name.clone(), stats: stats.clone(),
-            kind: RowKind::Nested, depth }));
-    if let Some(tests) = tests {
-        parts.push(Part { name: TESTS_NAME.to_owned(), stats: tests.stats.clone(), kind: RowKind::Tests, depth: 0 });
+    parts.extend(names.into_iter().map(|name| Part {
+            stats: std::array::from_fn(|side| sections[side].and_then(|x| x.get(&name)).cloned().unwrap_or_default()),
+            name, branch: String::new(), kind: RowKind::Nested, depth }));
+    if has_tests {
+        parts.push(Part { name: TESTS_NAME.to_owned(), branch: String::new(),
+                stats: std::array::from_fn(|side| tests[side].map(|tests| tests.stats.clone()).unwrap_or_default()),
+                kind: RowKind::Tests, depth: 0 });
+    }
+    let branches = format_branches(parts.iter().map(|part| part.depth));
+    for (part, branch) in parts.iter_mut().zip(branches) {
+        part.branch = branch;
     }
 
     parts
@@ -830,17 +841,16 @@ fn create_nested_rows_under<'a>(group: &'a Group<'a>, name: &'a String, grouped:
     let whole = group.per_language.get(name).unwrap();
 
     let parts = find_parts_of(group, name, whole);
-    let branches = format_branches(parts.iter().map(|part| part.depth));
     let files = group.files.get(name.as_str());
     let shown = files.map(|rows| rows.shown.as_slice()).unwrap_or_default();
     let mut rows = Vec::with_capacity(parts.len() + shown.len());
     let mut production = None;
-    for (part, branch) in parts.into_iter().zip(branches) {
+    for part in parts {
         let under_production = if part.depth > 0 {production.clone()} else {None};
         if part.kind == RowKind::Production {
             production = Some(part.stats.clone());
         }
-        rows.push(NamedRow { cell: format!("{indent}{branch}{}", part.name), kind: part.kind, group,
+        rows.push(NamedRow { cell: format!("{indent}{}{}", part.branch, part.name), kind: part.kind, group,
                 language: Some(name), stats: Some(Cow::Owned(part.stats)), under_production });
     }
     // A language whose files were cut ends on a branch that hangs open, so that a tree drawn shut is
@@ -897,6 +907,26 @@ fn find_row_figures(row: &NamedRow, total: &Stats, model: CountingModel) -> Opti
                 row.under_production.as_ref().unwrap_or_else(|| row.language.map_or(total, of_language)))),
         RowKind::Note => None
     }
+}
+
+fn format_figure_cells(theme: &Theme, figures: &RowFigures) -> [BoxedCell; 6] {
+    fn format_share(part: usize, whole: usize) -> String {
+        format_percent_or_blank(if whole == 0 {0.0} else {part as f64 / whole as f64 * 100.0})
+    }
+    let cell = |number, slot| BoxedCell { number, slot };
+
+    let RowFigures { files, lines, code, comments, bytes, against_files, against_lines } = *figures;
+    let nothing = figures.is_of_nothing();
+    let count = |value| format_count(value, nothing);
+    let (size, unit) = super::number_formatter::get_active().size_with_unit(bytes);
+    let size = if nothing {NO_FIGURE.to_owned()} else {size + " " + &theme.size_unit.paint(unit).to_string()};
+    let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines, code, comments);
+    [cell(count(files), format_share(files, against_files)),
+     cell(count(lines), format_share(lines, against_lines)),
+     cell(count(code), format_percent_or_blank(code_percentage)),
+     cell(count(comments), format_percent_or_blank(comment_percentage)),
+     cell(count(lines - code - comments), String::new()),
+     cell(size, String::new())]
 }
 
 fn format_branches(depths: impl IntoIterator<Item = usize>) -> Vec<String> {
@@ -1053,38 +1083,20 @@ fn build_table_cells<'a>(theme: &'a Theme, groups: &[Group], total: &Stats, prin
     ];
     let column_count = columns.len();
 
-    fn format_row_of(theme: &Theme, name: &str, figures: &RowFigures) -> Vec<String>
-    {
-        fn format_share(part: usize, whole: usize) -> String {
-            format_percent_or_blank(if whole == 0 {0.0} else {part as f64 / whole as f64 * 100.0})
-        }
-
-        let RowFigures { files, lines, code, comments, bytes, against_files, against_lines } = *figures;
-        let nothing = figures.is_of_nothing();
-        let count = |value| format_count(value, nothing);
-        let (size, unit) = super::number_formatter::get_active().size_with_unit(bytes);
-        let size = if nothing {NO_FIGURE.to_owned()} else {size + " " + &theme.size_unit.paint(unit).to_string()};
-        let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines,code, comments);
-        vec![name.to_owned(),
-         count(files), format_share(files, against_files),
-         count(lines), format_share(lines, against_lines),
-         count(code), format_percent_or_blank(code_percentage),
-         count(comments), format_percent_or_blank(comment_percentage),
-         count(lines - code - comments),
-         size]
-    }
-
     let described = create_named_rows(groups, print_total, notes);
     let rows = described.iter().map(|row| {
         match find_row_figures(row, total, model) {
             Some(figures) => {
-                let mut cells = format_row_of(theme, &row.cell, &figures);
+                let [files, lines, code, comments, extra, size] = format_figure_cells(theme, &figures);
                 // A branch under a language wears the branch's own size unit
-                if row.kind.is_sub_row() {
+                let size = if row.kind.is_sub_row() {
                     let (size, unit) = super::number_formatter::get_active().size_with_unit(figures.bytes);
-                    cells[10] = size + " " + &SubRowStyles::of(theme, row.kind).size_unit.paint(unit).to_string();
-                }
-                cells
+                    size + " " + &SubRowStyles::of(theme, row.kind).size_unit.paint(unit).to_string()
+                } else {
+                    size.number
+                };
+                vec![row.cell.clone(), files.number, files.slot, lines.number, lines.slot,
+                        code.number, code.slot, comments.number, comments.slot, extra.number, size]
             },
             None => {
                 let mut cells = vec![String::new(); column_count];
@@ -1329,12 +1341,13 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
 
     let mut rows = Vec::new();
     let mut files_hidden = 0;
+    let (run_before, run_now) = (ShownFigures::of_run(baseline, without_tests), ShownFigures::of_run(subject, without_tests));
     match pairs {
         Some(pairs) => for pair in pairs {
             let (before, now) = (ShownFigures::of_module(pair.before, without_tests),
                     ShownFigures::of_module(pair.now, without_tests));
             rows.push(ComparedRow { name: pair.name.unwrap_or(UNNAMED_MODULE_NAME).to_owned(), kind: RowKind::Module,
-                    depth: 0, baseline: before.total.clone().into_owned(), subject: now.total.clone().into_owned() });
+                    depth: 0, baseline: before.total.into_owned(), subject: now.total.into_owned() });
             let (of_module, hidden) = languages_of(&before.per_language, &now.per_language,
                     &pair.before.nested_languages, &pair.now.nested_languages, &pair.before.tests, &pair.now.tests,
                     &files_of(std::slice::from_ref(pair.before)),
@@ -1343,8 +1356,7 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
             files_hidden += hidden;
         },
         None => {
-            let (before, now) = (ShownFigures::of_run(baseline, without_tests), ShownFigures::of_run(subject, without_tests));
-            let (of_run, hidden) = languages_of(&before.per_language, &now.per_language,
+            let (of_run, hidden) = languages_of(&run_before.per_language, &run_now.per_language,
                     &baseline.nested_languages, &subject.nested_languages, &baseline.tests, &subject.tests,
                     &files_of(&baseline.modules), &files_of(&subject.modules), "");
             rows.extend(of_run);
@@ -1352,8 +1364,7 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
         }
     }
     rows.push(ComparedRow { name: TOTAL_NAME.to_owned(), kind: RowKind::Total, depth: 0,
-            baseline: ShownFigures::of_run(baseline, without_tests).total.into_owned(),
-            subject: ShownFigures::of_run(subject, without_tests).total.into_owned() });
+            baseline: run_before.total.into_owned(), subject: run_now.total.into_owned() });
     let (tests_before, tests_now) = (calculate_sum_of_tests(&baseline.tests), calculate_sum_of_tests(&subject.tests));
     if !config.view.hidden.tests && !without_tests && (tests_before.stats.lines > 0 || tests_now.stats.lines > 0) {
         rows.push(ComparedRow { name: format!("{BRANCH_INDENT}{}{TESTS_NAME}", find_branch_marker(true)),
@@ -1405,52 +1416,12 @@ fn create_compared_parts(change: &super::diff::LanguageStatsChange,
         baseline_tests: &HashMap<String, TestCode>, subject_tests: &HashMap<String, TestCode>,
         breakdown: TestsBreakdown, indent: &str) -> Vec<ComparedRow>
 {
-    let (before, now) = (baseline_nested.get(&change.name), subject_nested.get(&change.name));
-    let (tested_before, tested_now) = (baseline_tests.get(&change.name), subject_tests.get(&change.name));
-    if before.is_none() && now.is_none() && tested_before.is_none() && tested_now.is_none() {
-        return Vec::new();
-    }
-
-    let mut names = before.into_iter().chain(now).flat_map(HashMap::keys).cloned()
-            .collect::<Vec<_>>();
-    names.sort();
-    names.dedup();
-    names.sort_by_key(|name| std::cmp::Reverse(now.and_then(|x| x.get(name)).map_or(0, |x| x.lines)));
-    let has_sections = !names.is_empty();
-    let has_tests = tested_before.is_some() || tested_now.is_some();
-
-    let mut rows = Vec::new();
-    let mut depth = 0;
-    if nests_under_production(has_sections, has_tests, breakdown) {
-        rows.push(ComparedRow { name: PRODUCTION_NAME.to_owned(), kind: RowKind::Production, depth,
-                baseline: calculate_own_share(&change.baseline, None, tested_before),
-                subject: calculate_own_share(&change.subject, None, tested_now) });
-        depth += 1;
-    }
-    let (own_before, own_now) = (calculate_own_share(&change.baseline, before, tested_before),
-            calculate_own_share(&change.subject, now, tested_now));
-    if (own_before.lines > 0 || own_now.lines > 0)
-            && let Some((name, kind)) = find_own_share_name(&change.name, has_sections, breakdown) {
-        rows.push(ComparedRow { name, kind, depth, baseline: own_before, subject: own_now });
-    }
-    let of = |sections: Option<&HashMap<String, Stats>>, name: &str|
-            sections.and_then(|x| x.get(name)).cloned().unwrap_or_default();
-    rows.extend(names.into_iter().map(|name| {
-        let (baseline, subject) = (of(before, &name), of(now, &name));
-        ComparedRow { name, kind: RowKind::Nested, depth, baseline, subject }
-    }));
-    if has_tests {
-        let of = |tests: Option<&TestCode>| tests.map(|tests| tests.stats.clone()).unwrap_or_default();
-        rows.push(ComparedRow { name: TESTS_NAME.to_owned(), kind: RowKind::Tests, depth: 0,
-                baseline: of(tested_before), subject: of(tested_now) });
-    }
-
-    let branches = format_branches(rows.iter().map(|row| row.depth));
-    for (row, branch) in rows.iter_mut().zip(branches) {
-        row.name = format!("{indent}{BRANCH_INDENT}{branch}{}", row.name);
-    }
-
-    rows
+    find_parts_on_each_side(&change.name, [&change.baseline, &change.subject],
+            [baseline_nested.get(&change.name), subject_nested.get(&change.name)],
+            [baseline_tests.get(&change.name), subject_tests.get(&change.name)], breakdown)
+            .into_iter().map(|Part { name, branch, stats: [baseline, subject], kind, depth }| ComparedRow {
+                name: format!("{indent}{BRANCH_INDENT}{branch}{name}"), kind, depth, baseline, subject })
+            .collect()
 }
 
 // The languages are the rows the table printed, so one cut governs both and the block cannot name a
@@ -1810,17 +1781,12 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
     };
 
     let headers = columns.iter().map(|column| column.header.clone()).collect::<Vec<_>>();
-    let of_a_nested = SubRowStyles::of(theme, RowKind::Nested).take_columns(&column_kinds);
-    let of_the_production = SubRowStyles::of(theme, RowKind::Production).take_columns(&column_kinds);
-    let of_the_tests = SubRowStyles::of(theme, RowKind::Tests).take_columns(&column_kinds);
-    let of_a_file = SubRowStyles::of(theme, RowKind::File).take_columns(&column_kinds);
-    let branch_of = |kind| Some(SubRowStyles::of(theme, kind).branch);
     let rendered = std::iter::once(render(&headers, &header_styles, None))
             .chain(rows.iter().zip(kinds.iter()).map(|(row, kind)| match kind {
-                RowKind::Nested => render(row, &of_a_nested, branch_of(*kind)),
-                RowKind::Production => render(row, &of_the_production, branch_of(*kind)),
-                RowKind::Tests => render(row, &of_the_tests, branch_of(*kind)),
-                RowKind::File => render(row, &of_a_file, branch_of(*kind)),
+                RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File => {
+                    let of_a_sub_row = SubRowStyles::of(theme, *kind);
+                    render(row, &of_a_sub_row.take_columns(&column_kinds), Some(of_a_sub_row.branch))
+                },
                 RowKind::Note => render(row, &vec![&theme.note; row.len()], None),
                 RowKind::Module | RowKind::Language | RowKind::Total => {
                     let mut styles = body_styles.to_vec();
@@ -1880,16 +1846,11 @@ fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], total:
         // The rows of the matrix are cut globally by '--top' while every other layout cuts per
         // module, so the block has to follow these rows or it names a language with no row above it
         let shown = groups.iter().map(|group| Group {
-            name: group.name,
             languages: languages.iter().filter(|x| group.per_language.contains_key(*x)).cloned().collect(),
-            hidden: group.hidden,
             per_language: Cow::Borrowed(&group.per_language),
-            nested: group.nested,
-            tests: group.tests,
-            tests_breakdown: group.tests_breakdown,
             files: HashMap::new(),
             total: Cow::Borrowed(&group.total),
-            baseline: group.baseline
+            ..*group
         }).collect::<Vec<_>>();
         print_keyword_block(theme, &shown);
     }
@@ -2050,39 +2011,14 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
     ];
     let column_count = columns.len();
 
-    fn format_row_of(theme: &Theme, name: &str, figures: &RowFigures) -> (String, Vec<BoxedCell>)
-    {
-        fn format_share(part: usize, whole: usize) -> String {
-            format_percent_or_blank(if whole == 0 {0.0} else {part as f64 / whole as f64 * 100.0})
-        }
-        fn create_cell(number: String, slot: String) -> BoxedCell {
-            BoxedCell { number, slot }
-        }
-
-        let RowFigures { files, lines, code, comments, bytes, against_files, against_lines } = *figures;
-        let nothing = figures.is_of_nothing();
-        let count = |value| format_count(value, nothing);
-        let (size, unit) = super::number_formatter::get_active().size_with_unit(bytes);
-        let size = if nothing {NO_FIGURE.to_owned()} else {size + " " + &theme.size_unit.paint(unit).to_string()};
-        let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines,code, comments);
-        (name.to_owned(), vec![
-            create_cell(count(files), format_share(files, against_files)),
-            create_cell(count(lines), format_share(lines, against_lines)),
-            create_cell(count(code), format_percent_or_blank(code_percentage)),
-            create_cell(count(comments), format_percent_or_blank(comment_percentage)),
-            create_cell(count(lines - code - comments), String::new()),
-            create_cell(size, String::new())])
-    }
-
     let described = create_named_rows(groups, print_total, notes);
     let rows = described.iter().map(|row| {
-        let (name, cells) = match find_row_figures(row, total, model) {
-            Some(figures) => format_row_of(theme, &row.cell, &figures),
+        let cells = match find_row_figures(row, total, model) {
+            Some(figures) => Vec::from(format_figure_cells(theme, &figures)),
             // A note takes the name cell and leaves the columns empty
-            None => (row.cell.clone(),
-                    (0..column_count - 1).map(|_| BoxedCell { number: String::new(), slot: String::new() }).collect())
+            None => (0..column_count - 1).map(|_| BoxedCell { number: String::new(), slot: String::new() }).collect()
         };
-        (name, usize::from(row.under_production.is_some()), cells)
+        (row.cell.clone(), usize::from(row.under_production.is_some()), cells)
     }).collect::<Vec<_>>();
     let kinds = described.iter().map(|row| row.kind).collect::<Vec<_>>();
 
@@ -2296,34 +2232,41 @@ fn format_individual_lines(theme: &Theme, groups: &[Group], columns: &Columns, b
         }
 
         for (i, lang_name) in group.languages.iter().enumerate() {
-            let content_info = group.per_language.get(lang_name).unwrap();
             if grouped || i > 0 {
                 lines.push(String::new());
             }
+            lines.extend(format_language_lines(theme, group, lang_name, columns, indent, block_width,
+                    should_print_keywords));
+        }
+    }
 
-            let row = columns.format_breakdown_row(theme, &(indent.to_owned() + &theme.details_language_name.paint(lang_name).to_string()),
-                    calculate_widest_visible_line(lang_name) + indent.len(), content_info.files, content_info.lines,
-                    content_info.calculate_code_lines(columns.model),
-                    content_info.calculate_comment_lines(columns.model));
-            lines.push(columns.append_size(&theme.arrow, &row, &format_size(theme, content_info.bytes), block_width));
-            let parts = find_parts_of(group, lang_name, content_info);
-            for (part, branch) in parts.iter().zip(format_branches(parts.iter().map(|part| part.depth))) {
-                lines.push(format_list_sub_row(theme, columns, indent, &branch, &part.name, &part.stats, part.kind, block_width));
-            }
-            let of_language = group.files.get(lang_name.as_str());
-            let files = of_language.map(|rows| rows.shown.as_slice()).unwrap_or_default();
-            let complete = of_language.is_none_or(|rows| rows.hidden == 0);
-            for (at, (path, file)) in files.iter().enumerate() {
-                let branch = find_file_branch_marker(at + 1 == files.len() && complete);
-                lines.push(format_list_sub_row(theme, columns, indent, branch, path,
-                        &find_shown_stats_of(file, group.leaves_tests_out()), RowKind::File, block_width));
-            }
-            if should_print_keywords {
-                let keywords = get_keywords_as_str(theme, &content_info.keyword_occurences, None, columns.calculate_words_start(), block_width);
-                if !keywords.is_empty() {
-                    lines.push(keywords);
-                }
-            }
+    lines
+}
+
+fn format_language_lines(theme: &Theme, group: &Group, lang_name: &str, columns: &Columns, indent: &str,
+        block_width: usize, should_print_keywords: bool) -> Vec<String>
+{
+    let content_info = group.per_language.get(lang_name).unwrap();
+    let row = columns.format_breakdown_row(theme, &(indent.to_owned() + &theme.details_language_name.paint(lang_name).to_string()),
+            calculate_widest_visible_line(lang_name) + indent.len(), content_info.files, content_info.lines,
+            content_info.calculate_code_lines(columns.model),
+            content_info.calculate_comment_lines(columns.model));
+    let mut lines = vec![columns.append_size(&theme.arrow, &row, &format_size(theme, content_info.bytes), block_width)];
+    for part in find_parts_of(group, lang_name, content_info) {
+        lines.push(format_list_sub_row(theme, columns, indent, &part.branch, &part.name, &part.stats, part.kind, block_width));
+    }
+    let of_language = group.files.get(lang_name);
+    let files = of_language.map(|rows| rows.shown.as_slice()).unwrap_or_default();
+    let complete = of_language.is_none_or(|rows| rows.hidden == 0);
+    for (at, (path, file)) in files.iter().enumerate() {
+        let branch = find_file_branch_marker(at + 1 == files.len() && complete);
+        lines.push(format_list_sub_row(theme, columns, indent, branch, path,
+                &find_shown_stats_of(file, group.leaves_tests_out()), RowKind::File, block_width));
+    }
+    if should_print_keywords {
+        let keywords = get_keywords_as_str(theme, &content_info.keyword_occurences, None, columns.calculate_words_start(), block_width);
+        if !keywords.is_empty() {
+            lines.push(keywords);
         }
     }
 
@@ -2391,9 +2334,8 @@ impl Columns {
                 // The markers are measured and not assumed, so changing one cannot leave this column
                 // a character short of what gets drawn in it.
                 let under = indent + BRANCH_INDENT.len();
-                let parts = find_parts_of(group, name, content_info);
-                for (part, branch) in parts.iter().zip(format_branches(parts.iter().map(|part| part.depth))) {
-                    columns.name = columns.name.max(under + calculate_widest_visible_line(&branch)
+                for part in find_parts_of(group, name, content_info) {
+                    columns.name = columns.name.max(under + calculate_widest_visible_line(&part.branch)
                             + calculate_widest_visible_line(&part.name));
                     columns.measure(&part.stats);
                 }
@@ -2873,11 +2815,6 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
         sorted.sort();
         sorted
     };
-    let patterns_as_recorded = |patterns: &[String]| match &project {
-        Some(project) => patterns.iter()
-                .map(|pattern| config_manager::format_pattern_inside(&project.project_dir, pattern)).collect(),
-        None => patterns.to_vec()
-    };
 
     let mut changed = Vec::new();
     // The scope cannot carry the targets, so they are compared beside it. The same './src'
@@ -2886,8 +2823,7 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
         changed.push(config_manager::TARGETS);
     }
     let mut scope = super::diff::scope_of(&config.engine, config.view.counting);
-    scope.exclude = patterns_as_recorded(&scope.exclude);
-    scope.tests = patterns_as_recorded(&scope.tests);
+    scope.exclude = config_manager::format_patterns_inside(project.map(|project| project.project_dir.as_str()), &scope.exclude);
     // The log holds no keyword counts and no tests, so a run that only stopped counting either, or
     // declared its tests with other patterns, changed nothing the log records
     changed.extend(super::diff::find_settings_that_differ(&entry.scope, &scope)

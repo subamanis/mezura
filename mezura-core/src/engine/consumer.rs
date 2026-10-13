@@ -95,9 +95,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                 }
                 idle_iterations = 0;
                 let lang_name = parsable_file.language_name.as_ref();
-                let lookup = file_parser::NestedLanguageLookup { languages: &language_map,
-                        extension_to_name: &nested_definitions.extension_to_name,
-                        set_aside: &nested_definitions.set_aside };
+                let lookup = file_parser::NestedLanguageLookup::of(&language_map, &nested_definitions);
                 let shebang_map = &language_lookups.get_of_module(parsable_file.module).by_shebang;
                 match file_parser::parse_file(&parsable_file.path, parsable_file.size, lang_name, &mut buf,
                         &mut parse_buffers, &lookup, &mut keyword_matchers, &mut identification_matchers,
@@ -123,8 +121,7 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                                     .add_file(&section.stats, section.bytes, section_keywords);
                             if let Some(sections) = &mut of_this_file {
                                 sections.entry(section.language.clone()).or_default()
-                                        .add(&Stats::new(1, section.bytes, section.stats.lines,
-                                                section.stats.classes.clone(), HashMap::new()));
+                                        .add(&Stats::of_one_file(&section.stats, section.bytes));
                             }
                         }
                         let tests = report.tests.take();
@@ -136,11 +133,9 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                         if let Some(nested_languages) = of_this_file {
                             let entry = FileEntry {
                                     path: spell_out(&parsable_file.path),
-                                    stats: Stats::new(1, bytes, whole.lines, whole.classes.clone(),
-                                            HashMap::new()),
+                                    stats: Stats::of_one_file(&whole, bytes),
                                     nested_languages,
-                                    tests: tests.as_deref().map(|tests| Stats::new(1, tests.bytes,
-                                            tests.stats.lines, tests.stats.classes.clone(), HashMap::new())) };
+                                    tests: tests.as_deref().map(|tests| Stats::of_one_file(&tests.stats, tests.bytes)) };
                             // Not 'entry(lang_name.to_owned())', which allocates the name per file
                             match local_files[module].get_mut(lang_name) {
                                 Some(bucket) => bucket.push(entry),

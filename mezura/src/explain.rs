@@ -4,10 +4,10 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use mezura_core::{Bucket, Carried, CountingModel, EngineConfig, ExplainError, FileExplanation, Languages,
-        LineClasses, PathPatterns, ScanSkip, Span, SpanKind, TestFileRule};
+        LineClasses, ScanSkip, Span, SpanKind, TestFileRule};
 
 use crate::config_manager::{Configuration, ExplainedLines, get_command_that_counts};
-use crate::json_printer::escape;
+use crate::json_printer::{create_string_array, escape};
 use crate::message_printer::wrap_message;
 use crate::theme::get_active;
 
@@ -78,14 +78,13 @@ fn refuse(message: &str) -> ExitCode {
 
 // The core applies the directory only to a file inside it, so nothing is checked here.
 fn read_names_as_a_run_from_here_would(engine: &EngineConfig) -> EngineConfig {
-    if engine.test_patterns.read_from.is_some() {
-        return engine.clone();
+    let mut engine = engine.clone();
+    if engine.test_patterns.read_from.is_none() {
+        engine.test_patterns.read_from = std::env::current_dir().ok()
+                .map(|dir| crate::paths::normalise_separators(&dir.to_string_lossy()).into_owned());
     }
-    let working_dir = std::env::current_dir().ok()
-            .map(|dir| crate::paths::normalise_separators(&dir.to_string_lossy()).into_owned());
 
-    EngineConfig { test_patterns: PathPatterns { patterns: engine.test_patterns.patterns.clone(), read_from: working_dir },
-            ..engine.clone() }
+    engine
 }
 
 fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, asked_for: ExplainedLines) {
@@ -341,16 +340,16 @@ fn build_test_file_entry(rule: &TestFileRule) -> Option<String> {
             .map(|folder| format!(",\"matched_folder\":\"{}\"", escape(folder))).unwrap_or_default();
     match rule {
         TestFileRule::TestDirectory { directory, build_files } => Some(format!(
-                "{{\"rule\":\"test_directory\",\"directory\":\"{}\",\"build_files\":[{}]}}", escape(directory),
-                build_files.iter().map(|file| format!("\"{}\"", escape(file))).collect::<Vec<_>>().join(","))),
+                "{{\"rule\":\"test_directory\",\"directory\":\"{}\",\"build_files\":{}}}", escape(directory),
+                create_string_array(build_files))),
         TestFileRule::FileName(shape) => Some(format!("{{\"rule\":\"file_name\",\"shape\":\"{}\"}}",
                 escape(&shape.to_string()))),
         TestFileRule::Declared { pattern, matched_folder } => Some(format!(
                 "{{\"rule\":\"declared\",\"pattern\":\"{}\"{}}}", escape(pattern), matched(matched_folder))),
         TestFileRule::DeclaredNotTests { pattern, matched_folder } => Some(format!(
                 "{{\"rule\":\"declared_not_tests\",\"pattern\":\"{}\"{}}}", escape(pattern), matched(matched_folder))),
-        TestFileRule::DeclaredModule { declared_by } => Some(format!("{{\"rule\":\"declared_module\",\"declared_by\":[{}]}}",
-                declared_by.iter().map(|file| format!("\"{}\"", escape(file))).collect::<Vec<_>>().join(","))),
+        TestFileRule::DeclaredModule { declared_by } => Some(format!("{{\"rule\":\"declared_module\",\"declared_by\":{}}}",
+                create_string_array(declared_by))),
         TestFileRule::FileMarker { marker, line } => Some(format!("{{\"rule\":\"file_marker\",\"marker\":\"{}\",\"line\":{line}}}",
                 escape(marker))),
         _ => None
@@ -359,7 +358,7 @@ fn build_test_file_entry(rule: &TestFileRule) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use mezura_core::{ExplainedLine, LineClass, TestFileName};
+    use mezura_core::{ExplainedLine, LineClass, PathPatterns, TestFileName};
 
     use super::*;
 

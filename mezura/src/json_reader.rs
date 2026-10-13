@@ -146,9 +146,10 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
     let scope = read_nested(root, "scope", "")?;
     let scan = read_nested(root, "scan", "")?;
     let total = parse_stats(read_nested(root, "total", "")?, "total")?;
-    let per_language = parse_languages(read_list(root, "languages", "")?, "languages")?;
-    let nested_languages = parse_nested_languages(read_list(root, "languages", "")?, "languages")?;
-    let tests = parse_tests(read_list(root, "languages", "")?, "languages")?;
+    let languages = read_list(root, "languages", "")?;
+    let per_language = parse_languages(languages, "languages")?;
+    let nested_languages = parse_nested_languages(languages, "languages")?;
+    let tests = parse_tests(languages, "languages")?;
 
     let performance = match root.get("performance") {
         Some(x) => parse_performance(read_object(x, "performance")?)?,
@@ -163,7 +164,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
         None => (vec![ModuleResult { name: None, per_language: per_language.clone(), total: total.clone(),
                 nested_languages: nested_languages.clone(),
                 tests: tests.clone(),
-                files: parse_files(read_list(root, "languages", "")?, "languages")? }],
+                files: parse_files(languages, "languages")? }],
                 read_optional_number(root, "files_hidden", "")?)
     };
 
@@ -339,16 +340,13 @@ fn parse_modules(entries: &[Value]) -> Result<(Vec<ModuleResult>, usize), Docume
         let at = format!("modules[{i}]");
         let entry = read_object(entry, &at)?;
         hidden += read_optional_number(entry, "files_hidden", &at)?;
+        let name = read_optional_name(entry, "name", &at)?;
+        let total = parse_stats(read_nested(entry, "total", &at)?, &join_location(&at, "total"))?;
+        let languages = read_list(entry, "languages", &at)?;
+        let at = join_location(&at, "languages");
 
-        Ok(ModuleResult {
-            name: read_optional_name(entry, "name", &at)?,
-            total: parse_stats(read_nested(entry, "total", &at)?, &join_location(&at, "total"))?,
-            per_language: parse_languages(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?,
-            tests: parse_tests(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?,
-            nested_languages: parse_nested_languages(read_list(entry, "languages", &at)?,
-                    &join_location(&at, "languages"))?,
-            files: parse_files(read_list(entry, "languages", &at)?, &join_location(&at, "languages"))?
-        })
+        Ok(ModuleResult { name, total, per_language: parse_languages(languages, &at)?, tests: parse_tests(languages, &at)?,
+                nested_languages: parse_nested_languages(languages, &at)?, files: parse_files(languages, &at)? })
     }).collect::<Result<Vec<_>, DocumentError>>()?;
 
     Ok((modules, hidden))

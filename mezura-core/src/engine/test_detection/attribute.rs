@@ -3,7 +3,8 @@
 // under the latter.
 use memchr::memmem;
 
-use super::{Marker, begins_with, find_word_end, is_word_byte, is_word_start};
+use super::{begins_with, find_word_end, is_word_byte, is_word_start, skip_whitespace};
+use super::walk::Marker;
 
 // Past this many bytes an unclosed '#[' is a stray bracket
 pub(super) const MOST_ATTRIBUTE_BYTES : usize = 4_096;
@@ -48,8 +49,9 @@ pub(super) fn read(contents: &[u8], at: usize) -> Option<Marker> {
     let (name, rest) = split_name(&contents[open + 1..]);
     let arguments_close = if name == CFG || name == CFG_ATTR {
         let (from, to) = find_arguments(rest)?;
-        let says_test = holds_test(&rest[from..to]) && if name == CFG { predicate_says_test(&rest[from..to]) }
-                else { applies_a_test_attribute(&rest[from..to]) };
+        let arguments = &rest[from..to];
+        let says_test = holds_test(arguments)
+                && if name == CFG { predicate_says_test(arguments) } else { applies_a_test_attribute(arguments) };
         if !says_test { return None; }
         Some(contents.len() - rest.len() + to)
     } else if holds_test(name) || name == BENCH { None } else { return None };
@@ -133,16 +135,14 @@ fn skip_string(bytes: &[u8], at: usize, limit: usize) -> Option<usize> {
 }
 
 fn split_name(body: &[u8]) -> (&[u8], &[u8]) {
-    let mut at = 0;
-    while at < body.len() && body[at].is_ascii_whitespace() { at += 1; }
-    let start = at;
+    let start = skip_whitespace(body, 0);
+    let mut at = start;
     while at < body.len() && NAME_BYTES[body[at] as usize] { at += 1; }
     (&body[start..at], &body[at..])
 }
 
 fn find_arguments(rest: &[u8]) -> Option<(usize, usize)> {
-    let mut at = 0;
-    while at < rest.len() && rest[at].is_ascii_whitespace() { at += 1; }
+    let at = skip_whitespace(rest, 0);
     if rest.get(at) != Some(&b'(') { return None; }
     let close = find_matching_bracket(rest, at, b')')?;
     Some((at + 1, close))
@@ -191,9 +191,7 @@ fn predicate_says_test(predicate: &[u8]) -> bool {
 }
 
 fn ends_a_term(predicate: &[u8], from: usize) -> bool {
-    let mut at = from;
-    while at < predicate.len() && predicate[at].is_ascii_whitespace() { at += 1; }
-    matches!(predicate.get(at), None | Some(b',') | Some(b')'))
+    matches!(predicate.get(skip_whitespace(predicate, from)), None | Some(b',') | Some(b')'))
 }
 
 fn applies_a_test_attribute(arguments: &[u8]) -> bool {

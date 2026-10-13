@@ -201,9 +201,9 @@ fn move_patterns_into_checkout(checkout: &str, repository: &str, patterns: &Path
     };
 
     PathPatterns {
-        patterns: patterns.patterns.iter().map(|pattern| match pattern.strip_prefix('!') {
-            Some(place) => format!("!{}", moved(place)),
-            None => moved(pattern)
+        patterns: patterns.patterns.iter().map(|pattern| {
+            let (negation, place) = super::config_manager::split_negation(pattern);
+            format!("{negation}{}", moved(place))
         }).collect(),
         read_from: patterns.read_from.as_deref().map(moved)
     }

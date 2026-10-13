@@ -46,8 +46,7 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
         format!("\"scan\":{}", create_scan_object(&result.files_present, result.faulty_files.len(),
                 &super::json_reader::SkippedCounts::of(&result.skipped_files),
                 result.unreadable_dirs.len())),
-        format!("\"total\":{}", create_total_object(total, tests.map(result_printer::calculate_sum_of_tests),
-                !config.view.hidden.keywords, config.view.counting)),
+        format!("\"total\":{}", create_total_object(total, tests, !config.view.hidden.keywords, config.view.counting)),
         format!("\"languages\":{}", create_languages_array(&shown, per_language, nested_languages, tests, &files, config)),
         format!("\"languages_hidden\":{hidden}"),
         format!("\"files_hidden\":{files_hidden}"),
@@ -517,14 +516,16 @@ fn create_scan_object(files_present: &mezura_core::FilesPresent, faulty_files_co
     create_object(members)
 }
 
-fn create_total_object(total: &Stats, tests: Option<TestCode>, keywords_counted: bool, model: CountingModel) -> String {
+fn create_total_object(total: &Stats, tests: Option<&HashMap<String, TestCode>>, keywords_counted: bool,
+        model: CountingModel) -> String {
     let mut members = create_figure_members(total, model);
     // The keywords and the tests of every language survive '--top' only here, since the languages are
     // cut there and the ones left cannot be added back up to them
     if keywords_counted {
         members.push(format!("\"keywords\":{}", create_keywords_object(&total.keyword_occurences)));
     }
-    if let Some(mut tests) = tests {
+    if let Some(tests) = tests {
+        let mut tests = result_printer::calculate_sum_of_tests(tests);
         // The sum names the keywords of the languages that hold tests, so the others go in at zero
         for keyword in total.keyword_occurences.keys() {
             tests.stats.keyword_occurences.entry(keyword.clone()).or_insert(0);
@@ -549,8 +550,7 @@ fn create_modules_array(result: &RunResult, file_rows: &[result_printer::FileRow
         let tests = find_tests(&module.tests, config);
         let members = [
             format!("\"name\":{name}"),
-            format!("\"total\":{}", create_total_object(&module.total,
-                    tests.map(result_printer::calculate_sum_of_tests), !config.view.hidden.keywords,
+            format!("\"total\":{}", create_total_object(&module.total, tests, !config.view.hidden.keywords,
                     config.view.counting)),
             format!("\"languages\":{}", create_languages_array(&shown, &module.per_language,
                     &module.nested_languages, tests, &files, config)),
@@ -762,7 +762,7 @@ fn create_forced_languages_object(forced: &HashMap<String, String>) -> String {
             .map(|(extension, language)| format!("\"{}\":\"{}\"", escape(extension), escape(language))))
 }
 
-fn create_string_array(values: &[String]) -> String {
+pub(crate) fn create_string_array(values: &[String]) -> String {
     create_array(values.iter().map(|x| format!("\"{}\"", escape(x))))
 }
 

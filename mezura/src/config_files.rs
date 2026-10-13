@@ -8,6 +8,8 @@ use colored::{ColoredString, Colorize};
 use mezura_core::engine::config::{Target, Threads};
 use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE,
         MIN_PRODUCERS_VALUE};
+use mezura_core::engine::path_patterns::{validate_exclude_patterns, validate_test_patterns};
+use mezura_core::{PathPatterns, PatternError};
 
 use super::config_manager::{self, ConfigurationBuilder};
 use super::config_manager::{MAX_COMPARE_LEVEL, MIN_COMPARE_LEVEL};
@@ -91,22 +93,10 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                         Err(_) => issues.invalid_fields.push(config_manager::TARGETS)
                     }
                 },
-                config_manager::EXCLUDE => {
-                    let patterns = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_paths_to_vec);
-                    if mezura_core::engine::path_patterns::validate_exclude_patterns(&patterns).is_err() {
-                        issues.invalid_fields.push(config_manager::EXCLUDE);
-                    } else if !patterns.is_empty() {
-                        builder.exclude_patterns = Some(mezura_core::PathPatterns::of(patterns));
-                    }
-                },
-                config_manager::TESTS => {
-                    let patterns = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_paths_to_vec);
-                    if mezura_core::engine::path_patterns::validate_test_patterns(&patterns).is_err() {
-                        issues.invalid_fields.push(config_manager::TESTS);
-                    } else if !patterns.is_empty() {
-                        builder.test_patterns = Some(mezura_core::PathPatterns::of(patterns));
-                    }
-                },
+                config_manager::EXCLUDE => read_patterns_value(&mut builder.exclude_patterns, &mut reader, &mut buf,
+                        config_manager::EXCLUDE, &mut issues, validate_exclude_patterns),
+                config_manager::TESTS => read_patterns_value(&mut builder.test_patterns, &mut reader, &mut buf,
+                        config_manager::TESTS, &mut issues, validate_test_patterns),
                 config_manager::LANGUAGES => {
                     let langs = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_languages_to_vec);
                     if !langs.is_empty() {
@@ -252,10 +242,8 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
                 None => config_manager::format_declared_form(target)
             }).collect::<Vec<_>>().join("\n"))?;
 
-    let format_patterns = |patterns: &mezura_core::PathPatterns| patterns.patterns.iter().map(|pattern| match relative_to {
-        Some(project_dir) => config_manager::format_pattern_inside(project_dir, pattern),
-        None => pattern.clone()
-    }).collect::<Vec<_>>().join(",");
+    let format_patterns = |patterns: &mezura_core::PathPatterns|
+            config_manager::format_patterns_inside(relative_to, &patterns.patterns).join(",");
     if let Some(exclude_patterns) = &config_builder.exclude_patterns {
         write_block(&mut writer, config_manager::EXCLUDE, &format_patterns(exclude_patterns))?;
     }
@@ -424,6 +412,17 @@ fn read_flag_value(into: &mut Option<bool>, reader: &mut CountingReader, buf: &m
     match read_bool_value_from_file(reader, buf) {
         Ok(x) => *into = x,
         Err(()) => issues.invalid_fields.push(field)
+    }
+}
+
+fn read_patterns_value(into: &mut Option<PathPatterns>, reader: &mut CountingReader, buf: &mut String,
+        field: &'static str, issues: &mut ConfigFileIssues, validate: fn(&[String]) -> Result<(), PatternError>)
+{
+    let patterns = read_lines_from_file_to_vec(reader, buf, super::args::parse_paths_to_vec);
+    if validate(&patterns).is_err() {
+        issues.invalid_fields.push(field);
+    } else if !patterns.is_empty() {
+        *into = Some(PathPatterns::of(patterns));
     }
 }
 

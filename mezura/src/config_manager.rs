@@ -1095,6 +1095,13 @@ pub fn format_pattern_inside(project_dir: &str, pattern: &str) -> String {
     written
 }
 
+pub fn format_patterns_inside(project_dir: Option<&str>, patterns: &[String]) -> Vec<String> {
+    patterns.iter().map(|pattern| match project_dir {
+        Some(project_dir) => format_pattern_inside(project_dir, pattern),
+        None => pattern.clone()
+    }).collect()
+}
+
 pub fn get_command_that_counts(kind: ScanSkip) -> &'static str {
     match kind {
         ScanSkip::Minified => COUNT_MINIFIED,
@@ -1383,18 +1390,15 @@ fn parse_or_refuse<T>(command: &str, arguments: &str,
 fn parse_patterns_or_refuse(command: &str, arguments: &str,
         validate: impl FnOnce(&[String]) -> Result<(), mezura_core::PatternError>) -> Result<PathPatterns, ArgParsingError>
 {
-    let patterns = super::args::parse_paths_to_vec(arguments);
-    if patterns.is_empty() {
-        message_printer::print_help_message_for_command(command);
-        return Err(refuse_argument(arguments, command.to_owned()));
-    }
-    if let Err(why) = validate(&patterns) {
-        eprintln!("\n{}", wrap_message(&why.to_string()).red());
-        message_printer::print_help_message_for_command(command);
-        return Err(refuse_argument(arguments, command.to_owned()));
-    }
+    parse_or_refuse(command, arguments, |arguments| {
+        let patterns = Some(super::args::parse_paths_to_vec(arguments)).filter(|vec| !vec.is_empty())?;
+        if let Err(why) = validate(&patterns) {
+            eprintln!("\n{}", wrap_message(&why.to_string()).red());
+            return None;
+        }
 
-    Ok(PathPatterns::of(patterns.iter().map(|pattern| absolutize_path_pattern(pattern))))
+        Some(PathPatterns::of(patterns.iter().map(|pattern| absolutize_path_pattern(pattern))))
+    })
 }
 
 fn take_flag(segment: &str, command: &str) -> Result<bool, ArgParsingError> {
@@ -1549,7 +1553,7 @@ fn rebase_patterns_on(project_dir: &str, declared: PathPatterns) -> PathPatterns
     PathPatterns { patterns, read_from: Some(project_dir.to_owned()) }
 }
 
-fn split_negation(pattern: &str) -> (&str, &str) {
+pub fn split_negation(pattern: &str) -> (&str, &str) {
     match pattern.strip_prefix('!') {
         Some(place) => ("!", place),
         None => ("", pattern)

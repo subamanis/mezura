@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, Languages,
-        StringRules, Target, Threads, language_file, languages, run, run_watched};
+        PathPatterns, StringRules, Target, Threads, language_file, languages, run, run_watched};
 
 const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
 
@@ -801,10 +801,10 @@ fn each_module_keeps_the_files_that_were_counted_under_it() {
 // these, and this call never went through it. A mistake in the configuration comes back on the
 // Result like every other mistake in the configuration.
 #[test]
-fn an_exclude_pattern_that_does_not_parse_is_an_error_not_a_panic() {
+fn an_exclude_pattern_that_does_not_parse_or_takes_an_earlier_one_back_is_an_error_not_a_panic() {
     let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
     let config = EngineConfig {
-        exclude_patterns: mezura_core::PathPatterns::of(["target", "[invalid"]),
+        exclude_patterns: PathPatterns::of(["target", "[invalid"]),
         threads: Threads::new(1, 1),
         ..EngineConfig::new([format!("{current_dir}/src")])
     };
@@ -815,7 +815,7 @@ fn an_exclude_pattern_that_does_not_parse_is_an_error_not_a_panic() {
     assert!(matches!(&err, mezura_core::RunError::InvalidExcludePattern(mezura_core::PatternError::InvalidGlob(p)) if p == "[invalid"),
             "expected InvalidExcludePattern carrying the pattern as written, got: {err:?}");
 
-    let taken_back = EngineConfig { exclude_patterns: mezura_core::PathPatterns::of(["!vendor/"]), ..config.clone() };
+    let taken_back = EngineConfig { exclude_patterns: PathPatterns::of(["!vendor/"]), ..config.clone() };
     let (languages, _) = Languages::shipped(&taken_back);
     let err = run(&taken_back, languages).unwrap_err();
     assert!(matches!(&err, mezura_core::RunError::InvalidExcludePattern(mezura_core::PatternError::TakesBack(p)) if p == "!vendor/"),
@@ -1226,32 +1226,20 @@ fn a_slow_traversal_callback_is_not_charged_to_the_counting() {
 
 #[test]
 fn the_test_code_of_a_language_is_one_share_whichever_way_it_was_found() {
-    let root = std::env::temp_dir().join("mezura-test-code");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::create_dir_all(root.join("tests")).unwrap();
-    std::fs::write(root.join("Cargo.toml"), "[package]\n").unwrap();
-    std::fs::write(root.join("src").join("lib.rs"),
-            "pub fn a() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn it() {}\n}\n").unwrap();
-    std::fs::write(root.join("src").join("plain.rs"), "pub fn b() {}\n").unwrap();
-    std::fs::write(root.join("tests").join("x.rs"), "// an integration test\n#[test]\nfn x() {}\n").unwrap();
+    let root = write_tree("mezura-test-code", &[("Cargo.toml", "[package]\n"),
+            ("src/lib.rs", "pub fn a() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn it() {}\n}\n"),
+            ("src/plain.rs", "pub fn b() {}\n"), ("tests/x.rs", "// an integration test\n#[test]\nfn x() {}\n")]);
     let root_str = root.to_string_lossy().replace('\\', "/");
 
-    let counted = |detect_tests: bool, targets: Vec<Target>| {
-        let config = EngineConfig { detect_tests, collect_files: true, threads: Threads::new(1, 4), targets,
-                ..EngineConfig::new([root_str.clone()]) };
-        let (languages, _) = Languages::shipped(&config);
-        run(&config, languages).unwrap()
-    };
+    let counted = |detect_tests: bool, targets: Vec<Target>| count_with_shipped_languages(&EngineConfig { detect_tests,
+            collect_files: true, threads: Threads::new(1, 4), targets, ..EngineConfig::new([root_str.clone()]) });
     let model = CountingModel::Content;
 
     let result = counted(true, vec![Target::of(&root_str)]);
     let rust = &result.per_language["Rust"];
     assert_eq!((3, 11), (rust.files, rust.lines));
-    let share = |tests: &mezura_core::TestCode| (tests.stats.files, tests.stats.lines, tests.stats.bytes,
-            tests.whole_files);
     let tests = &result.tests["Rust"];
-    assert_eq!((2, 8, 95, 1), share(tests));
+    assert_eq!((2, 8, 95, 1), share_of(tests));
     // The lone brace closing the module is the one extra line
     assert_eq!((6, 1, 1), (tests.stats.calculate_code_lines(model), tests.stats.calculate_comment_lines(model),
             tests.stats.calculate_extra_lines(model)));
@@ -1259,9 +1247,7 @@ fn the_test_code_of_a_language_is_one_share_whichever_way_it_was_found() {
     assert_eq!(tests, &result.modules[0].tests["Rust"]);
 
     let files = &result.modules[0].files["Rust"];
-    let tests_of = |name: &str| files.iter()
-            .find(|file| std::path::Path::new(&file.path).file_name() == Some(name.as_ref()))
-            .unwrap().tests.as_ref();
+    let tests_of = |name: &str| find_file_named(files, name).tests.as_ref();
     let figures = |stats: &mezura_core::Stats| (stats.files, stats.lines, stats.bytes);
     assert_eq!((1, 5, 54), figures(tests_of("lib.rs").unwrap()));
     assert_eq!((1, 3, 41), figures(tests_of("x.rs").unwrap()));
@@ -1277,26 +1263,19 @@ fn the_test_code_of_a_language_is_one_share_whichever_way_it_was_found() {
     std::fs::remove_dir_all(&root).unwrap();
     let of_module = |name: &str| split.modules.iter()
             .find(|module| module.name.as_deref() == Some(name)).unwrap();
-    assert_eq!((1, 5, 54, 0), share(&of_module("code").tests["Rust"]));
-    assert_eq!((1, 3, 41, 1), share(&of_module("checks").tests["Rust"]));
-    assert_eq!((2, 8, 95, 1), share(&split.tests["Rust"]));
+    assert_eq!((1, 5, 54, 0), share_of(&of_module("code").tests["Rust"]));
+    assert_eq!((1, 3, 41, 1), share_of(&of_module("checks").tests["Rust"]));
+    assert_eq!((2, 8, 95, 1), share_of(&split.tests["Rust"]));
 }
 
 #[test]
 fn the_keywords_inside_the_test_code_are_counted_in_its_share() {
-    let root = std::env::temp_dir().join("mezura-test-code-keywords");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::create_dir_all(root.join("tests")).unwrap();
-    std::fs::write(root.join("Cargo.toml"), "[package]\n").unwrap();
-    std::fs::write(root.join("src").join("lib.rs"),
-            "pub struct Production;\n\n#[cfg(test)]\nmod cases;\n\n#[cfg(test)]\nmod tests {\n    struct Fixture;\n}\n").unwrap();
-    std::fs::write(root.join("src").join("cases.rs"), "struct Case;\n\n#[cfg(test)]\nmod inner {\n    struct Deeper;\n}\n").unwrap();
-    std::fs::write(root.join("tests").join("x.rs"), "struct Harness;\n").unwrap();
+    let root = write_tree("mezura-test-code-keywords", &[("Cargo.toml", "[package]\n"),
+            ("src/lib.rs", "pub struct Production;\n\n#[cfg(test)]\nmod cases;\n\n#[cfg(test)]\nmod tests {\n    struct Fixture;\n}\n"),
+            ("src/cases.rs", "struct Case;\n\n#[cfg(test)]\nmod inner {\n    struct Deeper;\n}\n"), ("tests/x.rs", "struct Harness;\n")]);
     let root_str = root.to_string_lossy().replace('\\', "/");
-    let config = EngineConfig { detect_tests: true, threads: Threads::new(1, 4), ..EngineConfig::new([root_str.clone()]) };
-    let (languages, _) = Languages::shipped(&config);
-    let result = run(&config, languages).unwrap();
+    let result = count_with_shipped_languages(&EngineConfig { detect_tests: true, threads: Threads::new(1, 4),
+            ..EngineConfig::new([root_str]) });
     std::fs::remove_dir_all(&root).unwrap();
 
     let structs = |stats: &mezura_core::Stats| stats.keyword_occurences["structs"];
@@ -1308,38 +1287,25 @@ fn the_keywords_inside_the_test_code_are_counted_in_its_share() {
 
 #[test]
 fn a_module_declared_under_a_marker_is_test_code_whole_and_so_is_what_it_declares() {
-    let root = std::env::temp_dir().join("mezura-test-modules");
-    let _ = std::fs::remove_dir_all(&root);
-    for dir in ["src/tests", "src/nested"] {
-        std::fs::create_dir_all(root.join(dir)).unwrap();
-    }
-    std::fs::write(root.join("Cargo.toml"), "[package]\n").unwrap();
-    std::fs::write(root.join("src").join("lib.rs"),
-            "pub fn a() {}\n\nmod plain;\n\nmod nested {\n    #[cfg(test)]\n    mod deep;\n}\n\n#[cfg(test)]\nmod tests;\n").unwrap();
-    std::fs::write(root.join("src").join("plain.rs"), "pub fn b() {}\n").unwrap();
-    std::fs::write(root.join("src").join("nested").join("deep.rs"), "fn deep() {}\n").unwrap();
-    std::fs::write(root.join("src").join("tests").join("mod.rs"), "mod unit;\n\n#[test]\nfn here() {}\n").unwrap();
-    std::fs::write(root.join("src").join("tests").join("unit.rs"), "fn unit() {}\n").unwrap();
+    let root = write_tree("mezura-test-modules", &[("Cargo.toml", "[package]\n"),
+            ("src/lib.rs", "pub fn a() {}\n\nmod plain;\n\nmod nested {\n    #[cfg(test)]\n    mod deep;\n}\n\n#[cfg(test)]\nmod tests;\n"),
+            ("src/plain.rs", "pub fn b() {}\n"), ("src/nested/deep.rs", "fn deep() {}\n"),
+            ("src/tests/mod.rs", "mod unit;\n\n#[test]\nfn here() {}\n"), ("src/tests/unit.rs", "fn unit() {}\n")]);
     let root_str = root.to_string_lossy().replace('\\', "/");
 
     let counted = |detect_tests: bool, targets: Vec<Target>, patterns: &[&str]| {
-        let test_patterns = mezura_core::PathPatterns { patterns: patterns.iter().map(|x| (*x).to_owned()).collect(),
-                read_from: Some(root_str.clone()) };
-        let config = EngineConfig { detect_tests, collect_files: true, threads: Threads::new(1, 4), targets, test_patterns,
-                ..EngineConfig::new([root_str.clone()]) };
-        let (languages, _) = Languages::shipped(&config);
-        run(&config, languages).unwrap()
+        let test_patterns = PathPatterns { read_from: Some(root_str.clone()), ..PathPatterns::of(patterns) };
+        count_with_shipped_languages(&EngineConfig { detect_tests, collect_files: true, threads: Threads::new(1, 4), targets,
+                test_patterns, ..EngineConfig::new([root_str.clone()]) })
     };
-    let share = |tests: &mezura_core::TestCode| (tests.stats.files, tests.stats.lines, tests.stats.bytes, tests.whole_files);
-    let tests_of = |result: &mezura_core::RunResult, name: &str| result.modules.iter().flat_map(|module| module.files["Rust"].iter())
-            .find(|file| std::path::Path::new(&file.path).file_name() == Some(name.as_ref()))
-            .unwrap().tests.as_ref().map(|tests| (tests.files, tests.lines, tests.bytes));
+    let tests_of = |result: &mezura_core::RunResult, name: &str| find_file_named(result.modules.iter()
+            .flat_map(|module| module.files["Rust"].iter()), name).tests.as_ref().map(|tests| (tests.files, tests.lines, tests.bytes));
 
     let result = counted(true, vec![Target::of(&root_str)], &[]);
     assert_eq!((5, 18), (result.per_language["Rust"].files, result.per_language["Rust"].lines));
     // lib.rs holds four marked lines, deep.rs and unit.rs are whole through the declarations, and
     // tests/mod.rs moves from its two marked lines to the whole of it
-    assert_eq!((4, 10, 113, 3), share(&result.tests["Rust"]));
+    assert_eq!((4, 10, 113, 3), share_of(&result.tests["Rust"]));
     assert_eq!(Some((1, 4, 55)), tests_of(&result, "lib.rs"));
     assert_eq!(Some((1, 4, 32)), tests_of(&result, "mod.rs"));
     assert_eq!(Some((1, 1, 13)), tests_of(&result, "unit.rs"));
@@ -1347,7 +1313,7 @@ fn a_module_declared_under_a_marker_is_test_code_whole_and_so_is_what_it_declare
     assert_eq!(None, tests_of(&result, "plain.rs"));
 
     let taken_back = counted(true, vec![Target::of(&root_str)], &["!src/tests/"]);
-    assert_eq!((4, 10, 113, 3), share(&taken_back.tests["Rust"]), "a '!' pattern undid the declaration");
+    assert_eq!((4, 10, 113, 3), share_of(&taken_back.tests["Rust"]), "a '!' pattern undid the declaration");
 
     let off = counted(false, vec![Target::of(&root_str)], &[]);
     assert!(off.tests.is_empty() && off.modules[0].files["Rust"].iter().all(|file| file.tests.is_none()));
@@ -1357,38 +1323,22 @@ fn a_module_declared_under_a_marker_is_test_code_whole_and_so_is_what_it_declare
             Target::named("checks", format!("{root_str}/src/tests"))], &[]);
     std::fs::remove_dir_all(&root).unwrap();
     let of_module = |name: &str| split.modules.iter().find(|module| module.name.as_deref() == Some(name)).unwrap();
-    assert_eq!((2, 5, 68, 1), share(&of_module("code").tests["Rust"]), "the declaring file's module took the declared file");
-    assert_eq!((2, 5, 45, 2), share(&of_module("checks").tests["Rust"]));
-    assert_eq!((4, 10, 113, 3), share(&split.tests["Rust"]));
+    assert_eq!((2, 5, 68, 1), share_of(&of_module("code").tests["Rust"]), "the declaring file's module took the declared file");
+    assert_eq!((2, 5, 45, 2), share_of(&of_module("checks").tests["Rust"]));
+    assert_eq!((4, 10, 113, 3), share_of(&split.tests["Rust"]));
     assert_eq!(Some((1, 4, 32)), tests_of(&split, "mod.rs"));
 }
 
 #[test]
 fn a_negative_pattern_switches_the_file_markers_off_for_what_it_names() {
-    let root = std::env::temp_dir().join("mezura-test-file-marker-patterns");
-    let _ = std::fs::remove_dir_all(&root);
-    let proj = root.join("proj");
-    for dir in ["src", "vendor"] {
-        std::fs::create_dir_all(proj.join(dir)).unwrap();
-    }
-    std::fs::write(proj.join("src").join("Marked.java"), "class Marked {\n    @Test\n    void t() {}\n}\n").unwrap();
-    std::fs::write(proj.join("src").join("Plain.java"), "class Plain {\n    String s = \"@Test\";\n}\n").unwrap();
-    std::fs::write(proj.join("vendor").join("Vendored.java"), "class Vendored {\n    @Test void t() {}\n}\n").unwrap();
-    let proj_str = proj.to_string_lossy().replace('\\', "/");
-    let counted = |patterns: &[&str], detect_tests: bool| {
-        let config = EngineConfig { detect_tests, collect_files: true, threads: Threads::new(1, 4),
-                test_patterns: mezura_core::PathPatterns::of(patterns), ..EngineConfig::new([proj_str.as_str()]) };
-        let (languages, _) = Languages::shipped(&config);
-        let result = run(&config, languages).unwrap();
-        let files = &result.modules[0].files["Java"];
-        let test_lines_of = |name: &str| files.iter()
-                .find(|file| std::path::Path::new(&file.path).file_name() == Some(name.as_ref()))
-                .unwrap().tests.as_ref().map_or(0, |tests| tests.lines);
-        let per_file = ["Marked.java", "Plain.java", "Vendored.java"].map(test_lines_of);
-        let row = result.tests.get("Java").map(|tests| (tests.stats.files, tests.stats.lines, tests.whole_files));
-        assert_eq!(10, result.per_language["Java"].lines, "the lines of the language moved with the patterns {patterns:?}");
-        (per_file, row)
-    };
+    let root = write_tree("mezura-test-file-marker-patterns", &[
+            ("proj/src/Marked.java", "class Marked {\n    @Test\n    void t() {}\n}\n"),
+            ("proj/src/Plain.java", "class Plain {\n    String s = \"@Test\";\n}\n"),
+            ("proj/vendor/Vendored.java", "class Vendored {\n    @Test void t() {}\n}\n")]);
+    let proj_str = root.join("proj").to_string_lossy().replace('\\', "/");
+    let counted = |patterns: &[&str], detect_tests: bool| count_test_lines_per_file(&EngineConfig { detect_tests,
+            collect_files: true, threads: Threads::new(1, 4), test_patterns: PathPatterns::of(patterns),
+            ..EngineConfig::new([proj_str.as_str()]) }, "Java", ["Marked.java", "Plain.java", "Vendored.java"], 10);
 
     assert_eq!(([4, 0, 3], Some((2, 7, 2))), counted(&[], true));
     assert_eq!(([4, 0, 0], Some((1, 4, 1))), counted(&["!vendor/"], true), "a '!' left the file marker on");
@@ -1401,40 +1351,21 @@ fn a_negative_pattern_switches_the_file_markers_off_for_what_it_names() {
 
 #[test]
 fn a_pattern_declares_test_code_whole_and_a_later_negative_takes_it_back_while_the_markers_stay() {
-    let root = std::env::temp_dir().join("mezura-test-patterns");
-    let _ = std::fs::remove_dir_all(&root);
+    let root = write_tree("mezura-test-patterns", &[("work/proj/Cargo.toml", "[package]\n"),
+            ("work/proj/src/lib.rs", "pub fn a() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn it() {}\n}\n"),
+            ("work/proj/src/plain.rs", "pub fn b() {}\n"), ("work/proj/tests/x.rs", "// an integration test\n#[test]\nfn x() {}\n"),
+            ("work/proj/tests/fixtures/f.rs", "fn f() {}\n"), ("work/proj/spec/s.rs", "fn s() {}\nfn t() {}\n"),
+            ("work/proj/spec/helpers/h.rs", "fn h() {}\n")]);
     let proj = root.join("work").join("proj");
-    for dir in ["src", "tests/fixtures", "spec/helpers"] {
-        std::fs::create_dir_all(proj.join(dir)).unwrap();
-    }
-    std::fs::write(proj.join("Cargo.toml"), "[package]\n").unwrap();
-    std::fs::write(proj.join("src").join("lib.rs"),
-            "pub fn a() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn it() {}\n}\n").unwrap();
-    std::fs::write(proj.join("src").join("plain.rs"), "pub fn b() {}\n").unwrap();
-    std::fs::write(proj.join("tests").join("x.rs"), "// an integration test\n#[test]\nfn x() {}\n").unwrap();
-    std::fs::write(proj.join("tests").join("fixtures").join("f.rs"), "fn f() {}\n").unwrap();
-    std::fs::write(proj.join("spec").join("s.rs"), "fn s() {}\nfn t() {}\n").unwrap();
-    std::fs::write(proj.join("spec").join("helpers").join("h.rs"), "fn h() {}\n").unwrap();
     let proj_str = proj.to_string_lossy().replace('\\', "/");
 
-    let from_project = |patterns: &[&str]| mezura_core::PathPatterns { patterns: patterns.iter().map(|x| (*x).to_owned()).collect(),
-            read_from: Some(proj_str.clone()) };
-    let config_of = |target: &str, test_patterns: mezura_core::PathPatterns, detect_tests: bool| EngineConfig { detect_tests,
+    let of = |patterns: &[&str]| PathPatterns::of(patterns);
+    let from_project = |patterns: &[&str]| PathPatterns { read_from: Some(proj_str.clone()), ..of(patterns) };
+    let config_of = |target: &str, test_patterns: PathPatterns, detect_tests: bool| EngineConfig { detect_tests,
             collect_files: true, threads: Threads::new(1, 4), test_patterns, ..EngineConfig::new([target]) };
-    let config_with = |patterns: &[&str], detect_tests: bool| config_of(&proj_str, mezura_core::PathPatterns::of(patterns), detect_tests);
-    let counted_under = |config: EngineConfig| {
-        let (languages, _) = Languages::shipped(&config);
-        let result = run(&config, languages).unwrap();
-        let files = &result.modules[0].files["Rust"];
-        let test_lines_of = |name: &str| files.iter()
-                .find(|file| std::path::Path::new(&file.path).file_name() == Some(name.as_ref()))
-                .unwrap().tests.as_ref().map_or(0, |tests| tests.lines);
-        let per_file = ["lib.rs", "plain.rs", "x.rs", "f.rs", "s.rs", "h.rs"].map(test_lines_of);
-        let row = result.tests.get("Rust").map(|tests| (tests.stats.files, tests.stats.lines, tests.whole_files));
-        assert_eq!(15, result.per_language["Rust"].lines, "the lines of the language moved with the patterns {:?}",
-                config.test_patterns);
-        (per_file, row)
-    };
+    let config_with = |patterns: &[&str], detect_tests: bool| config_of(&proj_str, of(patterns), detect_tests);
+    let counted_under = |config: EngineConfig| count_test_lines_per_file(&config, "Rust",
+            ["lib.rs", "plain.rs", "x.rs", "f.rs", "s.rs", "h.rs"], 15);
     let counted = |patterns: &[&str], detect_tests: bool| counted_under(config_with(patterns, detect_tests));
 
     assert_eq!(([5, 0, 3, 1, 0, 0], Some((3, 9, 2))), counted(&[], true));
@@ -1451,13 +1382,9 @@ fn a_pattern_declares_test_code_whole_and_a_later_negative_takes_it_back_while_t
     assert_eq!(([7, 1, 3, 1, 2, 1], Some((6, 15, 6))), counted_under(config_of(&proj_str, from_project(&["proj/"]), true)));
 
     let src = format!("{proj_str}/src");
-    let inside_the_project = |test_patterns| {
-        let config = config_of(&src, test_patterns, true);
-        let (languages, _) = Languages::shipped(&config);
-        let result = run(&config, languages).unwrap();
-        result.tests.get("Rust").map(|tests| (tests.stats.files, tests.stats.lines, tests.whole_files))
-    };
-    assert_eq!(Some((1, 5, 0)), inside_the_project(mezura_core::PathPatterns::of(["proj/"])), "a target below the project saw the project's name");
+    let inside_the_project = |test_patterns| count_with_shipped_languages(&config_of(&src, test_patterns, true)).tests.get("Rust")
+            .map(|tests| (tests.stats.files, tests.stats.lines, tests.whole_files));
+    assert_eq!(Some((1, 5, 0)), inside_the_project(of(&["proj/"])), "a target below the project saw the project's name");
     assert_eq!(Some((2, 8, 2)), inside_the_project(from_project(&["proj/"])),
             "names from the project are read from the project folder's parent for a target inside it");
 
@@ -1467,7 +1394,6 @@ fn a_pattern_declares_test_code_whole_and_a_later_negative_takes_it_back_while_t
         mezura_core::explain_file(&proj.join(file), &config, languages).unwrap()
                 .lines.iter().filter(|line| line.in_test).count()
     };
-    let of = |patterns: &[&str]| mezura_core::PathPatterns::of(patterns);
     assert_eq!(2, explained(of(&["spec/"]), "spec/s.rs"), "'--explain' disagrees with the run over the same file");
     assert_eq!(0, explained(of(&["spec/", "!spec/helpers/"]), "spec/helpers/h.rs"));
     assert_eq!(5, explained(of(&["!src/"]), "src/lib.rs"));
@@ -1482,30 +1408,23 @@ fn a_pattern_declares_test_code_whole_and_a_later_negative_takes_it_back_while_t
 }
 
 #[test]
-fn an_exclusion_never_reaches_above_the_target_and_a_pattern_that_changes_nothing_is_reported() {
-    let root = std::env::temp_dir().join("mezura-exclude-patterns");
-    let _ = std::fs::remove_dir_all(&root);
-    let proj = root.join("tests").join("proj");
-    for dir in ["src/gen", "vendor/lib", "build"] {
-        std::fs::create_dir_all(proj.join(dir)).unwrap();
-    }
-    std::fs::write(proj.join("src").join("lib.rs"), "pub fn a() {}\n").unwrap();
-    std::fs::write(proj.join("src").join("gen").join("g.rs"), "pub fn g() {}\npub fn h() {}\n").unwrap();
-    std::fs::write(proj.join("vendor").join("lib").join("v.rs"), "pub fn v() {}\npub fn w() {}\npub fn x() {}\n").unwrap();
-    std::fs::write(proj.join("build").join("b.rs"), "pub fn b() {}\npub fn c() {}\npub fn d() {}\npub fn e() {}\n").unwrap();
-    std::fs::write(proj.join("src").join("build"), "#!/bin/sh\necho hi\n").unwrap();
-    let proj_str = proj.to_string_lossy().replace('\\', "/");
+fn an_exclusion_never_reaches_above_the_target_and_one_naming_a_path_that_changes_nothing_is_reported() {
+    let root = write_tree("mezura-exclude-patterns", &[("tests/proj/src/lib.rs", "pub fn a() {}\n"),
+            ("tests/proj/src/gen/g.rs", "pub fn g() {}\npub fn h() {}\n"),
+            ("tests/proj/vendor/lib/v.rs", "pub fn v() {}\npub fn w() {}\npub fn x() {}\n"),
+            ("tests/proj/build/b.rs", "pub fn b() {}\npub fn c() {}\npub fn d() {}\npub fn e() {}\n"),
+            ("tests/proj/src/build", "#!/bin/sh\necho hi\n")]);
+    let proj_str = root.join("tests").join("proj").to_string_lossy().replace('\\', "/");
     let root_str = root.to_string_lossy().replace('\\', "/");
 
-    let counted = |target: &str, exclude_patterns: mezura_core::PathPatterns| {
-        let config = EngineConfig { exclude_patterns, threads: Threads::new(1, 2), ..EngineConfig::new([target]) };
-        let (languages, _) = Languages::shipped(&config);
-        let result = run(&config, languages).unwrap();
+    let counted = |target: &str, exclude_patterns: PathPatterns| {
+        let result = count_with_shipped_languages(&EngineConfig { exclude_patterns, threads: Threads::new(1, 2),
+                ..EngineConfig::new([target]) });
         let warned = result.warnings.iter().map(|x| x.subject.clone()).collect::<Vec<_>>();
         assert!(result.warnings.iter().all(|x| x.code == mezura_core::Code::PatternMatchedNothing), "{:?}", result.warnings);
         (result.total.lines, result.files_present.excluded_files, warned)
     };
-    let of = |patterns: &[&str]| mezura_core::PathPatterns::of(patterns);
+    let of = |patterns: &[&str]| PathPatterns::of(patterns);
     let none : Vec<String> = Vec::new();
 
     assert_eq!((12, 0, none.clone()), counted(&proj_str, of(&[])));
@@ -1525,8 +1444,7 @@ fn an_exclusion_never_reaches_above_the_target_and_a_pattern_that_changes_nothin
     assert_eq!((12, 0, none.clone()), counted(&proj_str, of(&["nowhere"])),
             "a plain name was reported, though a list shared between projects names folders not every project has");
 
-    let from_project = |patterns: &[&str]| mezura_core::PathPatterns { patterns: patterns.iter().map(|x| (*x).to_owned()).collect(),
-            read_from: Some(proj_str.clone()) };
+    let from_project = |patterns: &[&str]| PathPatterns { read_from: Some(proj_str.clone()), ..of(patterns) };
     let src = format!("{proj_str}/src");
     assert_eq!((5, 0, vec!["proj/src/gen".to_owned()]), counted(&src, of(&["proj/src/gen"])),
             "a target below the project saw the project's name");
@@ -1537,4 +1455,40 @@ fn an_exclusion_never_reaches_above_the_target_and_a_pattern_that_changes_nothin
             "a project's own place outside the target was reported as out of reach");
 
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+fn write_tree(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(name);
+    let _ = std::fs::remove_dir_all(&root);
+    for (path, contents) in files {
+        let path = root.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    root
+}
+
+fn count_with_shipped_languages(config: &EngineConfig) -> mezura_core::RunResult {
+    let (languages, _) = Languages::shipped(config);
+    run(config, languages).unwrap()
+}
+
+fn find_file_named<'a>(files: impl IntoIterator<Item = &'a mezura_core::FileEntry>, name: &str) -> &'a mezura_core::FileEntry {
+    files.into_iter().find(|file| std::path::Path::new(&file.path).file_name() == Some(name.as_ref())).unwrap()
+}
+
+fn share_of(tests: &mezura_core::TestCode) -> (usize, usize, usize, usize) {
+    (tests.stats.files, tests.stats.lines, tests.stats.bytes, tests.whole_files)
+}
+
+fn count_test_lines_per_file<const N: usize>(config: &EngineConfig, language: &str, names: [&str; N], language_lines: usize)
+        -> ([usize; N], Option<(usize, usize, usize)>)
+{
+    let result = count_with_shipped_languages(config);
+    let files = &result.modules[0].files[language];
+    let per_file = names.map(|name| find_file_named(files, name).tests.as_ref().map_or(0, |tests| tests.lines));
+    let row = result.tests.get(language).map(|tests| (tests.stats.files, tests.stats.lines, tests.whole_files));
+    assert_eq!(language_lines, result.per_language[language].lines, "the lines of the language moved with the patterns {:?}",
+            config.test_patterns);
+    (per_file, row)
 }

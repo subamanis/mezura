@@ -8,6 +8,8 @@ use std::path::{Component, Path};
 use crate::GitignoreStack;
 use crate::engine::config::Target;
 
+pub(crate) const WILDCARDS : [char; 4] = ['*', '?', '[', '{'];
+
 // Proof inside this crate that resolution has already happened, so everything downstream can take
 // absolute validated paths for granted.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -221,7 +223,7 @@ pub(crate) fn find_names_root_of_path(path: &str, is_file: bool) -> usize {
 
 // The matches read from the parent of the last folder written before the first wildcard
 pub(crate) fn find_names_root_of_pattern(pattern: &str) -> usize {
-    let wildcard = pattern.find(['*', '?', '[', '{']).unwrap_or(pattern.len());
+    let wildcard = pattern.find(WILDCARDS).unwrap_or(pattern.len());
     match pattern[..wildcard].rfind('/') {
         Some(slash) => find_names_root_of_path(&pattern[..slash], false),
         None => 0
@@ -323,7 +325,7 @@ fn name_or_rest(module: &Option<String>) -> String {
 // it as a pattern sends the target down the glob branch, where being gitignored, dotted or a symlink
 // silently removes it: a literal path the user named is meant to survive all three.
 fn has_glob_metacharacters(s: &str) -> bool {
-    s.contains(['*', '?', '[', '{'])
+    s.contains(WILDCARDS)
 }
 
 fn is_valid_path(s: &str) -> bool {
@@ -331,10 +333,6 @@ fn is_valid_path(s: &str) -> bool {
     p.is_dir() || p.is_file()
 }
 
-// One place, one spelling: 'D:/x/' and 'D:/x' name the same directory, and two runs over it have to
-// record the same string or a comparison between them reports a change nobody made. Not taken off a
-// root, where the separator belongs to the name: 'D:/' is the root of the drive while 'D:' is the
-// current directory on it, and '/' is the root of the file system.
 // A share canonicalizes to '\\?\UNC\server\share\x', and dropping the whole prefix would leave a
 // relative path
 fn strip_verbatim_prefix(path: &str) -> Cow<'_, str> {
@@ -344,6 +342,10 @@ fn strip_verbatim_prefix(path: &str) -> Cow<'_, str> {
     }
 }
 
+// One place, one spelling: 'D:/x/' and 'D:/x' name the same directory, and two runs over it have to
+// record the same string or a comparison between them reports a change nobody made. Not taken off a
+// root, where the separator belongs to the name: 'D:/' is the root of the drive while 'D:' is the
+// current directory on it, and '/' is the root of the file system.
 fn trim_trailing_slash(path: &str) -> &str {
     let trimmed = path.trim_end_matches('/');
     if trimmed.is_empty() || trimmed.ends_with(':') {path} else {trimmed}

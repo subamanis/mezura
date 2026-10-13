@@ -11,7 +11,7 @@ use crate::domain::FileStats;
 use crate::engine::file_parser::{BYTE_ORDER_MARK, NestedLanguageLookup, TestReport, read_module_declarations};
 use crate::engine::modules::ModuleId;
 use crate::engine::targets::spell_out;
-use crate::engine::test_detection::{attribute, find_word_end, is_word_byte, is_word_start};
+use super::{attribute, find_next_brace, find_word_end, is_word_byte, is_word_start, skip_whitespace};
 
 // The files whose declarations resolve beside them. Any other file's resolve under a folder of its
 // own name, then beside it for a crate root.
@@ -59,33 +59,7 @@ pub(crate) fn promote_declared_test_modules(rows: &[ModuleRow], tests_by_module:
     if seeds == 0 {
         return Promotion::default();
     }
-    let by_path = rows.iter().enumerate().map(|(at, row)| (PathKey::of(&row.path), at)).collect::<PathIndex<'_>>();
-    let mut marked = vec![false; rows.len()];
-    let mut read_without_a_row = HashSet::new();
-    let mut pending = Vec::new();
-    for row in rows {
-        for declaration in row.declarations.iter().filter(|declaration| declaration.seed) {
-            pending.extend(find_declared_file(&row.path, &row.language_name, declaration, false, &by_path, source));
-        }
-    }
-    // A file already marked ends the walk there, so one that two seeds reach is booked once
-    while let Some(found) = pending.pop() {
-        match found {
-            Found::Row(at) => {
-                if marked[at] { continue; }
-                marked[at] = true;
-                for declaration in &rows[at].declarations {
-                    pending.extend(find_declared_file(&rows[at].path, &rows[at].language_name, declaration, true, &by_path, source));
-                }
-            },
-            Found::WithoutARow(path, language_name, declarations) => {
-                if !read_without_a_row.insert(path.clone()) { continue; }
-                for declaration in &declarations {
-                    pending.extend(find_declared_file(&path, &language_name, declaration, true, &by_path, source));
-                }
-            }
-        }
-    }
+    let marked = mark_rows_the_seeds_reach(rows, source);
 
     let mut promoted = 0;
     let mut entries_by_path: HashMap<(ModuleId, Arc<str>), HashMap<String, usize>> = HashMap::new();
@@ -99,7 +73,7 @@ pub(crate) fn promote_declared_test_modules(rows: &[ModuleRow], tests_by_module:
         let index = entries_by_path.entry((row.module, row.language_name.clone())).or_insert_with(|| entries.iter()
                 .enumerate().map(|(at, entry)| (entry.path.clone(), at)).collect());
         if let Some(&at) = index.get(&spell_out(&row.path)) {
-            entries[at].tests = Some(Stats::new(1, row.bytes, row.stats.lines, row.stats.classes.clone(), HashMap::new()));
+            entries[at].tests = Some(Stats::of_one_file(&row.stats, row.bytes));
         }
     }
     Promotion { seeds, promoted }
@@ -203,7 +177,7 @@ impl<'a> ModuleDeclarations<'a> {
         self.read_line(line_start, line, ranges, is_test, holds_the_keyword, first,
                 last_keyword.saturating_sub(line_start + lead));
         if !self.open.is_empty() {
-            self.next_brace = memchr::memchr2(b'{', b'}', &self.contents[line_end..]).map_or(usize::MAX, |at| line_end + at);
+            self.next_brace = find_next_brace(self.contents, line_end);
         }
     }
 
@@ -225,10 +199,7 @@ impl<'a> ModuleDeclarations<'a> {
                     self.depth += 1;
                     continue;
                 }
-                self.depth = self.depth.saturating_sub(1);
-                while self.open.last().is_some_and(|(_, opened_at)| *opened_at >= self.depth) {
-                    self.open.pop();
-                }
+                self.close_block();
             }
         }
     }
@@ -240,12 +211,7 @@ impl<'a> ModuleDeclarations<'a> {
             for at in memchr::memchr3_iter(b'{', b'}', b';', &line[from..to]).map(|at| from + at) {
                 match line[at] {
                     b'{' if counting => self.depth += 1,
-                    b'}' if counting => {
-                        self.depth = self.depth.saturating_sub(1);
-                        while self.open.last().is_some_and(|(_, opened_at)| *opened_at >= self.depth) {
-                            self.open.pop();
-                        }
-                    },
+                    b'}' if counting => self.close_block(),
                     _ => ()
                 }
                 if at < last_keyword
@@ -253,6 +219,14 @@ impl<'a> ModuleDeclarations<'a> {
                     counting = true;
                 }
             }
+        }
+    }
+
+    #[inline(always)]
+    fn close_block(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+        while self.open.last().is_some_and(|(_, opened_at)| *opened_at >= self.depth) {
+            self.open.pop();
         }
     }
 
@@ -333,26 +307,11 @@ impl<'a> ModuleDeclarations<'a> {
             let start = memchr::memrchr(b'\n', &self.contents[..at]).map_or(0, |newline| newline + 1);
             let skipped = if start == 0 && self.contents.starts_with(BYTE_ORDER_MARK) { BYTE_ORDER_MARK.len() } else { start };
             if skip_whitespace(self.contents, skipped) != at { continue; }
-            if let Some(names_a_path) = self.read_attributes_up_to(at, close) {
+            if let Some((after, names_a_path)) = skip_attributes(&self.contents[..=close], at) && after == close + 1 {
                 found = Some((start, names_a_path));
             }
         }
         found
-    }
-
-    fn read_attributes_up_to(&self, from: usize, close: usize) -> Option<bool> {
-        let mut at = from;
-        let mut names_a_path = false;
-        while self.contents.get(at) == Some(&b'#') {
-            let open = at + 1 + usize::from(self.contents.get(at + 1) == Some(&b'!'));
-            if self.contents.get(open) != Some(&b'[') { return None; }
-            let name_start = skip_whitespace(self.contents, open + 1);
-            names_a_path |= &self.contents[name_start..find_word_end(self.contents, name_start)] == PATH_ATTRIBUTE;
-            let closing = attribute::find_matching_bracket(self.contents, open, b']')?;
-            if closing >= close { return (closing == close).then_some(names_a_path); }
-            at = skip_whitespace(self.contents, closing + 1);
-        }
-        None
     }
 }
 
@@ -438,6 +397,37 @@ fn fold_separators(word: u64) -> u64 {
     let non_zero = ((differences & !HIGH_BITS) + !HIGH_BITS) | differences;
     let backslashes = (!non_zero & HIGH_BITS) >> 7;
     word ^ (backslashes * u64::from(b'\\' ^ b'/'))
+}
+
+fn mark_rows_the_seeds_reach(rows: &[ModuleRow], source: &mut dyn DeclarationSource) -> Vec<bool> {
+    let by_path = rows.iter().enumerate().map(|(at, row)| (PathKey::of(&row.path), at)).collect::<PathIndex<'_>>();
+    let mut marked = vec![false; rows.len()];
+    let mut read_without_a_row = HashSet::new();
+    let mut pending = Vec::new();
+    for row in rows {
+        for declaration in row.declarations.iter().filter(|declaration| declaration.seed) {
+            pending.extend(find_declared_file(&row.path, &row.language_name, declaration, false, &by_path, source));
+        }
+    }
+    // A file already marked ends the walk there, so one that two seeds reach is booked once
+    while let Some(found) = pending.pop() {
+        match found {
+            Found::Row(at) => {
+                if marked[at] { continue; }
+                marked[at] = true;
+                for declaration in &rows[at].declarations {
+                    pending.extend(find_declared_file(&rows[at].path, &rows[at].language_name, declaration, true, &by_path, source));
+                }
+            },
+            Found::WithoutARow(path, language_name, declarations) => {
+                if !read_without_a_row.insert(path.clone()) { continue; }
+                for declaration in &declarations {
+                    pending.extend(find_declared_file(&path, &language_name, declaration, true, &by_path, source));
+                }
+            }
+        }
+    }
+    marked
 }
 
 enum Found {
@@ -548,12 +538,6 @@ fn find_closing(code: &[u8], open: usize, opener: u8, closer: u8) -> Option<usiz
         }
     }
     None
-}
-
-fn skip_whitespace(code: &[u8], from: usize) -> usize {
-    let mut at = from;
-    while code.get(at).is_some_and(u8::is_ascii_whitespace) { at += 1; }
-    at
 }
 
 #[cfg(test)]

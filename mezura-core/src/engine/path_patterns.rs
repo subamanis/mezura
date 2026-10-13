@@ -6,10 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use globset::{Candidate, GlobBuilder, GlobSet, GlobSetBuilder};
 
-use crate::engine::targets::{absolutize_pattern, convert_to_absolute, is_inside_or_at, normalise_separators};
+use crate::engine::targets::{WILDCARDS, absolutize_pattern, convert_to_absolute, is_inside_or_at, normalise_separators};
 
 const NEGATION : char = '!';
-const WILDCARDS : [char; 4] = ['*', '?', '[', '{'];
 const ANY_DEPTH : &str = "**/";
 const EVERYTHING_BELOW : &str = "/**";
 
@@ -77,8 +76,7 @@ pub fn absolutize_path_pattern(pattern: &str) -> String {
 pub fn is_on_disk(pattern: &str) -> bool {
     let text = normalise_separators(pattern.trim().trim_start_matches(NEGATION).trim());
     let (_, without_suffix) = strip_folder_suffix(&text);
-    let (place, rest, whole_on_disk) = split_place(without_suffix);
-    whole_on_disk || !rest.is_empty() && Path::new(place).exists()
+    split_place(without_suffix).2
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,10 +160,16 @@ impl PathPatternMatcher {
         self.rules.is_empty()
     }
 
+    pub(crate) fn find_last_match_of(&self, path: &Path, names_root: usize, is_folder: bool, found: &mut Vec<usize>)
+    -> Option<PatternMatch>
+    {
+        if self.is_empty() { return None; }
+        path.to_str().and_then(|absolute| self.find_last_match(absolute, names_root, is_folder, found))
+    }
+
     // Any match leaves an entry out, since a list that refuses '!' has nothing to take back
     pub(crate) fn matches(&self, path: &Path, names_root: usize, is_folder: bool, found: &mut Vec<usize>) -> bool {
-        !self.is_empty() && path.to_str()
-                .is_some_and(|absolute| self.find_last_match(absolute, names_root, is_folder, found).is_some())
+        self.find_last_match_of(path, names_root, is_folder, found).is_some()
     }
 
     pub(crate) fn find_places_out_of_reach(&self, roots: &[String]) -> Vec<UnusedPattern> {
@@ -199,14 +203,13 @@ impl PathPatternMatcher {
     pub(crate) fn find_last_match(&self, absolute: &str, names_root: usize, is_folder: bool, found: &mut Vec<usize>)
     -> Option<PatternMatch>
     {
-        let mut best = None;
-        if !self.names.is_empty() && names_root < absolute.len() {
-            self.take_best(&self.names, &self.names_written_at, Candidate::new(&absolute[names_root..]), is_folder,
-                    found, &mut best);
-        }
-        if !self.paths.is_empty() {
-            self.take_best(&self.paths, &self.paths_written_at, Candidate::new(absolute), is_folder, found, &mut best);
-        }
+        let mut best: Option<PatternMatch> = None;
+        self.for_each_match(absolute, names_root, is_folder, found, |at| {
+            self.matched[at].store(true, Ordering::Relaxed);
+            if best.is_none_or(|earlier| at > earlier.written_at) {
+                best = Some(PatternMatch { written_at: at, negated: self.rules[at].negated });
+            }
+        });
         best
     }
 
@@ -215,15 +218,10 @@ impl PathPatternMatcher {
     pub(crate) fn find_last_match_along(&self, absolute: &str, names_root: usize, ends_with_a_file: bool, found: &mut Vec<usize>)
     -> Option<PatternMatch>
     {
-        let mut best: Option<PatternMatch> = None;
-        for end in find_ends_along(absolute, names_root) {
+        find_ends_along(absolute, names_root).filter_map(|end| {
             let is_folder = end < absolute.len() || !ends_with_a_file;
-            if let Some(found) = self.find_last_match(&absolute[..end], names_root, is_folder, found)
-                    && best.is_none_or(|earlier| found.written_at > earlier.written_at) {
-                best = Some(found);
-            }
-        }
-        best
+            self.find_last_match(&absolute[..end], names_root, is_folder, found)
+        }).max_by_key(|decided| decided.written_at)
     }
 
     // The pattern that decides only moves to a later one down the path, so the one that decided
@@ -231,35 +229,32 @@ impl PathPatternMatcher {
     pub(crate) fn find_place_matched_by(&self, written_at: usize, absolute: &str, names_root: usize, ends_with_a_file: bool)
     -> Option<String>
     {
-        let rule = self.rules.get(written_at)?;
         let mut found = Vec::new();
         find_ends_along(absolute, names_root).find(|&end| {
             let is_folder = end < absolute.len() || !ends_with_a_file;
-            let mut is_matched_in = |set: &GlobSet, set_written_at: &[usize], candidate: &str| {
-                set.matches_candidate_into(&Candidate::new(candidate), &mut found);
-                found.iter().any(|&in_set| set_written_at[in_set] == written_at)
-            };
-            (is_folder || !rule.folders_only) && match rule.kind {
-                Kind::Name { .. } => end > names_root && is_matched_in(&self.names, &self.names_written_at, &absolute[names_root..end]),
-                Kind::Path { .. } => is_matched_in(&self.paths, &self.paths_written_at, &absolute[..end])
-            }
+            let mut is_matched = false;
+            self.for_each_match(&absolute[..end], names_root, is_folder, &mut found, |at| is_matched |= at == written_at);
+            is_matched
         }).map(|end| absolute[..end].to_owned())
     }
 
-    fn take_best(&self, set: &GlobSet, written_at: &[usize], candidate: Candidate<'_>, is_folder: bool,
-            found: &mut Vec<usize>, best: &mut Option<PatternMatch>)
+    fn for_each_match(&self, absolute: &str, names_root: usize, is_folder: bool, found: &mut Vec<usize>,
+            mut each: impl FnMut(usize))
     {
-        set.matches_candidate_into(&candidate, found);
-        for &in_set in found.iter() {
-            let at = written_at[in_set];
-            let rule = &self.rules[at];
-            if rule.folders_only && !is_folder {
-                continue;
+        let mut read = |set: &GlobSet, written_at: &[usize], candidate: &str| {
+            set.matches_candidate_into(&Candidate::new(candidate), found);
+            for &in_set in found.iter() {
+                let at = written_at[in_set];
+                if is_folder || !self.rules[at].folders_only {
+                    each(at);
+                }
             }
-            self.matched[at].store(true, Ordering::Relaxed);
-            if best.is_none_or(|earlier| at > earlier.written_at) {
-                *best = Some(PatternMatch { written_at: at, negated: rule.negated });
-            }
+        };
+        if !self.names.is_empty() && names_root < absolute.len() {
+            read(&self.names, &self.names_written_at, &absolute[names_root..]);
+        }
+        if !self.paths.is_empty() {
+            read(&self.paths, &self.paths_written_at, absolute);
         }
     }
 }
@@ -286,16 +281,12 @@ enum Kind {
 
 fn find_ends_along(absolute: &str, names_root: usize) -> impl Iterator<Item = usize> {
     let names_root = names_root.min(absolute.len());
-    let separators = absolute[names_root..].char_indices()
-            .filter(|(_, character)| *character == '/').map(move |(at, _)| names_root + at);
+    let separators = absolute[names_root..].match_indices('/').map(move |(at, _)| names_root + at);
     separators.chain(std::iter::once(absolute.len())).filter(|end| *end > 0)
 }
 
 fn strip_folder_suffix(text: &str) -> (bool, &str) {
-    if let Some(folder) = text.strip_suffix(EVERYTHING_BELOW) {
-        return (true, folder.trim_end_matches('/'));
-    }
-    match text.strip_suffix('/') {
+    match text.strip_suffix(EVERYTHING_BELOW).or_else(|| text.strip_suffix('/')) {
         Some(folder) => (true, folder.trim_end_matches('/')),
         None => (false, text)
     }
@@ -303,8 +294,7 @@ fn strip_folder_suffix(text: &str) -> (bool, &str) {
 
 // The place is escaped in the glob, so that a folder named 'br [v2]' is a name and no character class
 fn resolve_path_pattern(text: &str) -> (String, bool, String) {
-    let (place, rest, whole_on_disk) = split_place(text);
-    let on_disk = whole_on_disk || !rest.is_empty() && Path::new(place).exists();
+    let (place, rest, on_disk) = split_place(text);
     let absolute = absolutize_place(place);
     let glob = join_place_and_rest(&globset::escape(&absolute), rest);
     (absolute, on_disk, glob)
@@ -316,7 +306,7 @@ fn split_place(text: &str) -> (&str, &str, bool) {
         return (text, "", true);
     }
     match text.find(WILDCARDS).and_then(|wildcard| text[..wildcard].rfind('/')) {
-        Some(slash) => (&text[..=slash], &text[slash + 1..], false),
+        Some(slash) => (&text[..=slash], &text[slash + 1..], Path::new(&text[..=slash]).exists()),
         None => (text, "", false)
     }
 }

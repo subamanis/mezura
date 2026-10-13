@@ -182,12 +182,8 @@ fn format_targets(targets: &[Target], config: &Configuration) -> String {
 
 // The places a pattern names are spelled the way the targets are, for the same reason
 fn format_patterns(patterns: &[String], config: &Configuration) -> String {
-    match config.view.find_project_of_the_log() {
-        Some(project) => format_strings(&patterns.iter()
-                .map(|pattern| super::config_manager::format_pattern_inside(&project.project_dir, pattern))
-                .collect::<Vec<_>>()),
-        None => format_strings(patterns)
-    }
+    let project_dir = config.view.find_project_of_the_log().map(|project| project.project_dir.as_str());
+    format_strings(&super::config_manager::format_patterns_inside(project_dir, patterns))
 }
 
 fn format_strings(values: &[String]) -> String {

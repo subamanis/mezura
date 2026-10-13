@@ -103,15 +103,16 @@ fn compare_tree(root: &Path, expected: &BTreeMap<(String, String), Expectation>)
     let mut failures = Vec::new();
 
     let mut actual = BTreeMap::new();
+    let prefix = format!("{root_str}/");
     for (language, files) in &result.modules[0].files {
         for file in files {
-            let path = file.path.strip_prefix(&format!("{root_str}/")).unwrap_or(&file.path).to_owned();
+            let path = file.path.strip_prefix(&prefix).unwrap_or(&file.path).to_owned();
             let figures = file.tests.as_ref().map_or((0, 0), |tests| (tests.lines, tests.bytes));
             actual.insert((language.clone(), path), figures);
         }
     }
-    for ((language, path), expectation) in expected {
-        match actual.get(&(language.clone(), path.clone())) {
+    for (key @ (language, path), expectation) in expected {
+        match actual.get(key) {
             Some(&(lines, bytes)) if (lines, bytes) == (expectation.lines, expectation.bytes) => {},
             Some(&(lines, bytes)) => failures.push(format!(
                     "{tree}/{path}: expected {} lines and {} bytes of test code, got {lines} lines and {bytes} bytes",
@@ -119,8 +120,8 @@ fn compare_tree(root: &Path, expected: &BTreeMap<(String, String), Expectation>)
             None => failures.push(format!("{tree}/{path}: not counted as {language}"))
         }
     }
-    for (language, path) in actual.keys() {
-        if !expected.contains_key(&(language.clone(), path.clone())) {
+    for key @ (language, path) in actual.keys() {
+        if !expected.contains_key(key) {
             failures.push(format!("{tree}/{path}: counted as {language} and has no line in {EXPECTED_FILE_NAME}"));
         }
     }

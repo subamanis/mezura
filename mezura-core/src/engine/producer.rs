@@ -15,7 +15,8 @@ use crate::engine::identity::ModuleLookups;
 use crate::engine::is_the_same_name;
 use crate::engine::modules::{ModuleId, Modules};
 use crate::engine::path_patterns::PathPatternMatcher;
-use crate::engine::test_detection::{BuildFilesSeen, DirectoryScope};
+use crate::engine::targets::spell_out;
+use crate::engine::test_detection::{BuildFilesSeen, DirectoryScope, TestScope};
 
 // A panic is caught here rather than read back from 'join', because these threads stop by counting
 // how many of them have gone idle against how many started: one that dies without ever going idle
@@ -99,7 +100,7 @@ fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs
                 // files looked at, and nothing else would say so. The reason travels with the path,
                 // or a permission and a directory that went away arrive as the same sentence.
                 Err(error) => unreadable_dirs.push(UnreadableDirDetails {
-                    path: crate::engine::targets::normalise_separators(&dir.path.to_string_lossy()).into_owned(),
+                    path: spell_out(&dir.path),
                     error_msg: error.to_string()
                 })
             }
@@ -236,7 +237,7 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                 let size = if cfg!(windows) { e.metadata().map_or(0, |m| m.len()) } else { 0 };
                 let test_scope = match config.detect_tests {
                     true => scope.of_file(&path_buf, test_patterns, patterns_found).0,
-                    false => scope.scope
+                    false => TestScope::Ordinary
                 };
                 files_injector.push(ParsableFile::new(path_buf, lang_name, module, size)
                         .with_extension_rules(language_lookup.find_extension_rules(name))

@@ -896,6 +896,10 @@ impl Stats {
         total
     }
 
+    pub(crate) fn of_one_file(stats: &FileStats, bytes: usize) -> Self {
+        Stats::new(1, bytes, stats.lines, stats.classes.clone(), HashMap::new())
+    }
+
     pub(crate) fn add_file(&mut self, stats: &FileStats, bytes: usize, keywords: &[Keyword]) {
         // The walk counts a line and then sorts it into exactly one class, so the two have to
         // agree, and this is the only door a counted file comes through. Not on 'add', which
