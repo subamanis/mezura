@@ -76,20 +76,20 @@ language name, which is the mistake somebody editing a file by hand makes; the o
 come through it untouched. They are inputs to the definition-file parser and have nothing to do with
 counting, so they deliberately do not live beside the shipped definitions in `data/languages`.
 
-## `test_code/`, one tree per language for the test detection
+## `test_code/`, small projects for the test detection
 
-Each directory is a small project of one language, and its `expected.txt` says which lines of every
-file in it are test code. `tests/test_detection.rs` copies each tree to a temporary directory,
-counts it through `run` with one producer and four consumers and `collect_files` on, and compares
-every file and the language's own figure against that file. The copy is not optional: the fixtures
-sit under the `tests` beside this crate's `Cargo.toml`, where every file is test code. Each tree
-is copied twice, under a folder named `tests` and under an ordinary one, and both copies have to
-answer the same. A build file that cargo would read as a package of its own, the Rust tree's
+Each directory is a small project of one language or a few, and its `expected.txt` says which
+lines of every file in it are test code. `tests/test_detection.rs` copies each tree to a temporary
+directory, counts it through `run` with one producer and four consumers and `collect_files` on, and
+compares every file and the language's own figure against that file. The copy is not optional: the
+fixtures sit under the `tests` beside this crate's `Cargo.toml`, where every file is test code. Each
+tree is copied twice, under a folder named `tests` and under an ordinary one, and both copies have
+to answer the same. A build file that cargo would read as a package of its own, the Rust tree's
 `Cargo.toml`, is checked in as `Cargo.toml.fixture` and copied without the suffix, since
 `cargo package` leaves a directory holding a `Cargo.toml` out of the crate.
 
-The file is a `[Language]` heading and then one line per file, the path and then what is test code
-in it:
+The file is a `[Language]` heading per language and under it one line per file, the path and then
+what is test code in it:
 
 ```
 [Rust]
@@ -119,9 +119,9 @@ file behind a byte order mark or stands after another attribute on its line, and
 file carrying every trap the word rule has to refuse, the annotation in a comment, in a string and
 in a text block, `@VisibleForTesting`, `@TestOnly`, Room's `@Ignore`, `[Category]`, an indexer, an
 index after an index, a dictionary key and a collection expression. The other trees hold a build
-file with the directory it makes test code,
-`sbt` and `gradle` a build declared from its root whose subprojects carry no build file of their
-own, and `no-build-file` holds those directories with nothing beside them.
+file with the directory it makes test code, `sbt` and `gradle` a build declared from its root whose
+subprojects carry no build file of their own, and `no-build-file` holds those directories with
+nothing beside them.
 
 ## The printed output, which is covered elsewhere
 

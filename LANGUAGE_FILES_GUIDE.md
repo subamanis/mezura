@@ -290,8 +290,8 @@ do not go together either, since no rule says what a file an annotation made tes
 `not(...)`, and `#![cfg(test)]` makes the rest of its scope tests, the whole file at the top of one
 and the module it sits in. Any other marker is a plain word, like D's `unittest`, and one followed
 by `):`, D's `version(unittest):`, covers the rest of its scope the same way. A test runs from the
-marker to the brace matching the first `{`, or to the first `;`, whichever comes first, and an
-`if` continues through its `else`.
+marker to the brace matching the first `{`, or to the first `;`, whichever comes first, and under
+`#[` or `#![` an `if` continues through its `else`.
 
 `MODULES` is the one word that declares a module living in another file, `mod` for Rust. Such a
 declaration on a line of test code, `#[cfg(test)] mod tests;`, makes the file it names test code
@@ -309,12 +309,12 @@ matches `[Test]`, `[Test, Order(1)]` and `[Test(Description = "x")]`, and refuse
 which gets a line of its own, an indexer `map[Test]`, and a collection expression `[Test.Of(a)]`.
 A marker that starts with `[` counts only where nothing but other bracketed lists stands in front
 of it on its line, which is where an attribute sits, so `grid[0][Test]`, `args is [Test]` and
-`{ [Test] = 1 }` mark nothing. A marker inside a string or a comment is text. Beside `MARKERS`, a file marker inside the test code
-one of them opened belongs to that test and leaves the rest of the file as it was, since an
-annotation inside a test block says nothing about the code around it. List only what a test
-framework defines and no production library writes: `@Before` is AspectJ's as much as JUnit 4's,
-so it is not on Java's list. A file a `!` pattern of `--tests` took back is not read for these,
-since the `!` answered the question they answer.
+`{ [Test] = 1 }` mark nothing. A marker inside a string or a comment is text. Beside `MARKERS`, a
+file marker inside the test code one of them opened belongs to that test and leaves the rest of
+the file as it was, since an annotation inside a test block says nothing about the code around it.
+List only what a test framework defines and no production library writes: `@Before` is AspectJ's
+as much as JUnit 4's, so it is not on Java's list. A file a `!` pattern of `--tests` took back is
+not read for these, since the `!` answered the question they answer.
 
 `FILE NAMES` takes three shapes only: `*suffix`, `prefix*` and a whole name, case-sensitive. It is
 for a name the toolchain defines, the way the go tool builds `*_test.go` only for `go test` and a

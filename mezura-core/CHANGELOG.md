@@ -4,14 +4,15 @@
 
 New:
 
-- Test code can now be detected. `RunResult::tests`, `ModuleResult::tests` and
-  `FileEntry::tests` carry it per language, per module and per file, as a `TestCode` holding the
-  same `Stats` a language has plus `whole_files`. Without being asked the engine takes what a
-  language's markers open (Rust, D and Zig), the file names a toolchain defines (`_test.go`,
-  Perl's `.t`) and the directory a build tool compiles for tests alone beside its build file;
-  `EngineConfig::test_patterns` declares the rest, a `!` pattern takes a file or a directory back,
-  and `EngineConfig::detect_tests` turns the whole of it off. What each language gets right and
-  what it misses is in `TEST_DETECTION.md` beside the main README.
+- Test code can now be detected. `RunResult::tests` and `ModuleResult::tests` carry it per
+  language and per module, as a `TestCode` holding the same `Stats` a language has plus
+  `whole_files`, and `FileEntry::tests` carries it per file as a `Stats`. Without being asked the
+  engine takes what a language's markers open (Rust, D and Zig), the files a test annotation in
+  their code makes test code whole (Java, Kotlin and C#), the file names a toolchain defines
+  (`_test.go`, Perl's `.t`) and the directory a build tool compiles for tests alone beside its
+  build file; `EngineConfig::test_patterns` declares the rest, a `!` pattern takes a file or a
+  directory back, and `EngineConfig::detect_tests` turns the whole of it off. What each language
+  gets right and what it misses is in `TEST_DETECTION.md` beside the main README.
 - `Language::test_markers`, `Language::test_file_names` and `Language::with_tests`, read from the
   `Tests` block of a language file, and `TestFileName` for the three shapes a name takes.
   `Language::module_keyword` and `Language::with_module_keyword` carry the word that declares a
@@ -20,12 +21,15 @@ New:
   the annotations that make a whole file test code, `@Test` for Java, read from `FILE MARKERS`.
 - `PathPatterns`, the patterns of the exclusions and of the test code together with the directory
   their names are read from, and `PatternError` for one that does not parse. The warning code
-  `pattern-matched-nothing` reports a pattern that names nothing on disk, a place outside every
-  target, or a name nothing matched.
-- `FileExplanation::test_file_rule` names the rule that made a whole file test code, as a
-  `TestFileRule`, and `ExplainedLine::in_test` marks each line of it. `TestFileRule::DeclaredModule`
-  names the files that declare it as a module, the one holding the marker last, and
-  `TestFileRule::FileMarker` the annotation found in its code with its line.
+  `pattern-matched-nothing` reports a place missing from disk or outside every target, and a name
+  with a slash that nothing matched. `engine::path_patterns::validate_test_patterns` checks a list
+  of test patterns as it is typed, and `is_a_path_pattern`, `absolutize_path_pattern` and
+  `is_on_disk` beside it read the place a pattern names.
+- `FileExplanation::test_file_rule` names the rule that made a whole file test code, or the `!`
+  pattern that took it back, as a `TestFileRule`, and `ExplainedLine::in_test` marks each line of
+  test code. `TestFileRule::DeclaredModule` names the files that declare it as a module, the one
+  holding the marker last, and `TestFileRule::FileMarker` the annotation found in its code with its
+  line.
 - `.t` files are counted as Perl.
 - `MultilineString::escapes_by_doubling` and `StringRules::with_string_pairs_escaped_by_doubling`,
   read from `Paired strings escaped by doubling`, for a pair whose closer written twice is one quote
@@ -37,6 +41,8 @@ Changed:
   at any depth below the folder that holds the target and no folder above it, a pattern starting
   with `./` or `../` or written as a full path names one place, a trailing `/` means a folder
   only, `x/**` means the folder `x`, and names are matched with their case.
+- `validate_exclude_patterns` moved from `engine::targets` to `engine::path_patterns`. It returns
+  a `PatternError` now, and it refuses a `!` pattern.
 - `EngineConfig`, `Language`, `ExplainedLine`, `FileExplanation`, `RunResult`, `ModuleResult`,
   `FileEntry` and `MultilineString` gained public fields, so a struct literal of any of them
   written outside the crate stops compiling until it names them.

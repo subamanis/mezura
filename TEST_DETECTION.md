@@ -115,8 +115,8 @@ whole project does.
 ## Declaring the rest with `--tests`
 
 `--tests` takes glob patterns, and what a pattern names is test code whole, files and folders
-alike. A `!` in front takes back what an earlier pattern or a build file gave, and the last pattern
-that matches decides:
+alike. A `!` in front takes back what an earlier pattern, a build file or a toolchain's file name
+gave, and the last pattern that matches decides:
 
 ```bash
 mezura ./ --tests "spec/,!spec/fixtures/"
@@ -133,12 +133,12 @@ The rules in short, with the whole of them under `--tests` in [COMMANDS.md](COMM
   directory the command is typed in, and it names that place and everything under it.
 - A trailing `/` means a folder only, so `tests/` leaves a script named `tests` alone. `x/**`
   means the folder `x`, and `**` alone a whole target.
-- A `!` takes back the folder or file it names, from a build file or from an earlier pattern.
-  What a marker that opens lines says stays: a `#[cfg(test)]` under `!vendor/` is still test code,
-  and so is a file another file declares as a module under a marker. A marker that makes a whole
-  file test code, `@Test`, is off under a `!`, since the `!` answers that very question: a corpus
-  of JUnit files kept as test data stays data under `--tests "!cases/"`.
-- A pattern that names nothing on disk, and a name with a slash that matched nothing, are reported.
+- Under a `!`, what a marker that opens lines says stays: a `#[cfg(test)]` under `!vendor/` is
+  still test code, and so is a file another file declares as a module under a marker. A marker
+  that makes a whole file test code, `@Test`, is off there, since the `!` answers that very
+  question: a corpus of JUnit files kept as test data stays data under `--tests "!cases/"`.
+- A place missing from disk or outside every target, and a name with a slash that matched nothing,
+  are reported.
 - In PowerShell, quote the whole list or escape each comma with a backtick.
 
 Patterns saved in a project's own configuration, with `--save-local` or under `===> tests` in
@@ -195,25 +195,26 @@ project included. Where a project has a production folder of that name, write th
   under a `cfg(test)` module inherits it. The file is found where rustc finds it: `tests.rs` or
   `tests/mod.rs` beside a `lib.rs`, `main.rs` or `mod.rs`, under a folder named after any other
   file, and beside a crate root in `src/bin/`; a `mod x;` inside `mod outer { }` is under
-  `outer/`. A file named this way that the count left out, under `--exclude`, a `.gitignore` or a
-  `--tests` pattern, is still read for the modules it declares, so those are found too. Any
-  `mod x;` on a line of test code counts, so one inside a `#[cfg(test)] mod tests {
-  }` or under a `#![cfg(test)]` does too. The declaring file has to be in the same count, as the
-  section above on where the count starts from says. `--explain` on such a file names the file
-  that declares it and the one holding the marker.
+  `outer/`. A file named this way that the count left out, under `--exclude` or a `.gitignore`, or
+  that its path already makes test code whole, is still read for the modules it declares, so those
+  are found too. Any `mod x;` on a line of test code counts, so one inside a
+  `#[cfg(test)] mod tests { }` or under a `#![cfg(test)]` does too. The declaring file has to be in
+  the same count, as the section above on where the count starts from says. `--explain` on such a
+  file names the file that declares it and the one holding the marker.
 
 From the marker, further `#[...]` on the item are skipped, and the test code runs to the `}`
 matching the first `{`, or to the first `;`, whichever comes first, with brackets counted so that
-`[u8; 3]` ends nothing. `let`, `use`, `const`, `static`, `type` and `extern` end at their `;` and
-their braces are ignored, so `#[cfg(test)] let x = if a { 1 } else { 2 };` is one statement. An
-`if` carries on through its `else` arms. Whatever sits inside test code opens nothing of its own,
-so the `#[test]` functions of a `#[cfg(test)] mod tests { }` are counted once.
+`[u8; 3]` ends nothing. `let`, `use`, `const`, `static`, `type` and `extern crate` end at their
+`;` and their braces are ignored, so `#[cfg(test)] let x = if a { 1 } else { 2 };` is one
+statement, while a `const fn` and an `extern "C" { }` block end at their brace. An `if` carries on
+through its `else` arms. Whatever sits inside test code opens nothing of its own, so the
+`#[test]` functions of a `#[cfg(test)] mod tests { }` are counted once.
 
 `tests/` beside a `Cargo.toml` is test code whole, `use` lines, helpers, `tests/common/` and
 fixtures included. A `tests/` at the root of a virtual workspace, which cargo never builds, counts
-too, since what sits there in practice is test crates and test data; `--tests "!tests/"` says
-otherwise. Everywhere else, `examples/`, `benches/` and `src/bin/` included, the markers alone
-decide, and a `tests` folder under `src/` is a folder.
+too, since what sits there in practice is test crates and test data; `--tests "!./tests/"`, typed
+at the root, says otherwise for that one folder. Everywhere else, `examples/`, `benches/` and
+`src/bin/` included, the markers alone decide, and a `tests` folder under `src/` is a folder.
 
 **Missed**, each with what mezura answers today:
 
@@ -292,7 +293,7 @@ a javadoc snippet file holding a test method as an example.
 - A test class holding only a Spring slice annotation, `@SpringBootTest`, `@WebMvcTest`, and no
   `@Test` of its own: production, since those start with another word.
 - A fully qualified `@org.junit.Test`, a space or a comment between the `@` and the name,
-  `@ Test`, the two on separate lines, and `@Test`: production.
+  `@ Test`, the two on separate lines, and the unicode escape `\u0040Test`: production.
 - A `*Test.java` outside `src/test` holding no annotation: production, since the name is a
   convention; `--tests "*Test.java"` declares it.
 
@@ -438,8 +439,8 @@ that is a layout rule the parser has no business guessing. Refused.
 - **The JSON document.** `scope.tests_detected`, `languages[].tests` with the figures a nested
   language carries, `keywords` when they are counted, and `whole_files`, the files that are test
   code from their first line to their last, then `total.tests`, `modules[].total.tests` and
-  `by_file[].tests`, the last without keywords. A comparison carries the compared pair under each
-  of those.
+  `languages[].by_file[].tests`, the last without keywords. A comparison carries the compared pair
+  under each of those.
 - **`--diff`** against a document written without detection, or by an earlier version, runs
   without it, so no row appears on either side, and says so.
 - **`--explain`.** Every line of test code is marked `test code`, the totals say how many, and a

@@ -60,12 +60,9 @@ Things it does that most counters do not:
   anything, counted only where they appear as code and never inside a string or a comment.
 - **Nested languages.** The `<script>` and `<style>` blocks of HTML, Vue, Svelte and Astro files are
   counted as the distinct languages they hold.
-- **Test code, counted apart.** Each language's tests are a row under it and under the total: what
-  the code itself marks (Rust's `#[cfg(test)]`, D's `unittest`, Zig's `test`, a `@Test` class in
-  Java and Kotlin, a `[Fact]` or `[Test]` class in C#), what the toolchain names (`_test.go`,
-  Perl's `.t`), what a build tool compiles for tests alone (`tests/` beside a `Cargo.toml`,
-  `src/test/` beside a `pom.xml`), and what you declare with `--tests`. See
-  [Test code](#test-code).
+- **Test code detection.** Each language's tests are a row under it and under the total. It automatically identifies test code
+  by the test marks inside the code, by what the toolchain names as a test and what a build tool compiles for tests. It also gives you
+  manual control for marking or unmarking code as test code, with the `--tests` command. See [Test code](#test-code).
 - **Modules.** Give a name to parts of a project and the report is grouped by these parts as well as by
   language. This way you can split your project into e.g. Frontend and Backend and Tests and see distinct reports for each module in the same table in the same run. See [Modules](#modules).
 - **Track the history of your codebase.** Log runs and compare against earlier ones, or diff against a git revision.   See [Tracking growth](#tracking-growth).
@@ -312,11 +309,10 @@ and one under the total. Without being asked, mezura takes only what is certain:
 language marks in the source (`#[cfg(test)]` and `#[test]` in Rust, `unittest` in D, `test` in
 Zig, and the whole of a file holding `@Test` in Java and Kotlin or `[Fact]`, `[Test]` and the other
 attributes the runners collect tests by in C#), the file names a toolchain itself defines
-(`_test.go`, Perl's `.t`), and the directory a
-build tool compiles for tests alone (`tests/` beside a `Cargo.toml`, `src/test/` beside a `pom.xml`
-or a `build.gradle`, `Tests/` beside a `Package.swift`, `test/` beside a `mix.exs`, and the same
-for Dart, Julia, Perl, Clojure, Erlang, Elm and R). A folder named `tests` with no build file
-beside it is a folder. Everything that is a
+(`_test.go`, Perl's `.t`), and the directory a build tool compiles for tests alone (`tests/` beside
+a `Cargo.toml`, `src/test/` beside a `pom.xml` or a `build.gradle`, `Tests/` beside a
+`Package.swift`, `test/` beside a `mix.exs`, and the same for Dart, Julia, Perl, Clojure, Erlang,
+Elm and R). A folder named `tests` with no build file beside it is a folder. Everything that is a
 convention, `test_*.py`, `*.spec.ts`, `spec/`, is declared with `--tests`, which takes glob
 patterns and a `!` to take one back, and lives in the project's own configuration once saved:
 
@@ -327,12 +323,11 @@ mezura ./ --tests "__tests__/,*.test.ts,*.test.tsx"
 
 `--tests-breakdown split` draws the rest of the language as a `production` row beside the tests,
 `--tests-breakdown removed` leaves the tests out of every row and shows them nowhere, `--hide tests`
-turns the whole thing off, and `--explain` marks each line of test code and says
-which rule made a whole file one. What is found for each language, what is refused (doc tests,
-tests a macro writes, `describe` and the other names a framework gives a function) and every
-known limitation with its example are in
-**[Test detection](https://github.com/subamanis/mezura/blob/HEAD/TEST_DETECTION.md)**, with ready
-patterns for pytest, jest, RSpec, PHPUnit and the `.Tests` projects of .NET.
+turns the whole thing off, and `--explain` marks each line of test code and says which rule made a
+whole file one. What is found for each language, what is refused (doc tests, tests a macro writes,
+`describe` and the other names a framework gives a function) and every known limitation with its
+example are in **[Test detection](https://github.com/subamanis/mezura/blob/HEAD/TEST_DETECTION.md)**,
+with ready patterns for pytest, jest, RSpec, PHPUnit and the `.Tests` projects of .NET.
 
 
 
