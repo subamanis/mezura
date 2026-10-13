@@ -127,11 +127,14 @@ impl Language {
         self
     }
 
-    /// Declares what a test starts with inside a file, and which file names are test files.
-    pub fn with_tests(mut self, markers: impl IntoIterator<Item = impl AsRef<str>>,
-        file_names: &[TestFileName]) -> Self
-    {
+    /// Declares what a test starts with inside a file, `#[` for Rust.
+    pub fn with_test_markers(mut self, markers: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         self.test_markers.extend(owned_strings(markers));
+        self
+    }
+
+    /// Declares which file names are test files, `_test.go` for Go.
+    pub fn with_test_file_names(mut self, file_names: &[TestFileName]) -> Self {
         self.test_file_names.extend(file_names.iter().cloned());
         self
     }
@@ -288,9 +291,16 @@ impl PartialEq for Language {
             && self.multiline_comments == other.multiline_comments
             && self.nesting_comments == other.nesting_comments
             && self.leveled_comments == other.leveled_comments
+            && self.cancelled_symbols == other.cancelled_symbols
             && self.line_continuation == other.line_continuation
             && self.nested_languages == other.nested_languages
             && self.keywords == other.keywords
+            && self.identifying_line_starts == other.identifying_line_starts
+            && self.identifying_line_contains == other.identifying_line_contains
+            && self.test_markers == other.test_markers
+            && self.test_file_names == other.test_file_names
+            && self.test_file_markers == other.test_file_markers
+            && self.module_keyword == other.module_keyword
     }
 }
 

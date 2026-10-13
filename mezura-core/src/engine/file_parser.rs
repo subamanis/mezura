@@ -1436,7 +1436,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         sections: buckets.into_iter().map(|bucket| SectionReport {
             language: bucket.language.name.clone(), stats: bucket.stats, bytes: bucket.bytes }).collect(),
         bytes: contents.len(),
-        tests: (tests.stats.lines > 0).then(|| Box::new(tests)),
+        tests: (tests.stats.lines > 0 || whole_file_is_tests).then(|| Box::new(tests)),
         declarations: declarations.map(ModuleDeclarations::into_declarations)
     }
 }
@@ -5077,6 +5077,22 @@ mod tests {
             "}\n");
         assert_eq!(find_test_lines(source, LANGUAGE_MAP_REF.get("D").unwrap(), &EngineConfig::default()),
                 vec![2, 3, 4, 5, 6, 7, 9, 10, 11]);
+    }
+
+    #[test]
+    fn a_d_item_under_version_unittest_ends_at_its_brace_whatever_word_opens_it() {
+        let source = concat!(
+            "version(unittest) static this() {\n",
+            "    setup();\n",
+            "}\n",
+            "int x;\n",
+            "version(unittest) static if (true) {\n",
+            "}\n",
+            "int y;\n",
+            "version(unittest) static int z = 1;\n",
+            "int w;\n");
+        assert_eq!(find_test_lines(source, LANGUAGE_MAP_REF.get("D").unwrap(), &EngineConfig::default()),
+                vec![1, 2, 3, 5, 6, 8]);
     }
 }
 

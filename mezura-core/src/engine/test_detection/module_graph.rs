@@ -822,14 +822,14 @@ mod tests {
     }
 
     #[test]
-    fn a_seed_naming_nothing_and_a_file_with_no_lines_move_nothing() {
+    fn a_seed_naming_nothing_moves_nothing_and_an_empty_file_counts_one_file() {
         let rows = vec![build_row("p/src/lib.rs", 0, 5, Some(2), vec![build_declaration("absent", &[], true), build_declaration("empty", &[], true)]),
                 build_row("p/src/empty.rs", 0, 0, None, vec![])];
         let mut tests = vec![HashMap::new()];
         let mut files = vec![HashMap::new()];
-        assert_eq!(Promotion { seeds: 2, promoted: 0 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &rust_only(), &mut Tree::default()));
+        assert_eq!(Promotion { seeds: 2, promoted: 1 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &rust_only(), &mut Tree::default()));
         let share = &tests[0]["Rust"];
-        assert_eq!((0, 0, 0), (share.stats.files, share.stats.lines, share.whole_files));
+        assert_eq!((1, 0, 1), (share.stats.files, share.stats.lines, share.whole_files));
     }
 
     #[test]

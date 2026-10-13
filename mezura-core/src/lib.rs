@@ -58,7 +58,7 @@ pub use domain::{Bucket, CountingModel, Keyword, Language, LeveledPair, LineClas
 pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, PathPatterns, ScopedByModule, Target,
         Threads, format_module_scope, split_off_module_scope};
 pub use engine::identity::{Claim, ClaimKind, SettledBy};
-pub use engine::path_patterns::PatternError;
+pub use engine::path_patterns::{PatternError, validate_exclude_patterns, validate_test_patterns};
 pub use engine::targets::TargetError;
 pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, TestFileRule, explain_file};
 pub use languages::{LanguageClaims, Languages};

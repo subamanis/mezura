@@ -611,7 +611,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             .with_filenames(&filenames)
             .with_shebangs(&shebangs)
             .with_identification(&identifying_line_starts, &identifying_line_contains)
-            .with_tests(&test_markers, &test_file_names)
+            .with_test_markers(&test_markers)
+            .with_test_file_names(&test_file_names)
             .with_test_file_markers(&test_file_markers))
 }
 

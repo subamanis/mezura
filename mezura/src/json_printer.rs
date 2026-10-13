@@ -292,8 +292,8 @@ fn create_compared_total_object(baseline: &Stats, subject: &Stats,
     }
     if let (Some(baseline_tests), Some(subject_tests)) = (baseline_tests, subject_tests) {
         lines.push(format!("\"tests\":{}", create_compared_tests_object(
-                &result_printer::calculate_sum_of_tests(baseline_tests),
-                &result_printer::calculate_sum_of_tests(subject_tests), keywords_counted, model)));
+                &TestCode::total_of(baseline_tests),
+                &TestCode::total_of(subject_tests), keywords_counted, model)));
     }
 
     create_object(lines)
@@ -525,7 +525,7 @@ fn create_total_object(total: &Stats, tests: Option<&HashMap<String, TestCode>>,
         members.push(format!("\"keywords\":{}", create_keywords_object(&total.keyword_occurences)));
     }
     if let Some(tests) = tests {
-        let mut tests = result_printer::calculate_sum_of_tests(tests);
+        let mut tests = TestCode::total_of(tests);
         // The sum names the keywords of the languages that hold tests, so the others go in at zero
         for keyword in total.keyword_occurences.keys() {
             tests.stats.keyword_occurences.entry(keyword.clone()).or_insert(0);

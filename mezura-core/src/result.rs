@@ -59,6 +59,16 @@ impl RunResult {
         sort_languages_by(&self.per_language, criterion, model)
     }
 
+    /// Every language outside its test code. A language that is test code whole has no entry.
+    pub fn calculate_production_per_language(&self) -> HashMap<String, Stats> {
+        calculate_production_per_language(&self.per_language, &self.tests)
+    }
+
+    /// Every language outside its test code, added together.
+    pub fn calculate_production_total(&self) -> Stats {
+        TestCode::total_of(&self.tests).calculate_production_of(&self.total)
+    }
+
     /// Files belonging to a counted language were found and every one of them failed to be read.
     pub fn all_relevant_files_were_faulty(&self) -> bool {
         !self.faulty_files.is_empty() && self.faulty_files.len() == self.files_present.relevant_files
@@ -138,6 +148,40 @@ impl ModuleResult {
     pub fn sort_languages_by(&self, criterion: SortCriterion, model: CountingModel) -> Vec<(&str, &Stats)> {
         sort_languages_by(&self.per_language, criterion, model)
     }
+
+    /// Every language of this module outside its test code. A language that is test code whole has
+    /// no entry.
+    pub fn calculate_production_per_language(&self) -> HashMap<String, Stats> {
+        calculate_production_per_language(&self.per_language, &self.tests)
+    }
+
+    /// Every language of this module outside its test code, added together.
+    pub fn calculate_production_total(&self) -> Stats {
+        TestCode::total_of(&self.tests).calculate_production_of(&self.total)
+    }
+}
+
+fn take_out_tests(whole: &Stats, tests: &Stats) -> Stats {
+    let mut production = whole.clone();
+    production.bytes = production.bytes.saturating_sub(tests.bytes);
+    production.classes.subtract(&tests.classes);
+    production.lines = production.classes.calculate_lines();
+    for (keyword, occurrences) in &tests.keyword_occurences {
+        if let Some(own) = production.keyword_occurences.get_mut(keyword) {
+            *own = own.saturating_sub(*occurrences);
+        }
+    }
+    production
+}
+
+fn calculate_production_per_language(per_language: &HashMap<String, Stats>, tests: &HashMap<String, TestCode>)
+        -> HashMap<String, Stats>
+{
+    let none = TestCode::default();
+    per_language.iter()
+            .map(|(name, whole)| (name.clone(), tests.get(name).unwrap_or(&none).calculate_production_of(whole)))
+            .filter(|(_, production)| production.files > 0)
+            .collect()
 }
 
 /// One counted file.
@@ -150,14 +194,31 @@ pub struct FileEntry {
     pub stats: Stats,
     /// What those sections weigh on their own.
     pub nested_languages: HashMap<String, Stats>,
-    /// What its test code weighs, `None` when it holds none or detection is off. Its `files` is 1.
+    /// What its test code weighs, `None` when it holds none or detection is off. An empty file that
+    /// is test code whole has one with no lines. Its `files` is 1.
     pub tests: Option<Stats>
+}
+
+impl FileEntry {
+    /// Whether the file is test code from its first line to its last.
+    pub fn is_tests_whole(&self) -> bool {
+        self.tests.as_ref().is_some_and(|tests| tests.lines == self.stats.lines)
+    }
+
+    /// Its figures outside its test code. Its `files` is 0 when it is test code whole.
+    pub fn calculate_production(&self) -> Stats {
+        let Some(tests) = &self.tests else { return self.stats.clone() };
+        let mut production = take_out_tests(&self.stats, tests);
+        production.files = usize::from(!self.is_tests_whole());
+        production
+    }
 }
 
 /// The test code of one language.
 #[derive(Debug,Clone,Default,PartialEq)]
 pub struct TestCode {
-    /// Its figures. The `files` figure is how many files held any.
+    /// Its figures. The `files` figure is how many files held a line of it, and `whole_files` says
+    /// how many of those are test code whole.
     pub stats: Stats,
     /// How many of those files are test code from their first line to their last, and so hold
     /// none of the language's other lines.
@@ -165,9 +226,27 @@ pub struct TestCode {
 }
 
 impl TestCode {
-    pub(crate) fn add(&mut self, other: &TestCode) {
+    /// Every language's test code added together, which is what the tests row under the total holds.
+    pub fn total_of(tests: &HashMap<String, TestCode>) -> Self {
+        let mut total = TestCode::default();
+        for share in tests.values() {
+            total.add(share);
+        }
+        total
+    }
+
+    /// Adds another language's test code to this one.
+    pub fn add(&mut self, other: &TestCode) {
         self.stats.add(&other.stats);
         self.whole_files += other.whole_files;
+    }
+
+    /// What `whole`, the language this test code belongs to, holds outside it: the lines, bytes and
+    /// keywords outside it, and the files that are not test code whole.
+    pub fn calculate_production_of(&self, whole: &Stats) -> Stats {
+        let mut production = take_out_tests(whole, &self.stats);
+        production.files = whole.files.saturating_sub(self.whole_files);
+        production
     }
 
     pub(crate) fn add_file(&mut self, tests: &FileStats, bytes: usize, keywords: &[Keyword], is_whole: bool) {
@@ -175,12 +254,11 @@ impl TestCode {
         self.whole_files += usize::from(is_whole);
     }
 
-    // False for a file that is whole already or that has no lines, so nothing moves twice and an
-    // empty file counts no file, as the consumer counts it
+    // False for a file that is whole already, so nothing moves twice. An empty file counts one file,
+    // as the consumer counts it
     pub(crate) fn promote_to_whole_file(&mut self, whole: &FileStats, bytes: usize, keywords: &[Keyword],
             partial: Option<&TestReport>) -> bool
     {
-        if whole.lines == 0 { return false; }
         match partial {
             Some(partial) => {
                 if partial.stats.lines >= whole.lines { return false; }

@@ -3,10 +3,10 @@ use std::collections::HashSet;
 use colored::{ColoredString, Colorize};
 #[cfg(test)]
 use colored::Color;
-use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, PathPatterns, ScanSkip, Target, Threads};
+use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, PathPatterns, ScanSkip, Target, Threads,
+        validate_exclude_patterns, validate_test_patterns};
 use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
-use mezura_core::engine::path_patterns::{absolutize_path_pattern, is_a_path_pattern, validate_exclude_patterns,
-        validate_test_patterns};
+use mezura_core::engine::path_patterns::{absolutize_path_pattern, is_a_path_pattern, split_negation};
 
 use super::message_printer::{Formatted, wrap_message};
 use super::paths::LocalDir;
@@ -1551,13 +1551,6 @@ fn rebase_patterns_on(project_dir: &str, declared: PathPatterns) -> PathPatterns
     }).collect();
 
     PathPatterns { patterns, read_from: Some(project_dir.to_owned()) }
-}
-
-pub fn split_negation(pattern: &str) -> (&str, &str) {
-    match pattern.strip_prefix('!') {
-        Some(place) => ("!", place),
-        None => ("", pattern)
-    }
 }
 
 fn print_config_file_warnings(issues: &[(mezura_core::warnings::Code, String)], config_name: &str) {

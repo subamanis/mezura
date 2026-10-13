@@ -169,7 +169,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     files and directories to count as test code, as glob patterns
 
     1..n glob patterns separated by commas. A '!' in front of one takes back what an earlier
-    pattern or a build tool declared.
+    pattern, a build tool or a toolchain's file name declared.
 
     What a pattern names is counted as test code whole, the files of a directory included. A
     pattern starting with './' or '../', or carrying a root or a drive, names one place and
@@ -606,9 +606,10 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
                       the Vue row with no sign of the TypeScript and CSS inside it
       tests           the rows that split a language into its test code and the rest. Test code
                       is what a language's markers open or mark whole, the files its toolchain
-                      names as tests, the files under the test directory of a build tool, and
-                      what '--tests' declares. This one also stops the detection, patterns
-                      included, which is the other name that makes a run faster
+                      names as tests, the files under the test directory of a build tool, a file
+                      declared as a module under a marker, and what '--tests' declares. This one
+                      also stops the detection, patterns included, which is the other name that
+                      makes a run faster
       files           the files column of the details rows
       comments        the comments column of the details rows
       extra           the third column of the details rows, which is what '--counting content'

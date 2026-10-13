@@ -29,7 +29,8 @@ impl Target {
         Target { module: None, path: path.as_ref().to_owned() }
     }
 
-    /// A place reported under a name of its own. Several targets may share one name.
+    /// A place reported under the module of that name, one of [`crate::RunResult::modules`]. Several
+    /// targets may share one module.
     pub fn named(module: impl AsRef<str>, path: impl AsRef<str>) -> Self {
         Target { module: Some(module.as_ref().to_owned()), path: path.as_ref().to_owned() }
     }

@@ -108,7 +108,8 @@ impl<'a> TestWalk<'a> {
                     }
                     let Some(found) = self.read_marker(at, &self.markers[index], base, ranges) else { continue };
                     is_test = true;
-                    self.else_continues = attribute::is_opener(&self.markers[index]);
+                    let under_an_attribute = attribute::is_opener(&self.markers[index]);
+                    self.else_continues = under_an_attribute;
                     match found {
                         // A depth of one is the block around the marker, so a file with no such
                         // block runs to its end
@@ -118,7 +119,8 @@ impl<'a> TestWalk<'a> {
                         },
                         Marker::Extent { after } => {
                             self.cursor = after;
-                            self.state = State::Seeking { depth: 0, ends: Terminator::Undecided };
+                            let ends = if under_an_attribute {Terminator::Undecided} else {Terminator::BraceOrSemicolon};
+                            self.state = State::Seeking { depth: 0, ends };
                         }
                     }
                 },
@@ -319,10 +321,10 @@ enum State {
     AfterClose,
 }
 
-// What ends the item under a marker. A binding, an import, a type alias, a static, a const and an
-// extern crate end at the next semicolon at depth zero and their braces only nest. Everything else
-// ends at whichever of brace and semicolon comes first. A const fn and an extern fn are the two
-// that need a second word.
+// What ends the item under an attribute. A binding, an import, a type alias, a static, a const and
+// an extern crate end at the next semicolon at depth zero and their braces only nest. Everything
+// else, and every item under another marker, ends at whichever of brace and semicolon comes first.
+// A const fn and an extern fn are the two that need a second word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Terminator {
     Undecided,
@@ -421,7 +423,7 @@ mod tests {
     #[test]
     fn a_word_marker_stands_as_its_own_word() {
         let language = Language::new("D", ["d"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
-                .with_tests(["unittest"], &[]);
+                .with_test_markers(["unittest"]);
         let source = "unittests { } version(unittest) { } my_unittest";
         let walk = TestWalk::of(&language, source, true, TestsByPath::Nothing).unwrap();
         let ranges = [(0, source.len())];
@@ -441,7 +443,7 @@ mod tests {
     #[test]
     fn a_word_marker_closed_by_a_paren_and_a_colon_covers_the_rest_of_its_scope() {
         let language = Language::new("D", ["d"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
-                .with_tests(["unittest"], &[]);
+                .with_test_markers(["unittest"]);
         let source = "version(unittest) : int a; version(unittest) { }";
         let walk = TestWalk::of(&language, source, true, TestsByPath::Nothing).unwrap();
         let ranges = [(0, source.len())];
@@ -509,7 +511,7 @@ mod tests {
     #[test]
     fn a_file_marker_inside_the_test_code_a_marker_opened_belongs_to_that_test() {
         let language = Language::new("Both", ["bo"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
-                .with_tests(["unittest"], &[]).with_test_file_markers(["@Test"]);
+                .with_test_markers(["unittest"]).with_test_file_markers(["@Test"]);
         let marker_of = |source: &str| {
             let mut walk = TestWalk::of(&language, source, true, TestsByPath::Nothing)?;
             let mut line_start = 0;
@@ -529,7 +531,7 @@ mod tests {
     #[test]
     fn a_language_with_no_markers_or_a_file_with_none_gets_no_walk() {
         let d = Language::new("D", ["d"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
-                .with_tests(["unittest"], &[]);
+                .with_test_markers(["unittest"]);
         let c = Language::new("C", ["c"], crate::StringRules::escaping_nothing(), ["//"], &[], []);
         assert!(TestWalk::of(&c, "unittest { }", true, TestsByPath::Nothing).is_none());
         assert!(TestWalk::of(&d, "int x;", true, TestsByPath::Nothing).is_none());

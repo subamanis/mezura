@@ -13,8 +13,14 @@ New:
   build file; `EngineConfig::test_patterns` declares the rest, a `!` pattern takes a file or a
   directory back, and `EngineConfig::detect_tests` turns the whole of it off. What each language
   gets right and what it misses is in `TEST_DETECTION.md` beside the main README.
-- `Language::test_markers`, `Language::test_file_names` and `Language::with_tests`, read from the
-  `Tests` block of a language file, and `TestFileName` for the three shapes a name takes.
+- `TestCode::total_of` adds every language's test code together, `TestCode::add` adds one to
+  another, and `TestCode::calculate_production_of` gives what a language holds outside its test
+  code. `RunResult` and `ModuleResult` give the same per language and in total with
+  `calculate_production_per_language` and `calculate_production_total`, and a `FileEntry` gives
+  its own with `calculate_production`, and `is_tests_whole` says whether all of it is test code.
+- `Language::test_markers`, `Language::test_file_names`, `Language::with_test_markers` and
+  `Language::with_test_file_names`, read from the `Tests` block of a language file, and
+  `TestFileName` for the three shapes a name takes.
   `Language::module_keyword` and `Language::with_module_keyword` carry the word that declares a
   module living in another file, `mod` for Rust, so that a file declared on a line of test code
   is test code whole. `Language::test_file_markers` and `Language::with_test_file_markers` carry
@@ -22,9 +28,9 @@ New:
 - `PathPatterns`, the patterns of the exclusions and of the test code together with the directory
   their names are read from, and `PatternError` for one that does not parse. The warning code
   `pattern-matched-nothing` reports a place missing from disk or outside every target, and a name
-  with a slash that nothing matched. `engine::path_patterns::validate_test_patterns` checks a list
-  of test patterns as it is typed, and `is_a_path_pattern`, `absolutize_path_pattern` and
-  `is_on_disk` beside it read the place a pattern names.
+  with a slash that nothing matched. `validate_test_patterns` checks a list of test patterns as it
+  is typed, and `engine::path_patterns::is_a_path_pattern`, `absolutize_path_pattern`, `is_on_disk`
+  and `split_negation` beside it read the place a pattern names.
 - `FileExplanation::test_file_rule` names the rule that made a whole file test code, or the `!`
   pattern that took it back, as a `TestFileRule`, and `ExplainedLine::in_test` marks each line of
   test code. `TestFileRule::DeclaredModule` names the files that declare it as a module, the one
@@ -41,8 +47,8 @@ Changed:
   at any depth below the folder that holds the target and no folder above it, a pattern starting
   with `./` or `../` or written as a full path names one place, a trailing `/` means a folder
   only, `x/**` means the folder `x`, and names are matched with their case.
-- `validate_exclude_patterns` moved from `engine::targets` to `engine::path_patterns`. It returns
-  a `PatternError` now, and it refuses a `!` pattern.
+- `validate_exclude_patterns` moved from `engine::targets` to the crate root, beside
+  `validate_test_patterns`. It returns a `PatternError` now, and it refuses a `!` pattern.
 - `EngineConfig`, `Language`, `ExplainedLine`, `FileExplanation`, `RunResult`, `ModuleResult`,
   `FileEntry` and `MultilineString` gained public fields, so a struct literal of any of them
   written outside the crate stops compiling until it names them.

@@ -38,18 +38,27 @@ impl std::fmt::Display for PatternError {
 }
 
 /// Whether every pattern of `--tests` reads, for refusing a bad one at the moment somebody typed it.
-pub fn validate_test_patterns(patterns: &[String]) -> Result<(), PatternError> {
+pub fn validate_test_patterns(patterns: &[impl AsRef<str>]) -> Result<(), PatternError> {
     PathPatternMatcher::compile(patterns, TakingBack::Allowed).map(|_| ())
 }
 
 /// Whether every exclude pattern reads, a `!` among them refused, for refusing a bad one when typed.
-pub fn validate_exclude_patterns(patterns: &[String]) -> Result<(), PatternError> {
+pub fn validate_exclude_patterns(patterns: &[impl AsRef<str>]) -> Result<(), PatternError> {
     PathPatternMatcher::compile(patterns, TakingBack::Refused).map(|_| ())
+}
+
+/// The `!` in front of a pattern, or an empty string, and the rest of the pattern trimmed.
+pub fn split_negation(pattern: &str) -> (&'static str, &str) {
+    let written = pattern.trim();
+    match written.strip_prefix(NEGATION) {
+        Some(rest) => ("!", rest.trim()),
+        None => ("", written)
+    }
 }
 
 /// Whether a pattern names a place, which is resolved from where the pattern was written.
 pub fn is_a_path_pattern(pattern: &str) -> bool {
-    let text = normalise_separators(pattern.trim().trim_start_matches(NEGATION));
+    let text = normalise_separators(split_negation(pattern).1);
     matches!(Path::new(text.as_ref()).components().next(),
             Some(Component::Prefix(_) | Component::RootDir | Component::CurDir | Component::ParentDir))
 }
@@ -61,10 +70,7 @@ pub fn absolutize_path_pattern(pattern: &str) -> String {
     if !is_a_path_pattern(written) {
         return written.to_owned();
     }
-    let (negation, text) = match written.strip_prefix(NEGATION) {
-        Some(rest) => ("!", rest.trim()),
-        None => ("", written)
-    };
+    let (negation, text) = split_negation(written);
     let text = normalise_separators(text);
     let (_, without_suffix) = strip_folder_suffix(&text);
     let suffix = &text[without_suffix.len()..];
@@ -74,7 +80,7 @@ pub fn absolutize_path_pattern(pattern: &str) -> String {
 
 /// Whether the place a path pattern names, up to its first wildcard, is on disk.
 pub fn is_on_disk(pattern: &str) -> bool {
-    let text = normalise_separators(pattern.trim().trim_start_matches(NEGATION).trim());
+    let text = normalise_separators(split_negation(pattern).1);
     let (_, without_suffix) = strip_folder_suffix(&text);
     split_place(without_suffix).2
 }
@@ -109,27 +115,27 @@ pub(crate) struct PathPatternMatcher {
 }
 
 impl PathPatternMatcher {
-    pub(crate) fn compile(patterns: &[String], taking_back: TakingBack) -> Result<Self, PatternError> {
+    pub(crate) fn compile(patterns: &[impl AsRef<str>], taking_back: TakingBack) -> Result<Self, PatternError> {
         let mut names = GlobSetBuilder::new();
         let mut paths = GlobSetBuilder::new();
         let mut names_written_at = Vec::new();
         let mut paths_written_at = Vec::new();
         let mut rules = Vec::with_capacity(patterns.len());
-        for (written_at, pattern) in patterns.iter().enumerate() {
-            let text = pattern.trim();
-            let (negated, text) = match text.strip_prefix(NEGATION) {
-                Some(rest) => (true, rest.trim()),
-                None => (false, text)
-            };
+        for (written_at, pattern) in patterns.iter().map(AsRef::as_ref).enumerate() {
+            let (negation, text) = split_negation(pattern);
+            let negated = !negation.is_empty();
             if negated && taking_back == TakingBack::Refused {
-                return Err(PatternError::TakesBack(pattern.clone()));
+                return Err(PatternError::TakesBack(pattern.to_owned()));
+            }
+            if text.starts_with(NEGATION) {
+                return Err(PatternError::InvalidGlob(pattern.to_owned()));
             }
             let text = normalise_separators(text);
             let (folders_only, text) = strip_folder_suffix(&text);
             if text.is_empty() {
-                return Err(PatternError::Empty(pattern.clone()));
+                return Err(PatternError::Empty(pattern.to_owned()));
             }
-            let invalid = |_| PatternError::InvalidGlob(pattern.clone());
+            let invalid = |_| PatternError::InvalidGlob(pattern.to_owned());
             let kind = if is_a_path_pattern(text) {
                 let (place, on_disk, glob) = resolve_path_pattern(text);
                 let case_follows_the_filesystem = cfg!(any(windows, target_os = "macos"));
@@ -148,7 +154,7 @@ impl PathPatternMatcher {
                 names_written_at.push(written_at);
                 Kind::Name { reaches_into_a_path: text.trim_start_matches(ANY_DEPTH).contains('/') }
             };
-            rules.push(Rule { written: pattern.clone(), negated, folders_only, kind });
+            rules.push(Rule { written: pattern.to_owned(), negated, folders_only, kind });
         }
         let invalid_set = |_| PatternError::InvalidGlob(String::new());
         let matched = (0..rules.len()).map(|_| AtomicBool::new(false)).collect();
@@ -365,6 +371,7 @@ mod tests {
         assert!(is_a_path_pattern("./gen"));
         assert!(is_a_path_pattern("../gen"));
         assert!(is_a_path_pattern("!./gen"));
+        assert!(is_a_path_pattern("! ./gen"));
         assert!(is_a_path_pattern(" ./gen "));
         assert!(is_a_path_pattern("."));
         assert!(!is_a_path_pattern("gen"));
@@ -372,6 +379,7 @@ mod tests {
         assert!(!is_a_path_pattern("*.min.js"));
         assert!(!is_a_path_pattern(".hidden"));
         assert!(!is_a_path_pattern("**/tests"));
+        assert!(!is_a_path_pattern("!!./gen"));
         if cfg!(windows) {
             assert!(is_a_path_pattern("D:/x"));
             assert!(is_a_path_pattern("D:x"));
@@ -512,6 +520,7 @@ mod tests {
         assert_eq!(Err(PatternError::Empty("/".to_owned())), compile(&["/"]));
         assert_eq!(Err(PatternError::Empty(" ! / ".to_owned())), compile(&[" ! / "]));
         assert_eq!(Err(PatternError::InvalidGlob("[bad".to_owned())), compile(&["fine", "[bad"]));
+        assert_eq!(Err(PatternError::InvalidGlob("!!./gen".to_owned())), compile(&["!!./gen"]));
         assert!(validate_test_patterns(&owned(&["tests/", "!**/*_test.go"])).is_ok());
         assert!(matcher(&[]).is_empty());
         assert!(!matcher(&["x"]).is_empty());

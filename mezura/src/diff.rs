@@ -383,11 +383,12 @@ pub fn create_file_comparison_rows(baseline: &[&FileEntry], subject: &[&FileEntr
 {
     type BothSides<'a> = (Option<Cow<'a, Stats>>, Option<Cow<'a, Stats>>);
     let mut merged: HashMap<String, BothSides> = HashMap::with_capacity(baseline.len() + subject.len());
-    for file in baseline {
+    let shown = |file: &&&FileEntry| !without_tests || !file.is_tests_whole();
+    for file in baseline.iter().filter(shown) {
         merged.insert(relativise(&file.path, &bases.0),
                 (Some(super::result_printer::find_shown_stats_of(file, without_tests)), None));
     }
-    for file in subject {
+    for file in subject.iter().filter(shown) {
         merged.entry(relativise(&file.path, &bases.1)).or_default().1 =
                 Some(super::result_printer::find_shown_stats_of(file, without_tests));
     }

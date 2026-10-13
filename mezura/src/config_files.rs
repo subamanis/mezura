@@ -8,7 +8,7 @@ use colored::{ColoredString, Colorize};
 use mezura_core::engine::config::{Target, Threads};
 use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE,
         MIN_PRODUCERS_VALUE};
-use mezura_core::engine::path_patterns::{validate_exclude_patterns, validate_test_patterns};
+use mezura_core::{validate_exclude_patterns, validate_test_patterns};
 use mezura_core::{PathPatterns, PatternError};
 
 use super::config_manager::{self, ConfigurationBuilder};

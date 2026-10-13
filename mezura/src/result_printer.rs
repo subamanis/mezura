@@ -263,16 +263,6 @@ pub(crate) fn find_shown_language_names(per_language: &HashMap<String, Stats>, c
     (names, hidden)
 }
 
-pub(crate) fn calculate_sum_of_tests(tests: &HashMap<String, TestCode>) -> TestCode {
-    let mut sum = TestCode::default();
-    for share in tests.values() {
-        sum.stats.add(&share.stats);
-        sum.whole_files += share.whole_files;
-    }
-
-    sum
-}
-
 // The languages are in the order '--sort' put them. A run that named no module has exactly one of
 // these, with no name.
 struct Group<'a> {
@@ -309,30 +299,22 @@ struct ShownFigures<'a> {
     total: Cow<'a, Stats>
 }
 
+// A language whose every file is tests whole has no row, as such a file has none. Its figures stay
+// in the total, which is what the module row draws.
 impl<'a> ShownFigures<'a> {
     fn of_run(result: &'a RunResult, without_tests: bool) -> Self {
-        Self::of(&result.per_language, &result.total, &result.tests, without_tests)
+        match without_tests && !result.tests.is_empty() {
+            true => ShownFigures { per_language: Cow::Owned(result.calculate_production_per_language()),
+                    total: Cow::Owned(result.calculate_production_total()) },
+            false => ShownFigures { per_language: Cow::Borrowed(&result.per_language), total: Cow::Borrowed(&result.total) }
+        }
     }
 
     fn of_module(module: &'a mezura_core::ModuleResult, without_tests: bool) -> Self {
-        Self::of(&module.per_language, &module.total, &module.tests, without_tests)
-    }
-
-    fn of(per_language: &'a HashMap<String, Stats>, total: &'a Stats, tests: &HashMap<String, TestCode>,
-            without_tests: bool) -> Self
-    {
-        if !without_tests || tests.is_empty() {
-            return ShownFigures { per_language: Cow::Borrowed(per_language), total: Cow::Borrowed(total) };
-        }
-
-        // A language whose every file is tests whole has no row, as such a file has none. Its figures
-        // stay in the total, which is what the module row draws.
-        ShownFigures {
-            per_language: Cow::Owned(per_language.iter()
-                    .map(|(name, whole)| (name.clone(), calculate_own_share(whole, None, tests.get(name))))
-                    .filter(|(_, own)| own.files > 0)
-                    .collect()),
-            total: Cow::Owned(calculate_own_share(total, None, Some(&calculate_sum_of_tests(tests))))
+        match without_tests && !module.tests.is_empty() {
+            true => ShownFigures { per_language: Cow::Owned(module.calculate_production_per_language()),
+                    total: Cow::Owned(module.calculate_production_total()) },
+            false => ShownFigures { per_language: Cow::Borrowed(&module.per_language), total: Cow::Borrowed(&module.total) }
         }
     }
 }
@@ -440,7 +422,7 @@ pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configurati
         names.iter().filter_map(|name| {
             let (language, entries) = module.files.get_key_value(name.as_str())?;
             let mut files = entries.iter()
-                    .filter(|file| !without_tests || file.tests.as_ref().is_none_or(|tests| tests.lines < file.stats.lines))
+                    .filter(|file| !without_tests || !file.is_tests_whole())
                     .collect::<Vec<_>>();
             files.sort_by(|one, other| compare_files_by(one, other, config.view.sort_by, config.view.counting,
                     without_tests));
@@ -454,15 +436,10 @@ pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configurati
     }).collect()
 }
 
-// A file carries no keywords, so only the classes and the bytes come out
 pub(crate) fn find_shown_stats_of(file: &mezura_core::FileEntry, without_tests: bool) -> Cow<'_, Stats> {
-    match file.tests.as_ref().filter(|_| without_tests) {
-        Some(tests) => {
-            let mut shown = file.stats.clone();
-            take_out(&mut shown, tests);
-            Cow::Owned(shown)
-        },
-        None => Cow::Borrowed(&file.stats)
+    match without_tests && file.tests.is_some() {
+        true => Cow::Owned(file.calculate_production()),
+        false => Cow::Borrowed(&file.stats)
     }
 }
 
@@ -749,18 +726,9 @@ fn nests_under_production(has_sections: bool, has_tests: bool, breakdown: TestsB
 
 // A file that is tests whole holds none of the language's other lines
 fn calculate_own_share(whole: &Stats, sections: Option<&HashMap<String, Stats>>, tests: Option<&TestCode>) -> Stats {
-    let mut counted = Stats::default();
-    for stats in sections.into_iter().flat_map(HashMap::values).chain(tests.map(|tests| &tests.stats)) {
-        counted.add(stats);
-    }
-    let mut shell = whole.clone();
-    take_out(&mut shell, &counted);
-    shell.files = whole.files.saturating_sub(tests.map_or(0, |tests| tests.whole_files));
-    // A section's keywords are its own language's and were never in the whole, so only the tests' come out
-    for (keyword, occurrences) in tests.into_iter().flat_map(|tests| &tests.stats.keyword_occurences) {
-        if let Some(own) = shell.keyword_occurences.get_mut(keyword) {
-            *own = own.saturating_sub(*occurrences);
-        }
+    let mut shell = tests.unwrap_or(&TestCode::default()).calculate_production_of(whole);
+    for section in sections.into_iter().flat_map(HashMap::values) {
+        take_out(&mut shell, section);
     }
 
     shell
@@ -785,7 +753,7 @@ fn calculate_tests_of_everything(groups: &[Group]) -> Option<Stats> {
             sum.add(&tests.stats);
         }
     }
-    (sum.lines > 0).then_some(sum)
+    (sum.files > 0).then_some(sum)
 }
 
 // 'stats' is carried. A lookup by the name in the cell would be one search per row, and with
@@ -909,7 +877,12 @@ fn find_row_figures(row: &NamedRow, total: &Stats, model: CountingModel) -> Opti
     }
 }
 
-fn format_figure_cells(theme: &Theme, figures: &RowFigures) -> [BoxedCell; 6] {
+// A branch under a language wears the branch's own size unit
+fn find_size_unit_style(theme: &Theme, kind: RowKind) -> &Style {
+    if kind.is_sub_row() {SubRowStyles::of(theme, kind).size_unit} else {&theme.size_unit}
+}
+
+fn format_figure_cells(theme: &Theme, figures: &RowFigures, kind: RowKind) -> [BoxedCell; 6] {
     fn format_share(part: usize, whole: usize) -> String {
         format_percent_or_blank(if whole == 0 {0.0} else {part as f64 / whole as f64 * 100.0})
     }
@@ -919,7 +892,7 @@ fn format_figure_cells(theme: &Theme, figures: &RowFigures) -> [BoxedCell; 6] {
     let nothing = figures.is_of_nothing();
     let count = |value| format_count(value, nothing);
     let (size, unit) = super::number_formatter::get_active().size_with_unit(bytes);
-    let size = if nothing {NO_FIGURE.to_owned()} else {size + " " + &theme.size_unit.paint(unit).to_string()};
+    let size = if nothing {NO_FIGURE.to_owned()} else {size + " " + &find_size_unit_style(theme, kind).paint(unit).to_string()};
     let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines, code, comments);
     [cell(count(files), format_share(files, against_files)),
      cell(count(lines), format_share(lines, against_lines)),
@@ -1087,16 +1060,9 @@ fn build_table_cells<'a>(theme: &'a Theme, groups: &[Group], total: &Stats, prin
     let rows = described.iter().map(|row| {
         match find_row_figures(row, total, model) {
             Some(figures) => {
-                let [files, lines, code, comments, extra, size] = format_figure_cells(theme, &figures);
-                // A branch under a language wears the branch's own size unit
-                let size = if row.kind.is_sub_row() {
-                    let (size, unit) = super::number_formatter::get_active().size_with_unit(figures.bytes);
-                    size + " " + &SubRowStyles::of(theme, row.kind).size_unit.paint(unit).to_string()
-                } else {
-                    size.number
-                };
+                let [files, lines, code, comments, extra, size] = format_figure_cells(theme, &figures, row.kind);
                 vec![row.cell.clone(), files.number, files.slot, lines.number, lines.slot,
-                        code.number, code.slot, comments.number, comments.slot, extra.number, size]
+                        code.number, code.slot, comments.number, comments.slot, extra.number, size.number]
             },
             None => {
                 let mut cells = vec![String::new(); column_count];
@@ -1365,8 +1331,8 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
     }
     rows.push(ComparedRow { name: TOTAL_NAME.to_owned(), kind: RowKind::Total, depth: 0,
             baseline: run_before.total.into_owned(), subject: run_now.total.into_owned() });
-    let (tests_before, tests_now) = (calculate_sum_of_tests(&baseline.tests), calculate_sum_of_tests(&subject.tests));
-    if !config.view.hidden.tests && !without_tests && (tests_before.stats.lines > 0 || tests_now.stats.lines > 0) {
+    let (tests_before, tests_now) = (TestCode::total_of(&baseline.tests), TestCode::total_of(&subject.tests));
+    if !config.view.hidden.tests && !without_tests && (tests_before.stats.files > 0 || tests_now.stats.files > 0) {
         rows.push(ComparedRow { name: format!("{BRANCH_INDENT}{}{TESTS_NAME}", find_branch_marker(true)),
                 kind: RowKind::Tests, depth: 0, baseline: tests_before.stats, subject: tests_now.stats });
     }
@@ -1548,7 +1514,7 @@ fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: View
         Column::of("Size", ColumnKind::Size, &theme.total_size_label, &theme.total_size_number),
     ];
 
-    let cells = |before: &Stats, now: &Stats| {
+    let cells = |before: &Stats, now: &Stats, kind: RowKind| {
         // The absolute move and its percentage share one slot here, the borders doing the grouping
         // that the tight gaps do on the table.
         let counted = |was: usize, is: usize| BoxedCell {
@@ -1567,11 +1533,11 @@ fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: View
         vec![files, counted(before.lines, now.lines),
              counted(before.calculate_code_lines(model), now.calculate_code_lines(model)),
              counted(before.calculate_comment_lines(model), now.calculate_comment_lines(model)),
-             BoxedCell { number: size + " " + &theme.size_unit.paint(unit).to_string(),
+             BoxedCell { number: size + " " + &find_size_unit_style(theme, kind).paint(unit).to_string(),
                          slot: paint_change(theme, before.bytes, now.bytes, &format_signed_size(theme, before.bytes, now.bytes)) }]
     };
 
-    let drawn = rows.iter().map(|row| (row.name.clone(), row.depth, cells(&row.baseline, &row.subject)))
+    let drawn = rows.iter().map(|row| (row.name.clone(), row.depth, cells(&row.baseline, &row.subject, row.kind)))
             .collect::<Vec<_>>();
     let kinds = rows.iter().map(|row| row.kind).collect::<Vec<_>>();
     columns[0].header = determine_name_header_for(&kinds).to_owned();
@@ -1625,7 +1591,7 @@ fn build_comparison_cells<'a>(theme: &'a Theme, rows: &[ComparedRow], view: View
         Column::of("Size", ColumnKind::Size, &theme.total_size_label, &theme.total_size_number),
         change(ColumnKind::Change),
     ];
-    let cells = |name: String, before: &Stats, now: &Stats| {
+    let cells = |name: String, before: &Stats, now: &Stats, kind: RowKind| {
         let mut row = vec![name, format_with_separators(now.files),
                 paint_change(theme, before.files, now.files, &format_signed_difference(before.files, now.files))];
         for (was, is) in [(before.lines, now.lines),
@@ -1636,12 +1602,12 @@ fn build_comparison_cells<'a>(theme: &'a Theme, rows: &[ComparedRow], view: View
             row.push(paint_change(theme, was, is, &format_change(was, is)));
         }
         let (size, unit) = super::number_formatter::get_active().size_with_unit(now.bytes);
-        row.push(size + " " + &theme.size_unit.paint(unit).to_string());
+        row.push(size + " " + &find_size_unit_style(theme, kind).paint(unit).to_string());
         row.push(paint_change(theme, before.bytes, now.bytes, &format_signed_size(theme, before.bytes, now.bytes)));
         row
     };
 
-    let drawn = rows.iter().map(|row| cells(row.name.clone(), &row.baseline, &row.subject)).collect::<Vec<_>>();
+    let drawn = rows.iter().map(|row| cells(row.name.clone(), &row.baseline, &row.subject, row.kind)).collect::<Vec<_>>();
     let kinds = rows.iter().map(|row| row.kind).collect::<Vec<_>>();
     columns[0].header = determine_name_header_for(&kinds).to_owned();
 
@@ -2014,7 +1980,7 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
     let described = create_named_rows(groups, print_total, notes);
     let rows = described.iter().map(|row| {
         let cells = match find_row_figures(row, total, model) {
-            Some(figures) => Vec::from(format_figure_cells(theme, &figures)),
+            Some(figures) => Vec::from(format_figure_cells(theme, &figures, row.kind)),
             // A note takes the name cell and leaves the columns empty
             None => (0..column_count - 1).map(|_| BoxedCell { number: String::new(), slot: String::new() }).collect()
         };
@@ -3344,7 +3310,9 @@ mod tests {
                 format_markdown_lines(theme, &with_tests_split, &total, true, &[], shown)));
 
         // Java is tests whole, so it has no row with the tests removed
-        let removed = ShownFigures::of(&content_info, &total, &tests, true);
+        let module = ModuleResult { name: None, per_language: content_info.clone(), nested_languages: sections.clone(),
+                tests: tests.clone(), files: HashMap::new(), total: total.clone() };
+        let removed = ShownFigures::of_module(&module, true);
         let removed_names = get_sorted_language_names(&removed.per_language, SortCriterion::Lines, content);
         let with_tests_removed = vec![Group {name: None, languages: removed_names.clone(), hidden: 0,
                 per_language: Cow::Borrowed(&removed.per_language), nested: &sections, tests: &tests,

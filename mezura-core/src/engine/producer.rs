@@ -551,12 +551,12 @@ mod tests {
         let modules = Arc::new(Modules::of(&targets));
         let (files_injector, dirs_injector) = (Arc::new(Injector::new()), Arc::new(Injector::new()));
         let mut files_present = FilesPresent::default();
-        let test_patterns = Arc::new(PathPatternMatcher::compile(&[], TakingBack::Allowed).unwrap());
+        let test_patterns = Arc::new(PathPatternMatcher::compile(&[] as &[&str], TakingBack::Allowed).unwrap());
         queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector,
                 &mut files_present, &language_lookups, &modules, &ScanProgress::default());
         dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0, DirectoryScope::default(), 0));
 
-        let exclude_patterns = Arc::new(PathPatternMatcher::compile(&[], TakingBack::Refused).unwrap());
+        let exclude_patterns = Arc::new(PathPatternMatcher::compile(&[] as &[&str], TakingBack::Refused).unwrap());
         let (found, unreadable) = search_for_files(0, files_injector, dirs_injector,
                 Worker::new_lifo(), &[], Arc::new(AtomicUsize::new(0)), language_lookups, exclude_patterns, test_patterns,
                 config, modules, &AtomicUsize::new(1), &ScanProgress::default());
