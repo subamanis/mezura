@@ -4,7 +4,7 @@ use crate::{EngineConfig, Language, LineClass, LineClasses, ScanSkip, Span, Test
 use crate::domain::CommentPair;
 use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file, find_scan_skip, judge_tests_by_path};
 use crate::engine::path_patterns::{PathPatternMatcher, TakingBack};
-use crate::engine::targets::{find_names_root_of_path, normalise_separators};
+use crate::engine::targets::{find_names_root_of_path, spell_out};
 use crate::engine::test_detection::{DirectoryScope, FilesOnDisk, TestScope, TestsByPath, find_declaring_chain, find_test_directory_along};
 use crate::languages::Languages;
 
@@ -193,11 +193,7 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
         lang_name = name;
     }
     let left_out_of_a_scan = find_scan_skip(&contents, extension_rules.as_deref(), config);
-    let nested_lookup = NestedLanguageLookup {
-        languages: &by_name,
-        extension_to_name: &nested_definitions.extension_to_name,
-        set_aside: &nested_definitions.set_aside,
-    };
+    let nested_lookup = NestedLanguageLookup::of(&by_name, &nested_definitions);
     let (tests_by_path, mut test_file_rule) = match config.detect_tests {
         true => decide_whole_file(path, config, by_name.get(lang_name.as_ref()).unwrap(), &nested_lookup)?,
         false => (TestsByPath::Nothing, None)
@@ -235,17 +231,16 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
 {
     let patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed)
             .map_err(ExplainError::InvalidTestPattern)?;
-    let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    let absolute = normalise_separators(&absolute.to_string_lossy()).into_owned();
-    let names_root = crate::find_names_root_of_target(&config.test_patterns, &absolute, || find_names_root_of_path(&absolute, true));
+    let absolute = spell_out(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()));
+    let names_root = crate::find_names_root_of_target(&config.test_patterns, &absolute, find_names_root_of_path(&absolute, true));
     let file = Path::new(&absolute);
     let folder = file.parent().unwrap_or(file);
     let (scope, decided_by) = DirectoryScope::of_target(folder, names_root, &patterns).of_file(file, &patterns, &mut Vec::new());
     // Read the way a run reads it, so a file a pattern took back is still declared under the marker
     // and a declarer a pattern made whole seeds nothing of its own
     let is_whole = |candidate: &Path| {
-        let spelled = normalise_separators(&candidate.to_string_lossy()).into_owned();
-        let root = crate::find_names_root_of_target(&config.test_patterns, &spelled, || find_names_root_of_path(&spelled, true));
+        let spelled = spell_out(candidate);
+        let root = crate::find_names_root_of_target(&config.test_patterns, &spelled, find_names_root_of_path(&spelled, true));
         let candidate = Path::new(&spelled);
         let folder = candidate.parent().unwrap_or(candidate);
         DirectoryScope::of_target(folder, root, &patterns).of_file(candidate, &patterns, &mut Vec::new()).0 == TestScope::Tests
@@ -253,7 +248,7 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
     let mut files_on_disk = FilesOnDisk { lookup, config, is_whole: &is_whole };
     if scope != TestScope::Tests && language.module_keyword.is_some()
             && let Some(chain) = find_declaring_chain(file, &language.name, &mut files_on_disk) {
-        let declared_by = chain.iter().map(|path| normalise_separators(&path.to_string_lossy()).into_owned()).collect();
+        let declared_by = chain.iter().map(|path| spell_out(path)).collect();
         return Ok((TestsByPath::WholeFile, Some(TestFileRule::DeclaredModule { declared_by })));
     }
     let rule = match (decided_by, scope) {
@@ -267,8 +262,8 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
             })
         },
         (None, TestScope::Tests) => find_test_directory_along(folder).0.map(|found| TestFileRule::TestDirectory {
-            directory: normalise_separators(&found.directory.to_string_lossy()).into_owned(),
-            build_files: found.build_files.iter().map(|file| normalise_separators(&file.to_string_lossy()).into_owned()).collect()
+            directory: spell_out(found.directory),
+            build_files: found.build_files.iter().map(|file| spell_out(file)).collect()
         }),
         (None, _) => {
             let name = file.file_name().and_then(|name| name.to_str()).unwrap_or_default();
@@ -511,7 +506,7 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, contents).unwrap();
         }
-        let root_str = normalise_separators(&root.to_string_lossy()).into_owned();
+        let root_str = spell_out(&root);
         let at = |path: &str| format!("{root_str}/{path}");
         let explain = |file: &str, config: &EngineConfig| {
             let explained = explain_file(&root.join(file), config, resolved_languages(config)).unwrap();
@@ -567,7 +562,7 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, contents).unwrap();
         }
-        let root_str = normalise_separators(&root.to_string_lossy()).into_owned();
+        let root_str = spell_out(&root);
         let at = |path: &str| format!("{root_str}/{path}");
         let explain = |file: &str, config: &EngineConfig| {
             let explained = explain_file(&root.join(file), config, resolved_languages(config)).unwrap();

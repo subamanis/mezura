@@ -21,6 +21,7 @@ use crate::engine::masks::MaskFinder;
 use crate::engine::masks::is_ascii;
 use crate::engine::masks::BLOCK_BYTES;
 use crate::engine::test_detection::{Declaration, ModuleDeclarations, TestScope, TestWalk, TestsByPath};
+use crate::languages::NestedLanguageDefinitions;
 
 pub(crate) const BYTE_ORDER_MARK : &[u8] = b"\xef\xbb\xbf";
 pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
@@ -194,7 +195,8 @@ pub(crate) fn explain_parsed_file(contents: String, lang_name: &str, lookup: &Ne
     (contents, report, log)
 }
 
-// What '--explain' reads a declaring file with, keywords off since they cannot move a declaration
+// How a file is read from disk for its declarations, by '--explain' and by a run following a
+// declaration, keywords off since they cannot move a declaration
 pub(crate) fn read_module_declarations(contents: &str, language: &Language, lookup: &NestedLanguageLookup,
     config: &EngineConfig) -> Option<Vec<Declaration>>
 {
@@ -971,7 +973,11 @@ pub(crate) struct NestedLanguageLookup<'a> {
     pub set_aside: &'a HashMap<String, Language>,
 }
 
-impl NestedLanguageLookup<'_> {
+impl<'a> NestedLanguageLookup<'a> {
+    pub(crate) fn of(languages: &'a HashMap<String, Language>, nested: &'a NestedLanguageDefinitions) -> Self {
+        NestedLanguageLookup { languages, extension_to_name: &nested.extension_to_name, set_aside: &nested.set_aside }
+    }
+
     // What a tag says its section is written in, which people write either way: 'lang="scss"' is an
     // extension and 'type="text/typescript"' is a language's name. The extension is tried first,
     // since it is the form the declared defaults use and the one the user's priority rules answer
@@ -1249,6 +1255,12 @@ struct SectionBucket<'a> {
     bytes: usize,
 }
 
+struct QuietLines {
+    shell_lines: usize,
+    shell_classes: LineClasses,
+    from: usize,
+}
+
 fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup: &NestedLanguageLookup,
     matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
     tests_by_path: TestsByPath, log: &mut ExplainLog) -> FileReport
@@ -1278,10 +1290,10 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         }
     };
     let mut quiet_until = find_quiet_until(&test_walk, &declarations);
-    let mut test_stats = if collecting_spans && test_walk.is_some() { FileStats::with_keywords(&language.keywords) }
+    let test_stats = if collecting_spans && test_walk.is_some() { FileStats::with_keywords(&language.keywords) }
             else { FileStats::default() };
-    let mut test_bytes = 0;
-    let mut quiet_lines: Option<(usize, LineClasses, usize)> = None;
+    let mut tests = TestReport { stats: test_stats, bytes: 0 };
+    let mut quiet_lines: Option<QuietLines> = None;
 
     let mut shell = WalkState::default();
     let mut buckets: Vec<SectionBucket> = Vec::new();
@@ -1295,7 +1307,8 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                 None => break
             }
         };
-        let ranges_wanted = line_start + raw_line.len() > quiet_until;
+        let line_end = line_start + raw_line.len();
+        let ranges_wanted = line_end > quiet_until;
         let (class, had_code) = if !has_candidates && shell.holds_nothing() {
             walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted, scan,
                     &shell, &mut shell_stats, code_spans, log)
@@ -1304,41 +1317,34 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                     Candidates::At(lines.positions(), 0), scan, &mut shell, &mut shell_stats, code_spans, log)
         };
         let mut is_test = false;
-        let line_end = line_start + raw_line.len();
-        if ranges_wanted && let Some(tests) = &mut test_walk {
-            if line_end > tests.quiet_until() {
+        if ranges_wanted && let Some(walk) = &mut test_walk {
+            if line_end > walk.quiet_until() {
                 let bytes = end_of_line(contents, line_start, raw_line) - line_start;
-                if tests.observe_line(line_start, raw_line, had_code, scan.lead, &scan.code_ranges, class, bytes) {
+                if walk.observe_line(line_start, raw_line, had_code, scan.lead, &scan.code_ranges, class, bytes) {
                     is_test = true;
                     let mut claimed = 1;
                     let mut from = line_start;
-                    for (held_class, held_bytes) in tests.take_held() {
-                        test_stats.lines += 1;
-                        test_stats.classes.bump(held_class);
-                        test_bytes += held_bytes;
+                    for (held_class, held_bytes) in walk.take_held() {
+                        tests.book_line(held_class, held_bytes);
                         from -= held_bytes;
                         claimed += 1;
                     }
                     match quiet_lines.take() {
-                        Some((lines, classes, quiet_from)) => {
-                            claimed = book_quiet_lines(&mut test_stats, &shell_stats, lines, &classes);
-                            test_bytes += line_start + bytes - quiet_from;
-                            from = quiet_from;
+                        Some(quiet) => {
+                            claimed = tests.book_quiet_lines(&quiet, &shell_stats, line_start + bytes);
+                            from = quiet.from;
                         },
-                        None => {
-                            test_stats.lines += 1;
-                            test_stats.classes.bump(class);
-                            test_bytes += bytes;
-                        }
+                        None => tests.book_line(class, bytes)
                     }
                     if collecting_spans { extend_test_ranges(test_ranges, from, line_start + bytes); }
                     if EXPLAIN { log.mark_last_lines_as_test(claimed); }
-                    if tests.skips_lines_inside() {
-                        quiet_lines = Some((shell_stats.lines, shell_stats.classes.clone(), line_start + bytes));
+                    if walk.skips_lines_inside() {
+                        quiet_lines = Some(QuietLines { shell_lines: shell_stats.lines, shell_classes: shell_stats.classes.clone(),
+                                from: line_start + bytes });
                     }
                 }
             } else {
-                is_test = tests.skips_lines_inside();
+                is_test = walk.skips_lines_inside();
             }
         }
         if ranges_wanted && let Some(reader) = &mut declarations && had_code && line_end > reader.quiet_until() {
@@ -1394,20 +1400,19 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         }
     }
 
-    if let Some((lines, classes, quiet_from)) = quiet_lines {
-        let claimed = book_quiet_lines(&mut test_stats, &shell_stats, lines, &classes);
-        test_bytes += contents.len() - quiet_from;
-        if collecting_spans { extend_test_ranges(test_ranges, quiet_from, contents.len()); }
+    if let Some(quiet) = quiet_lines {
+        let claimed = tests.book_quiet_lines(&quiet, &shell_stats, contents.len());
+        if collecting_spans { extend_test_ranges(test_ranges, quiet.from, contents.len()); }
         if EXPLAIN { log.mark_last_lines_as_test(claimed); }
     }
 
     if config.count_keywords {
         if let Some(matcher) = matchers.for_language(language) {
-            count_keywords(contents, code_spans, matcher, &mut shell_stats, alias_indices, test_ranges, Some(&mut test_stats));
+            count_keywords(contents, code_spans, matcher, &mut shell_stats, alias_indices, Some((test_ranges, &mut tests.stats)));
         }
         for bucket in &mut buckets {
             if let Some(matcher) = matchers.for_language(bucket.language) {
-                count_keywords(contents, &bucket.spans, matcher, &mut bucket.stats, alias_indices, &[], None);
+                count_keywords(contents, &bucket.spans, matcher, &mut bucket.stats, alias_indices, None);
             }
         }
     }
@@ -1419,10 +1424,9 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
             shell_stats.lines += bucket.stats.lines;
             shell_stats.classes.add(&bucket.stats.classes);
         }
-        test_stats = shell_stats.clone();
-        test_bytes = contents.len();
+        tests = TestReport { stats: shell_stats.clone(), bytes: contents.len() };
         if EXPLAIN {
-            log.mark_last_lines_as_test(test_stats.lines);
+            log.mark_last_lines_as_test(tests.stats.lines);
             if let Some(found) = file_marker { log.note_file_marker(found); }
         }
     }
@@ -1432,17 +1436,27 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         sections: buckets.into_iter().map(|bucket| SectionReport {
             language: bucket.language.name.clone(), stats: bucket.stats, bytes: bucket.bytes }).collect(),
         bytes: contents.len(),
-        tests: (test_stats.lines > 0).then(|| Box::new(TestReport { stats: test_stats, bytes: test_bytes })),
+        tests: (tests.stats.lines > 0).then(|| Box::new(tests)),
         declarations: declarations.map(ModuleDeclarations::into_declarations)
     }
 }
 
-fn book_quiet_lines(test_stats: &mut FileStats, shell_stats: &FileStats, lines: usize, classes: &LineClasses) -> usize {
-    let mut quiet = shell_stats.classes.clone();
-    quiet.subtract(classes);
-    test_stats.classes.add(&quiet);
-    test_stats.lines += shell_stats.lines - lines;
-    shell_stats.lines - lines
+impl TestReport {
+    fn book_line(&mut self, class: LineClass, bytes: usize) {
+        self.stats.lines += 1;
+        self.stats.classes.bump(class);
+        self.bytes += bytes;
+    }
+
+    fn book_quiet_lines(&mut self, quiet: &QuietLines, shell_stats: &FileStats, to: usize) -> usize {
+        let mut classes = shell_stats.classes.clone();
+        classes.subtract(&quiet.shell_classes);
+        self.stats.classes.add(&classes);
+        let lines = shell_stats.lines - quiet.shell_lines;
+        self.stats.lines += lines;
+        self.bytes += to - quiet.from;
+        lines
+    }
 }
 
 fn extend_test_ranges(test_ranges: &mut Vec<(u32, u32)>, from: usize, to: usize) {
@@ -2228,7 +2242,7 @@ fn push_trimmed_spans(spans: &mut Vec<(u32, u32)>, ranges: &[(usize, usize)], li
 // inside that same stretch, so what a string literal removed is not treated as touching what
 // follows it.
 fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher, file_stats: &mut FileStats,
-    indices: &mut Vec<usize>, test_ranges: &[(u32, u32)], test_stats: Option<&mut FileStats>)
+    indices: &mut Vec<usize>, tests: Option<(&[(u32, u32)], &mut FileStats)>)
 {
     // The two sides are different questions and '(' is where they part. After the word it opens an
     // argument list and belongs to the declaration: Delphi's 'TFoo = class(TObject)' and Erlang's
@@ -2248,7 +2262,7 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
 
     if spans.is_empty() { return; }
     let bytes = contents.as_bytes();
-    let mut test_stats = test_stats.filter(|_| !test_ranges.is_empty());
+    let mut tests = tests.filter(|(ranges, _)| !ranges.is_empty());
 
     for (alias_finder, alias_len, keyword_index) in &matcher.aliases_with_indices {
         indices.clear();
@@ -2275,10 +2289,10 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
             let after = if at + alias_len < to { bytes.get(at + alias_len) } else { None };
             if is_acceptable_before(before) && is_acceptable_after(after) {
                 file_stats.keyword_occurences[*keyword_index] += 1;
-                if let Some(tests) = &mut test_stats {
-                    while range < test_ranges.len() && (test_ranges[range].1 as usize) <= *at { range += 1; }
-                    if range < test_ranges.len() && (test_ranges[range].0 as usize) <= *at {
-                        tests.keyword_occurences[*keyword_index] += 1;
+                if let Some((ranges, test_stats)) = &mut tests {
+                    while range < ranges.len() && (ranges[range].1 as usize) <= *at { range += 1; }
+                    if range < ranges.len() && (ranges[range].0 as usize) <= *at {
+                        test_stats.keyword_occurences[*keyword_index] += 1;
                     }
                 }
             }
@@ -2475,7 +2489,7 @@ mod tests {
     }
 
     fn keywords_of(line: &str, matcher: &KeywordMatcher, file_stats: &mut FileStats) {
-        count_keywords(line, &[(0, line.len() as u32)], matcher, file_stats, &mut Vec::new(), &[], None);
+        count_keywords(line, &[(0, line.len() as u32)], matcher, file_stats, &mut Vec::new(), None);
     }
 
     fn str_delimiters(line: &str, language: &Language, open_str_symbol: Option<u8>) -> (Vec<usize>, Vec<u8>) {
@@ -2554,6 +2568,10 @@ mod tests {
         NestedLanguageLookup { languages: &LANGUAGE_MAP_REF, extension_to_name: &SHIPPED_EXTENSIONS, set_aside: &NO_SET_ASIDE }
     }
 
+    fn empty_lookup() -> NestedLanguageLookup<'static> {
+        NestedLanguageLookup { languages: &NO_SET_ASIDE, extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE }
+    }
+
     fn parse_file_whole(path: &Path, lang_name: &str, buf: &mut Vec<u8>, config: &EngineConfig) -> Result<FileStats, String> {
         parse_file_report(path, lang_name, buf, config).map(FileReport::into_whole)
     }
@@ -2573,10 +2591,23 @@ mod tests {
     }
 
     fn parse_lines_whole(contents: &str, language: &Language) -> FileStats {
-        parse_lines::<false>(contents, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
-                extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
-                &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default(),
-                TestsByPath::Nothing, &mut ExplainLog::default()).into_whole()
+        parse_lines_report(contents, language, &empty_lookup(), &EngineConfig::default(), TestsByPath::Nothing).into_whole()
+    }
+
+    fn parse_lines_report(contents: &str, language: &Language, lookup: &NestedLanguageLookup, config: &EngineConfig,
+        by_path: TestsByPath) -> FileReport
+    {
+        parse_lines::<false>(contents, language, lookup, &mut KeywordMatchers::default(), config,
+                &mut ParseBuffers::default(), by_path, &mut ExplainLog::default())
+    }
+
+    fn parse_lines_explained(contents: &str, language: &Language, lookup: &NestedLanguageLookup, config: &EngineConfig,
+        by_path: TestsByPath) -> (FileReport, ExplainLog)
+    {
+        let mut log = ExplainLog::default();
+        let report = parse_lines::<true>(contents, language, lookup, &mut KeywordMatchers::default(), config,
+                &mut ParseBuffers::default(), by_path, &mut log);
+        (report, log)
     }
 
     fn c_like_with_a_splice() -> Language {
@@ -2797,7 +2828,7 @@ mod tests {
         let mut spans = Vec::new();
         assert!(info.has_code);
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
-        count_keywords(line, &spans, &matcher, &mut file_stats, &mut Vec::new(), &[], None);
+        count_keywords(line, &spans, &matcher, &mut file_stats, &mut Vec::new(), None);
         assert_eq!(0, file_stats.keyword_occurences[0]);
 
         // and the same word, whole, still counts
@@ -2808,7 +2839,7 @@ mod tests {
         let mut spans = Vec::new();
         assert!(info.has_code);
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
-        count_keywords(line, &spans, &matcher, &mut file_stats, &mut Vec::new(), &[], None);
+        count_keywords(line, &spans, &matcher, &mut file_stats, &mut Vec::new(), None);
         assert_eq!(1, file_stats.keyword_occurences[0]);
     }
 
@@ -3487,8 +3518,7 @@ mod tests {
         languages: &HashMap<String, Language>, extensions: &HashMap<String, Arc<str>>) -> FileReport
     {
         let lookup = NestedLanguageLookup { languages, extension_to_name: extensions, set_aside: &NO_SET_ASIDE };
-        parse_lines::<false>(contents, shell, &lookup, &mut KeywordMatchers::default(),
-                &EngineConfig::default(), &mut ParseBuffers::default(), TestsByPath::Nothing, &mut ExplainLog::default())
+        parse_lines_report(contents, shell, &lookup, &EngineConfig::default(), TestsByPath::Nothing)
     }
 
     #[test]
@@ -4668,10 +4698,7 @@ mod tests {
     }
 
     fn find_test_lines(contents: &str, language: &Language, config: &EngineConfig) -> Vec<usize> {
-        let mut log = ExplainLog::default();
-        parse_lines::<true>(contents, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
-                extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
-                &mut KeywordMatchers::default(), config, &mut ParseBuffers::default(), TestsByPath::Nothing, &mut log);
+        let (_, log) = parse_lines_explained(contents, language, &empty_lookup(), config, TestsByPath::Nothing);
         log.records().iter().enumerate().filter(|(_, record)| record.in_test).map(|(at, _)| at + 1).collect()
     }
 
@@ -4710,10 +4737,7 @@ mod tests {
         let language = LANGUAGE_MAP_REF.get("Rust").unwrap();
         assert_eq!(find_test_lines(source, language, &EngineConfig::default()), vec![1, 2, 3, 4, 5, 6, 7]);
 
-        let report = parse_lines::<false>(source, language, &NestedLanguageLookup { languages: &NO_SET_ASIDE,
-                extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE },
-                &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default(),
-                TestsByPath::Nothing, &mut ExplainLog::default());
+        let report = parse_lines_report(source, language, &empty_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
         let tests = report.tests.unwrap();
         assert_eq!(tests.stats.lines, 7);
         assert_eq!(tests.stats.classes.calculate_lines(), 7);
@@ -4956,13 +4980,8 @@ mod tests {
     #[test]
     fn a_file_marker_in_code_makes_the_file_test_code_whole_and_a_pattern_taking_the_file_back_switches_it_off() {
         let language = LANGUAGE_MAP_REF.get("Java").unwrap();
-        let lookup = NestedLanguageLookup { languages: &NO_SET_ASIDE, extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE };
-        let parse = |source: &str, by_path: TestsByPath, config: &EngineConfig| {
-            let mut log = ExplainLog::default();
-            let report = parse_lines::<true>(source, language, &lookup, &mut KeywordMatchers::default(), config,
-                    &mut ParseBuffers::default(), by_path, &mut log);
-            (report, log)
-        };
+        let parse = |source: &str, by_path: TestsByPath, config: &EngineConfig|
+                parse_lines_explained(source, language, &empty_lookup(), config, by_path);
         let marked = "class A {\n    // @Test in a comment\n    String s = \"@Test\";\n    @Test\n    void t() {}\n}\n";
         let only_text = "class A {\n    // @Test in a comment\n    String s = \"@Test\";\n}\n";
 
@@ -4987,9 +5006,7 @@ mod tests {
         let (languages, extensions) = section_fixture();
         let lookup = NestedLanguageLookup { languages: &languages, extension_to_name: &extensions, set_aside: &NO_SET_ASIDE };
         let contents = "<p>hello</p>\n<script>\nvar s = \"x\";\n</script>\n<style>\n/* css */\n</style>\n";
-        let parse = |by_path| parse_lines::<false>(contents, &web_shell(), &lookup,
-                &mut KeywordMatchers::default(), &EngineConfig::default(), &mut ParseBuffers::default(),
-                by_path, &mut ExplainLog::default());
+        let parse = |by_path| parse_lines_report(contents, &web_shell(), &lookup, &EngineConfig::default(), by_path);
 
         let ordinary = parse(TestsByPath::Nothing);
         assert_eq!(2, ordinary.sections.len());
@@ -5017,9 +5034,7 @@ mod tests {
             "    struct Second;\n",
             "}\n");
         let language = LANGUAGE_MAP_REF.get("Rust").unwrap();
-        let parse = |by_path, config: &EngineConfig| parse_lines::<false>(source, language, &shipped_lookup(),
-                &mut KeywordMatchers::default(), config, &mut ParseBuffers::default(), by_path,
-                &mut ExplainLog::default());
+        let parse = |by_path, config: &EngineConfig| parse_lines_report(source, language, &shipped_lookup(), config, by_path);
         let counted = |stats: FileStats| content_info_of(stats, "Rust").keyword_occurences;
         let of = |structs, enums| hashmap!("structs".to_owned() => structs, "enums".to_owned() => enums, "traits".to_owned() => 0);
 

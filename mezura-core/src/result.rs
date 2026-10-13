@@ -181,17 +181,15 @@ impl TestCode {
             partial: Option<&TestReport>) -> bool
     {
         if whole.lines == 0 { return false; }
-        let mut moved = whole.clone();
-        let mut moved_bytes = bytes;
         match partial {
             Some(partial) => {
                 if partial.stats.lines >= whole.lines { return false; }
+                let mut moved = whole.clone();
                 moved.subtract(&partial.stats);
-                moved_bytes = bytes.saturating_sub(partial.bytes);
+                self.stats.add_counts(&moved, bytes.saturating_sub(partial.bytes), keywords);
             },
-            None => self.stats.files += 1
+            None => self.stats.add_file(whole, bytes, keywords)
         }
-        self.stats.add_counts(&moved, moved_bytes, keywords);
         self.whole_files += 1;
         true
     }
@@ -447,8 +445,7 @@ impl std::fmt::Display for RunError {
             Self::NoTargets => write!(f, "The configuration names no directories or files, so there is nothing to count."),
             Self::LanguagesFromAnotherConfig => write!(f, "The languages were resolved against a configuration that selects a different set of them than the one this run was given, so the counts would not be the ones the settings describe. Resolve them against the same configuration you are counting with."),
             Self::InvalidTargets(x) => write!(f, "{x} Nothing was counted."),
-            Self::InvalidExcludePattern(x) => write!(f, "{x} Nothing was counted."),
-            Self::InvalidTestPattern(x) => write!(f, "{x} Nothing was counted."),
+            Self::InvalidExcludePattern(x) | Self::InvalidTestPattern(x) => write!(f, "{x} Nothing was counted."),
             Self::NoThreadsAvailable { side, error } => write!(f, "The operating system refused every {side} thread, so the run could not start: {error}"),
             Self::IncompleteRun { worker_panic } => write!(f, "A worker thread died mid-run, so the counts would have been incomplete and were discarded: {worker_panic}")
         }

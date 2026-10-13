@@ -170,11 +170,15 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let idle_producers = Arc::new(AtomicUsize::new(0));
     let files_injector = Arc::new(Injector::<ParsableFile>::new());
     let dirs_injector = Arc::new(Injector::<TraversedDir>::new());
-    let exclude_matcher = Arc::new(PathPatternMatcher::compile(&config.exclude_patterns.patterns, TakingBack::Refused)
+    let exclude_patterns = Arc::new(PathPatternMatcher::compile(&config.exclude_patterns.patterns, TakingBack::Refused)
             .map_err(RunError::InvalidExcludePattern)?);
     let test_patterns = Arc::new(PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed)
             .map_err(RunError::InvalidTestPattern)?);
-    let mut warnings = collect_pattern_warnings(&config, &targets, &exclude_matcher, &test_patterns);
+    // A project's own patterns are read for the whole project, so its folder counts as a target here
+    let roots_of = |patterns: &PathPatterns| targets.iter().map(|target| target.path.clone())
+            .chain(patterns.read_from.clone()).collect::<Vec<_>>();
+    let mut warnings = describe_patterns_that_changed_nothing(&config, &exclude_patterns, &test_patterns,
+            |matcher, patterns| matcher.find_places_out_of_reach(&roots_of(patterns)));
     queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector, &mut files_present,
             &language_lookups, &modules, &progress);
 
@@ -200,7 +204,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let stealers = Arc::new(workers.iter().map(Worker::stealer).collect::<Vec<_>>());
     for (i, worker) in workers.into_iter().enumerate() {
         match engine::producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), worker,
-                stealers.clone(), idle_producers.clone(), language_lookups.clone(), exclude_matcher.clone(),
+                stealers.clone(), idle_producers.clone(), language_lookups.clone(), exclude_patterns.clone(),
                 test_patterns.clone(), config.clone(), files_stats.clone(), modules.clone(), unreadable_dirs.clone(),
                 producers_total.clone(), worker_panics.clone(), progress.clone()) {
             Ok(handle) => producer_handles.push(handle),
@@ -304,7 +308,8 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     for kind in ScanSkip::ALL {
         skipped_files.get_of_kind_mut(kind).sort_unstable();
     }
-    warnings.extend(collect_names_that_matched_nothing(&config, &exclude_matcher, &test_patterns));
+    warnings.extend(describe_patterns_that_changed_nothing(&config, &exclude_patterns, &test_patterns,
+            |matcher, _| matcher.find_names_that_matched_nothing()));
     let relevant_files_num = files_present.relevant_files;
     if relevant_files_num == 0 {
         return Ok(RunResult::of_nothing(files_present,
@@ -324,8 +329,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     // Inside the count, since the caller's callback ran before this
     let promotion_started = Instant::now();
     let module_rows = std::mem::take(&mut *module_rows.lock().unwrap());
-    let lookup = NestedLanguageLookup { languages: &language_map_ref, extension_to_name: &nested_definitions.extension_to_name,
-            set_aside: &nested_definitions.set_aside };
+    let lookup = NestedLanguageLookup::of(&language_map_ref, &nested_definitions);
     let mut files_on_disk = FilesOnDisk { lookup: &lookup, config: &config, is_whole: &|_| false };
     let promotion = promote_declared_test_modules(&module_rows, tests_by_module, files_by_module, &language_map_ref,
             &mut files_on_disk);
@@ -409,8 +413,9 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
     for target in crate::engine::targets::topmost_targets(targets) {
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(&target);
-        let names_root = find_names_root_of_target(&config.test_patterns, &target.path, || targets.find_names_root_of(&target.path));
-        let exclude_root = find_names_root_of_target(&config.exclude_patterns, &target.path, || targets.find_names_root_of(&target.path));
+        let own_root = targets.find_names_root_of(&target.path);
+        let names_root = find_names_root_of_target(&config.test_patterns, &target.path, own_root);
+        let exclude_root = find_names_root_of_target(&config.exclude_patterns, &target.path, own_root);
         if dir_path.is_file() {
             let lookup = language_lookups.get_of_module(module);
             let Some(lang_name) = lookup.of_path_or_shebang(dir_path) else {
@@ -441,36 +446,22 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
 }
 
 // A target inside the project reads names from the project folder's parent, as 'mezura ./' typed there would
-pub(crate) fn find_names_root_of_target(patterns: &PathPatterns, path: &str, own: impl FnOnce() -> usize) -> usize {
+pub(crate) fn find_names_root_of_target(patterns: &PathPatterns, path: &str, own: usize) -> usize {
     match &patterns.read_from {
         Some(project) if engine::targets::is_inside_or_at(path, project) =>
                 engine::targets::find_names_root_of_path(project, false),
-        _ => own()
+        _ => own
     }
 }
 
-// A project's own patterns are read for the whole project, so its folder counts as a target here
-fn collect_pattern_warnings(config: &EngineConfig, targets: &engine::targets::Targets, exclude_patterns: &PathPatternMatcher,
-        test_patterns: &PathPatternMatcher) -> Vec<Warning>
+fn describe_patterns_that_changed_nothing(config: &EngineConfig, exclude_patterns: &PathPatternMatcher,
+        test_patterns: &PathPatternMatcher, find: impl Fn(&PathPatternMatcher, &PathPatterns) -> Vec<UnusedPattern>)
+-> Vec<Warning>
 {
-    let roots_of = |patterns: &PathPatterns| targets.iter().map(|target| target.path.clone())
-            .chain(patterns.read_from.clone()).collect::<Vec<_>>();
-    let mut warnings = exclude_patterns.find_places_out_of_reach(&roots_of(&config.exclude_patterns)).into_iter()
+    let mut warnings = find(exclude_patterns, &config.exclude_patterns).into_iter()
             .map(|unused| describe_unused_pattern(unused, EXCLUSION_CHANGED_NOTHING)).collect::<Vec<_>>();
     if config.detect_tests {
-        warnings.extend(test_patterns.find_places_out_of_reach(&roots_of(&config.test_patterns)).into_iter()
-                .map(|unused| describe_unused_pattern(unused, DECLARATION_CHANGED_NOTHING)));
-    }
-    warnings
-}
-
-fn collect_names_that_matched_nothing(config: &EngineConfig, exclude_patterns: &PathPatternMatcher,
-        test_patterns: &PathPatternMatcher) -> Vec<Warning>
-{
-    let mut warnings = exclude_patterns.find_names_that_matched_nothing().into_iter()
-            .map(|unused| describe_unused_pattern(unused, EXCLUSION_CHANGED_NOTHING)).collect::<Vec<_>>();
-    if config.detect_tests {
-        warnings.extend(test_patterns.find_names_that_matched_nothing().into_iter()
+        warnings.extend(find(test_patterns, &config.test_patterns).into_iter()
                 .map(|unused| describe_unused_pattern(unused, DECLARATION_CHANGED_NOTHING)));
     }
     warnings
@@ -493,12 +484,8 @@ fn find_test_scope_of_target(config: &EngineConfig, test_patterns: &PathPatternM
     if !config.detect_tests {
         return DirectoryScope::default();
     }
-    if let Some(scope) = known.get(&(directory.to_path_buf(), names_root)) {
-        return *scope;
-    }
-    let scope = DirectoryScope::of_target(directory, names_root, test_patterns);
-    known.insert((directory.to_path_buf(), names_root), scope);
-    scope
+    *known.entry((directory.to_path_buf(), names_root))
+            .or_insert_with(|| DirectoryScope::of_target(directory, names_root, test_patterns))
 }
 
 // A language nobody wrote a file in would take a row in every report and add nothing to any figure.
