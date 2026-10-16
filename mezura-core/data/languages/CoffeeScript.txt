@@ -1,0 +1,30 @@
+Language
+CoffeeScript
+
+Extensions
+coffee
+
+Shebangs
+coffee
+
+String symbols
+" '
+
+Multi line string symbols
+""" '''
+
+Escape character
+\
+
+Comment symbols
+# ####
+Multi line comment start
+###
+Multi line comment end
+###
+
+Keyword
+    NAME
+    classes
+    ALIASES
+    class

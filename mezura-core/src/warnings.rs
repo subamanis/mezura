@@ -30,8 +30,8 @@ pub enum Code {
     LanguageClaimsNothing,
     /// Every extension and name a language claims went to another one, so no file can reach it.
     LanguageLostEveryClaim,
-    /// A block comment whose opening and closing symbols are the same text, which the scan cannot
-    /// tell apart, so the pair never fires and its comments are counted as code.
+    /// A nesting block comment whose opening and closing symbols are the same text, which cannot
+    /// be told apart, so the pair never fires and its comments are counted as code.
     CommentPairNeverCloses,
     /// A language file could not be read or does not parse, so that whole language is missing.
     LanguageFileUnreadable,

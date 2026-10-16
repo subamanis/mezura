@@ -391,22 +391,20 @@ fn find_unknown_forced_languages(by_name: &HashMap<String, Language>,
             .collect()
 }
 
-// With both halves written the same, Smalltalk's '"like this"', every position holds an opening and
-// a closing at once and no two of them are ever paired. The pair goes and the language stays.
+// A nesting pair with both halves written the same cannot tell an opening that deepens the block
+// from the closing that ends it. The pair goes and the language stays.
 fn drop_the_pairs_that_never_fire(languages: &mut [Language]) -> Vec<Warning> {
     let mut reported = Vec::new();
     for language in languages.iter_mut() {
-        for pairs in [&mut language.multiline_comments, &mut language.nesting_comments] {
-            pairs.retain(|(start, end)| {
-                if start != end {
-                    return true;
-                }
-                reported.push(Warning::new(warnings::Code::CommentPairNeverCloses, &language.name,
-                        format!("'{}' opens and closes a block comment with the same '{start}', which \
-                                cannot be told apart, so that pair was dropped and its comments are counted as code.", language.name)));
-                false
-            });
-        }
+        language.nesting_comments.retain(|(start, end)| {
+            if start != end {
+                return true;
+            }
+            reported.push(Warning::new(warnings::Code::CommentPairNeverCloses, &language.name,
+                    format!("'{}' opens and closes a nesting block comment with the same '{start}', which \
+                            cannot be told apart, so that pair was dropped and its comments are counted as code.", language.name)));
+            false
+        });
     }
 
     reported
@@ -906,9 +904,10 @@ mod language_selection_tests {
                 reported.iter().find(|x| x.subject == "Claims-Nothing").map(|x| x.code));
     }
 
-    // Smalltalk's '"like this"'.
+    // Smalltalk's '"like this"' closes at its next quote, and only a pair that nests has nothing to
+    // tell its openings from its closings by.
     #[test]
-    fn a_comment_pair_written_the_same_at_both_ends_is_dropped_and_reported() {
+    fn a_nesting_pair_written_the_same_at_both_ends_is_dropped_and_reported_and_a_plain_one_is_kept() {
         let mut languages = vec![
             Language::new("Smalltalky", ["stk"], StringRules::escaping_nothing(), [""; 0],
                     &[("\"", "\""), ("/*", "*/")], []),
@@ -917,14 +916,15 @@ mod language_selection_tests {
 
         let reported = drop_the_pairs_that_never_fire(&mut languages);
 
-        assert_eq!(vec![("/*".to_owned(), "*/".to_owned())], languages[0].multiline_comments,
+        assert_eq!(vec![("\"".to_owned(), "\"".to_owned()), ("/*".to_owned(), "*/".to_owned())],
+                languages[0].multiline_comments);
+        assert_eq!(vec![("/*".to_owned(), "*/".to_owned())], languages[1].multiline_comments,
                 "the pair that works was taken away with the one that does not");
-        assert_eq!(vec![("/*".to_owned(), "*/".to_owned())], languages[1].multiline_comments);
-        assert!(languages[1].nesting_comments.is_empty(), "a nesting pair is refused on the same rule");
+        assert!(languages[1].nesting_comments.is_empty());
 
-        assert_eq!(2, reported.len(), "{reported:?}");
-        assert!(reported.iter().all(|x| x.code == warnings::Code::CommentPairNeverCloses), "{reported:?}");
-        assert_eq!(vec!["Smalltalky", "Rust"], reported.iter().map(|x| x.subject.as_str()).collect::<Vec<_>>());
+        assert_eq!(1, reported.len(), "{reported:?}");
+        assert_eq!(warnings::Code::CommentPairNeverCloses, reported[0].code);
+        assert_eq!("Rust", reported[0].subject);
         assert_eq!(warnings::Affects::Counts, reported[0].affects(),
                 "the comments of that language land in the code, so the numbers moved");
     }

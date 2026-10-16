@@ -24,7 +24,8 @@ pub struct Language {
     pub strings : StringRules,
     /// The symbols that make the rest of the line a comment.
     pub comment_symbols : Vec<String>,
-    /// Block comments, opener and closer, ending at the first closer.
+    /// Block comments, opener and closer, ending at the first closer. Both halves may be one
+    /// symbol, Smalltalk's `"` and CoffeeScript's `###`.
     pub multiline_comments : Vec<(String, String)>,
     /// The pairs that nest inside themselves, so a closer only ends the block when it has closed
     /// as many as were opened: OCaml's whole comment syntax, D's `/+ +/` beside its plain `/* */`.
@@ -285,6 +286,10 @@ impl Language {
 
     pub(crate) fn comment_is_leveled(&self, symbol: u8) -> bool {
         matches!(self.get_comment_pair_of(symbol), CommentPair::Leveled(_))
+    }
+
+    pub(crate) fn comment_closes_with_its_opener(&self, symbol: u8) -> bool {
+        matches!(self.get_comment_pair_of(symbol), CommentPair::Plain { start, end } if start == end)
     }
 
     // The whole width of one occurrence, which for a leveled pair depends on how many '=' it

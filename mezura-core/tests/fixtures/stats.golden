@@ -1,4 +1,4 @@
-files=87 lines=1152 code=622 comments=268
+files=89 lines=1199 code=645 comments=277
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -56,6 +56,10 @@ Clojure
   files=1 lines=11 code=6 comments=2
   words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0
   functions=2 macros=1 namespaces=1
+CoffeeScript
+  files=1 lines=23 code=10 comments=5
+  words_in_code=8 string_content=2 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=1 punctuation_in_comment=5 blank=2 blank_in_comment=0 blank_in_string=0
+  classes=1
 D
   files=1 lines=16 code=6 comments=7
   words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=7 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
@@ -265,6 +269,9 @@ Slang
   files=1 lines=10 code=4 comments=3
   words_in_code=4 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
   interfaces=1 structs=1
+Smalltalk
+  files=1 lines=24 code=13 comments=4
+  words_in_code=12 string_content=1 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=3 punctuation_in_comment=2 blank=2 blank_in_comment=0 blank_in_string=0
 Solidity
   files=1 lines=16 code=6 comments=4
   words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=3 punctuation_in_comment=0 blank=3 blank_in_comment=0 blank_in_string=0

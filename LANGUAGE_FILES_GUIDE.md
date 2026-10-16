@@ -150,6 +150,15 @@ A language can declare several pairs, matched by position, and only the closer o
 opened a block ends it. Pascal writes both `{ }` and `(* *)`, so a stray `*)` inside a `{ }` comment
 is text.
 
+A block whose two ends are the same symbol, Smalltalk's `"like this"` or CoffeeScript's `###`, is
+declared like any other `Multi line` pair, with the symbol written on both lines. The first one
+opens the block and the next one closes it, wherever it stands on the line, so `### a ### x = 1` is
+code from `x` on. Only a `Multi line` pair can be written this way, since a `Self-nesting` pair with
+the same symbol at both ends has nothing to tell an opening that deepens it from the closing that
+ends it, and is dropped with a warning. Where the language reads a longer run of the symbol as a
+line comment, as CoffeeScript reads `####`, declare that run as a line comment too, so that a
+banner of hashes opens nothing.
+
 A `*` after a character means "any number of that character here", which declares Lua's `--[[ ]]`,
 `--[=[ ]=]` and every level above in one line:
 

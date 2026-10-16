@@ -29,6 +29,8 @@ Main changes:
   -> '.t' files are counted as Perl.
   -> Rust's raw strings past one hash, 'r##"..."##', and Lua's long bracket strings past the plain
       form, '[==[ ]==]', are read as the strings they are, so a quote inside one opens nothing.
+  -> CoffeeScript ('.coffee') and Smalltalk ('.st') are counted. Their block comments open and
+      close with one symbol, '###' and '"', which a language file may now declare.
 
 Bugfixes:
   -> Where block comments nest, an opener sharing a byte with a closer, '/*/*/' in Rust, is read

@@ -44,6 +44,10 @@ New:
   counted run, read from a `*` in `Paired string openers`: Rust's `r#*"` with `"#*` and Lua's `[=*[`
   with `]=*]`. `LeveledPair::of` reads the byte of the run from the written form, so a comment pair
   may count a character other than `=`, and a closer may end in its run.
+- A plain block comment pair may carry the same symbol at both ends, Smalltalk's `"` and
+  CoffeeScript's `###`, and the next one met inside the block closes it. CoffeeScript and
+  Smalltalk ship as languages. `comment-pair-never-closes` now reports only a self-nesting pair
+  written that way.
 
 Changed:
 

@@ -405,6 +405,10 @@ impl ScanPlan {
         for (i, pair) in language.comment_pairs().enumerate() {
             let index = i as u8;
             match pair {
+                // Searched once, as a start, and the walk reads one met inside its own block as the end
+                CommentPair::Plain { start, end } if start == end => {
+                    entries.push(PlanEntry::of(COM_STARTS, index, ROLE_EITHER, start.as_bytes()));
+                },
                 CommentPair::Plain { start, end } | CommentPair::Nesting { start, end } => {
                     entries.push(PlanEntry::of(COM_STARTS, index, ROLE_EITHER, start.as_bytes()));
                     entries.push(PlanEntry::of(COM_ENDS, index, ROLE_EITHER, end.as_bytes()));
@@ -1956,15 +1960,16 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language
             return (LineInfo::with_open_string(false, open_str_symbol), OpenedHere::default());
         },
         // Only the end of the pair that opened the block closes it, so a line holding none of
-        // those is comment through and through, whatever other symbols sit on it. A start of a
-        // nesting pair counts as an event too, since it changes the depth.
+        // those is comment through and through, whatever other symbols sit on it. A start of the
+        // same pair counts as an event too when the pair nests, since it changes the depth, and
+        // when the pair closes with its opener, since it is the end.
         Some((open_pair, carried)) => {
             let leveled = language.comment_is_leveled(open_pair);
             let has_end = com_end_indices.iter().any(|(_, symbol, level)|
                     *symbol == open_pair && (!leveled || *level == carried));
-            let deepens = language.comment_nests(open_pair)
-                    && com_start_indices.iter().any(|(_, symbol, _)| *symbol == open_pair);
-            if !has_end && !deepens {
+            let meets_its_start = com_start_indices.iter().any(|(_, symbol, _)| *symbol == open_pair)
+                    && (language.comment_nests(open_pair) || language.comment_closes_with_its_opener(open_pair));
+            if !has_end && !meets_its_start {
                 note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::Comment);
                 return (LineInfo::with_open_comment(false, false, open_pair, carried), OpenedHere::default());
             }
@@ -2079,11 +2084,19 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language
             // is safe: everything before the closing position is dead once the block closes there.
             // For a pair that nests, each of its own starts before an end deepens the block, and
             // the closer is the end at which the count comes back to zero. For a leveled pair,
-            // 'carried' is the level and only an end with the same count is looked at.
+            // 'carried' is the level and only an end with the same count is looked at. A pair
+            // closing with its opener has no ends, and its next start is the closer.
             let leveled = language.comment_is_leveled(open_pair);
             let nests = language.comment_nests(open_pair);
+            let closes_with_its_opener = language.comment_closes_with_its_opener(open_pair);
             let mut depth = if leveled { 1 } else { carried };
             let closing = loop {
+                if closes_with_its_opener {
+                    while start_com_counter < com_start_indices.len() && com_start_indices[start_com_counter].1 != open_pair {
+                        start_com_counter += 1;
+                    }
+                    break com_start_indices.get(start_com_counter).map(|(at, _, _)| *at);
+                }
                 while end_com_counter < com_end_indices.len()
                         && (com_end_indices[end_com_counter].1 != open_pair
                             || (leveled && com_end_indices[end_com_counter].2 != carried)) {
@@ -2179,11 +2192,13 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language
                 push_code(code_ranges, line, slice_start_index, this_index);
                 note_span::<EXPLAIN>(spans, region_from, this_index, SpanKind::Code);
                 region_from = this_index;
-                // A nesting or leveled pair falls through to the open branch even with no ends
-                // left: further starts of a nesting one still deepen the carried state, and the
-                // leveled one carries its level either way
+                // A nesting, leveled or self-closing pair falls through to the open branch even
+                // with no ends left. Further starts of a nesting one still deepen the carried
+                // state, the leveled one carries its level either way, and one closing with its
+                // opener finds its end among the starts
                 if !has_more_ends(end_com_counter) && !language.comment_nests(this_symbol)
-                        && !language.comment_is_leveled(this_symbol) {
+                        && !language.comment_is_leveled(this_symbol)
+                        && !language.comment_closes_with_its_opener(this_symbol) {
                     note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::Comment);
                     return (LineInfo::with_open_comment(has_string_literal || !code_ranges.is_empty(),
                             has_string_literal, this_symbol, 1), OpenedHere { comment: true, ..OpenedHere::default() });
@@ -2456,7 +2471,10 @@ fn resolve_comment_and_multiline_start_overlap(line: &str, language: &Language,
         Some((_, symbol, level)) => longest_comment_at(*at) >= language.comment_start_len(*symbol, *level),
         None => true
     });
-    com_start_indices.retain(|(at, _, _)| !comment_indices.contains(at));
+    // A start of a pair closing with its opener stays beside the longer comment that won, since
+    // inside its own block it is the end, and outside it the walk meets the comment first
+    com_start_indices.retain(|(at, symbol, _)| !comment_indices.contains(at)
+            || language.comment_closes_with_its_opener(*symbol));
 }
 
 // A comment symbol beginning inside a multiline end symbol is part of it and not a comment of its
@@ -3159,6 +3177,76 @@ mod tests {
         assert_eq!(TextInfo::none_all(false), bounds_multi("# just a comment", &POWERSHELL, None, None));
         // and the block closes on '#>' without its '#' reading as a comment
         assert_eq!(TextInfo::from_slice(" $y = 2"), bounds_multi("#> $y = 2", &POWERSHELL, Some(0), None));
+    }
+
+    // One symbol at both ends of a block, which is CoffeeScript's '###' beside its '#'. A run of
+    // four is a line comment and no fence, which is the CoffeeScript lexer's own rule.
+    static COFFEE : LazyLock<Language> = LazyLock::new(|| Language::new("coffee", ["coffee"],
+            StringRules::escaping_with(b'\\').with_symbols(["\"", "'"]), ["#", "####"],
+            &[("###", "###")], []));
+
+    #[test]
+    fn a_block_written_with_one_symbol_at_both_ends_opens_at_one_and_closes_at_the_next() {
+        assert_eq!(TextInfo::none_all(false), bounds_multi("### a ###", &COFFEE, None, None));
+        assert_eq!(TextInfo::new(Some(" x = 1 ".to_owned()), false, Some((0, 1)), None),
+                bounds_multi("### a ### x = 1 ### b", &COFFEE, None, None));
+        assert_eq!(TextInfo::with_open_comment(0), bounds_multi("### a", &COFFEE, None, None));
+
+        // inside the block a '#' is text, and the next fence closes it
+        assert_eq!(TextInfo::with_open_comment(0), bounds_multi("# not a line comment", &COFFEE, Some(0), None));
+        assert_eq!(TextInfo::from_slice(" y = 2"), bounds_multi("# text ### y = 2", &COFFEE, Some(0), None));
+        assert_eq!(TextInfo::new(Some(" a ".to_owned()), false, Some((0, 1)), None),
+                bounds_multi("### a ###", &COFFEE, Some(0), None));
+
+        // a fence behind a line comment or inside a string is text
+        assert_eq!(TextInfo::from_slice("x = 1 "), bounds_multi("x = 1 # ### not a block", &COFFEE, None, None));
+        assert_eq!(TextInfo::from_slice_w_literal("x = "),
+                bounds_multi("x = \"###\" ### c ###", &COFFEE, None, None));
+    }
+
+    #[test]
+    fn a_block_with_one_symbol_at_both_ends_crosses_lines_and_one_never_closed_runs_to_the_end() {
+        let stats = parse_lines_whole("###\nA block comment\nover three lines\n###\nx = 1\n", &COFFEE);
+        assert_eq!((1, 2), (stats.classes.words_in_code, stats.classes.words_in_comment));
+
+        let stats = parse_lines_whole("x = 1\n### never closed\ny = 2\nz = 3\n", &COFFEE);
+        assert_eq!((1, 3), (stats.classes.words_in_code, stats.classes.words_in_comment));
+    }
+
+    // Outside a block a banner opens nothing whatever its length, and inside one its first three
+    // hashes close it. Declared with '#' alone, a banner of eleven holds three fences and the
+    // third leaves a block open over the code below it.
+    #[test]
+    fn a_run_of_hashes_longer_than_the_fence_is_a_line_comment_outside_a_block_and_closes_one_inside() {
+        let stats = parse_lines_whole("###########\n# Section\n###########\nfoo = 1\n##########\nbar = 2\n", &COFFEE);
+        assert_eq!((2, 1), (stats.classes.words_in_code, stats.classes.words_in_comment));
+
+        let stats = parse_lines_whole("###\ndoc\n####\nx = 1\n", &COFFEE);
+        assert_eq!((1, 1), (stats.classes.words_in_code, stats.classes.words_in_comment));
+
+        let fence_alone = Language::new("coffee", ["coffee"], build_backslashed_quotes(), ["#"],
+                &[("###", "###")], []);
+        let stats = parse_lines_whole("###########\nfoo = 1\n", &fence_alone);
+        assert_eq!((0, 1), (stats.classes.words_in_code, stats.classes.words_in_comment));
+    }
+
+    // Smalltalk's comment is '"' at both ends, its string doubles the quote it holds, and '$"' is
+    // the character literal of a quote, which opens nothing.
+    static SMALLTALK : LazyLock<Language> = LazyLock::new(|| Language::new("smalltalk", ["st"],
+            StringRules::escaping_nothing().with_raw_multiline_strings(["'"]), [""; 0], &[("\"", "\"")], [])
+            .with_cancelled_symbols(&[("\"", b'$')]));
+
+    #[test]
+    fn a_smalltalk_comment_opens_and_closes_with_one_quote_and_its_string_doubles_its_own() {
+        assert_eq!(TextInfo::from_slice_w_literal(" x := ."),
+                bounds_multi("\"a comment\" x := 'it''s'.", &SMALLTALK, None, None));
+        assert_eq!(TextInfo::from_slice(" x := 1."), bounds_multi("\"it's\" x := 1.", &SMALLTALK, None, None));
+        assert_eq!(TextInfo::from_slice("y := $\" printString."),
+                bounds_multi("y := $\" printString.", &SMALLTALK, None, None));
+
+        assert_eq!(TextInfo::with_open_comment(0), bounds_multi("\"a comment", &SMALLTALK, None, None));
+        assert_eq!(TextInfo::from_slice(" y := 2."),
+                bounds_multi("over two lines\" y := 2.", &SMALLTALK, Some(0), None));
     }
 
     // Two block comment pairs at once, which is Pascal's shape ('{ }' beside '(* *)') and D's
@@ -4422,7 +4510,7 @@ mod tests {
         // A fixture in a language whose comments are blocks carries the closer on the header line,
         // and the closer is where the declarations end rather than a malformed one. Anything else
         // that is not a 'name=count' is a typo and refuses the header, which is the point.
-        let after_marker = ["-->", "*/", "*)", "-}", "]]", "}"].iter()
+        let after_marker = ["-->", "*/", "*)", "-}", "]]", "}", "\""].iter()
                 .fold(after_marker, |text, closer| text.split(closer).next().unwrap_or(text));
         let (counts, language) = match after_marker.split_once(LANGUAGE_FIELD) {
             Some((before, name)) => (before, Some(name.trim().to_owned())),
