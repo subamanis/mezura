@@ -236,8 +236,9 @@ at the root, says otherwise for that one folder. Everywhere else, `examples/`, `
 
 **Refused.** Doc tests, since a `///` fenced block is a comment. Tests a macro writes,
 `make_test!(a, b, c);` being one line of code that only a compiler can expand. Tests written at
-build time and pulled in with `include!`. A module declared under `#[path = "..."]`, which is not
-followed at all, since the file it names can sit anywhere; declare that file with `--tests`.
+build time and pulled in with `include!`. A module declared under `#[path = "..."]`, or under a
+`cfg_attr` that applies one, is not followed at all, since the file it names can sit anywhere;
+declare the files it can lead to with `--tests`.
 
 ### D
 

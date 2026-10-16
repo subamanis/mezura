@@ -1,13 +1,12 @@
 // The Rust-shaped attribute, read the same way for every language that declares '#['. Yes for a
 // name holding test, for a cfg holding test under no not, and for a cfg_attr applying the former
 // under the latter.
-use memchr::memmem;
-
-use super::{begins_with, find_word_end, is_word_byte, is_word_start, skip_whitespace};
+use super::{begins_with, build_byte_table, find_word_end, is_word_byte, is_word_start, skip_whitespace};
 use super::walk::Marker;
 
+pub(super) const RAW_IDENTIFIER : &[u8] = b"r#";
 // Past this many bytes an unclosed '#[' is a stray bracket
-pub(super) const MOST_ATTRIBUTE_BYTES : usize = 4_096;
+const MOST_ATTRIBUTE_BYTES : usize = 4_096;
 const OPENERS : [&str; 2] = ["#[", "#!["];
 const CFG : &[u8] = b"cfg";
 const CFG_ATTR : &[u8] = b"cfg_attr";
@@ -17,7 +16,7 @@ const NOT : &[u8] = b"not";
 const LINE_COMMENT : &[u8] = b"//";
 const BLOCK_COMMENT_START : &[u8] = b"/*";
 const BLOCK_COMMENT_END : &[u8] = b"*/";
-const SCAN_STOPS : [bool; 256] = byte_table(b"\"r/()[]");
+const SCAN_STOPS : [bool; 256] = build_byte_table(b"\"'r/()[]");
 const NAME_BYTES : [bool; 256] = {
     let mut table = [false; 256];
     let mut byte = 0;
@@ -27,16 +26,6 @@ const NAME_BYTES : [bool; 256] = {
     }
     table
 };
-
-const fn byte_table(bytes: &[u8]) -> [bool; 256] {
-    let mut table = [false; 256];
-    let mut at = 0;
-    while at < bytes.len() {
-        table[bytes[at] as usize] = true;
-        at += 1;
-    }
-    table
-}
 
 pub(super) fn is_opener(marker: &str) -> bool {
     OPENERS.iter().any(|opener| opener.len() == marker.len() && begins_with(marker.as_bytes(), opener.as_bytes()))
@@ -80,6 +69,10 @@ pub(super) fn find_matching_bracket(bytes: &[u8], open: usize, closer: u8) -> Op
             at = past;
             continue;
         }
+        if byte == b'\'' {
+            at = skip_character_literal(bytes, at);
+            continue;
+        }
         if byte == opener {
             depth += 1;
         } else if byte == closer {
@@ -91,25 +84,44 @@ pub(super) fn find_matching_bracket(bytes: &[u8], open: usize, closer: u8) -> Op
     None
 }
 
-// Rust's own comments, since this is Rust's attribute
-fn skip_comment(bytes: &[u8], at: usize, limit: usize) -> Option<usize> {
+// Rust's comments, which nest. The pairs are read left to right as the lexer reads them, so '/*/'
+// opens and '*/*' closes.
+pub(super) fn skip_comment(bytes: &[u8], at: usize, limit: usize) -> Option<usize> {
     let rest = &bytes[at..limit];
     if rest.starts_with(LINE_COMMENT) {
         return Some(memchr::memchr(b'\n', rest).map_or(limit, |newline| at + newline));
     }
-    if rest.starts_with(BLOCK_COMMENT_START) {
-        return Some(memmem::find(&rest[BLOCK_COMMENT_START.len()..], BLOCK_COMMENT_END)
-                .map_or(limit, |end| at + BLOCK_COMMENT_START.len() + end + BLOCK_COMMENT_END.len()));
+    if !rest.starts_with(BLOCK_COMMENT_START) { return None; }
+    let mut depth = 0usize;
+    let mut from = at;
+    while let Some(found) = memchr::memchr2(b'/', b'*', &bytes[from..limit]) {
+        let pair = from + found;
+        if pair + 1 == limit { break; }
+        from = match &bytes[pair..pair + 2] {
+            BLOCK_COMMENT_START => {
+                depth += 1;
+                pair + 2
+            },
+            BLOCK_COMMENT_END => {
+                depth -= 1;
+                if depth == 0 { return Some(pair + 2); }
+                pair + 2
+            },
+            _ => pair + 1
+        };
     }
-    None
+    Some(limit)
 }
 
-fn starts_a_raw_string(bytes: &[u8], at: usize) -> bool {
-    let preceded_by_a_word = at > 0 && is_word_byte(bytes[at - 1]);
-    !preceded_by_a_word && matches!(bytes.get(at + 1), Some(b'"') | Some(b'#'))
+pub(super) fn skip_whitespace_and_comments(bytes: &[u8], from: usize) -> usize {
+    let mut at = skip_whitespace(bytes, from);
+    while bytes.get(at) == Some(&b'/') && let Some(past) = skip_comment(bytes, at, bytes.len()) {
+        at = skip_whitespace(bytes, past);
+    }
+    at
 }
 
-fn skip_string(bytes: &[u8], at: usize, limit: usize) -> Option<usize> {
+pub(super) fn skip_string(bytes: &[u8], at: usize, limit: usize) -> Option<usize> {
     if bytes[at] == b'"' {
         let mut i = at + 1;
         while i < limit {
@@ -134,15 +146,60 @@ fn skip_string(bytes: &[u8], at: usize, limit: usize) -> Option<usize> {
     None
 }
 
+// A quote that closes nothing two characters on is a lifetime or a label, 'a and 'outer
+pub(super) fn skip_character_literal(bytes: &[u8], quote: usize) -> usize {
+    if bytes.get(quote + 1) == Some(&b'\\') {
+        let from = (quote + 3).min(bytes.len());
+        return match memchr::memchr2(b'\'', b'\n', &bytes[from..]) {
+            Some(found) if bytes[from + found] == b'\'' => from + found + 1,
+            _ => quote + 1
+        };
+    }
+    let width = match bytes.get(quote + 1) {
+        None => return quote + 1,
+        Some(&byte) if byte < 0x80 => 1,
+        Some(&byte) if byte >= 0xF0 => 4,
+        Some(&byte) if byte >= 0xE0 => 3,
+        Some(_) => 2
+    };
+    match bytes.get(quote + 1 + width) == Some(&b'\'') {
+        true => quote + 2 + width,
+        false => quote + 1
+    }
+}
+
+// Under any predicate, since one that holds in some build is enough
+pub(super) fn is_applied_through_cfg_attr(body: &[u8], name: &[u8]) -> bool {
+    let (attribute_name, rest) = split_name(body);
+    if attribute_name != CFG_ATTR { return false; }
+    let Some((from, to)) = find_arguments(rest) else { return false };
+    let mut items = split_at_top_level_commas(&rest[from..to]);
+    items.next();
+    items.any(|item| {
+        let start = skip_whitespace_and_comments(item, 0);
+        let item = item[start..].strip_prefix(RAW_IDENTIFIER).unwrap_or(&item[start..]);
+        split_name(item).0 == name || is_applied_through_cfg_attr(item, name)
+    })
+}
+
+// 'r#type' is a name, so the hashes have to end in a quote
+pub(super) fn starts_a_raw_string(bytes: &[u8], at: usize) -> bool {
+    let prefix = if at > 0 && matches!(bytes[at - 1], b'b' | b'c') { at - 1 } else { at };
+    let preceded_by_a_word = prefix > 0 && is_word_byte(bytes[prefix - 1]);
+    let mut quote = at + 1;
+    while bytes.get(quote) == Some(&b'#') { quote += 1; }
+    !preceded_by_a_word && bytes.get(quote) == Some(&b'"')
+}
+
 fn split_name(body: &[u8]) -> (&[u8], &[u8]) {
-    let start = skip_whitespace(body, 0);
+    let start = skip_whitespace_and_comments(body, 0);
     let mut at = start;
     while at < body.len() && NAME_BYTES[body[at] as usize] { at += 1; }
     (&body[start..at], &body[at..])
 }
 
 fn find_arguments(rest: &[u8]) -> Option<(usize, usize)> {
-    let at = skip_whitespace(rest, 0);
+    let at = skip_whitespace_and_comments(rest, 0);
     if rest.get(at) != Some(&b'(') { return None; }
     let close = find_matching_bracket(rest, at, b')')?;
     Some((at + 1, close))
@@ -214,6 +271,8 @@ fn split_at_top_level_commas(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
             }
             match bytes[at] {
                 b'"' => at = skip_string(bytes, at, bytes.len()).unwrap_or(bytes.len()),
+                b'r' if starts_a_raw_string(bytes, at) => at = skip_string(bytes, at, bytes.len()).unwrap_or(bytes.len()),
+                b'\'' => at = skip_character_literal(bytes, at),
                 b'(' | b'[' => { depth += 1; at += 1; },
                 b')' | b']' => { depth = depth.saturating_sub(1); at += 1; },
                 b',' if depth == 0 => {
@@ -290,6 +349,10 @@ mod tests {
         assert_eq!(read_marker_of(over_lines), Some((false, over_lines.len())));
         let block = "#[cfg(/* ] */ test)]";
         assert_eq!(read_marker_of(block), Some((false, block.len())));
+        let nested = "#[cfg(/* a /* ] */ ] */ test)]";
+        assert_eq!(read_marker_of(nested), Some((false, nested.len())));
+        let negated_in_a_nested_comment = "#[cfg(/* a /* b */ not( */ test)]";
+        assert_eq!(read_marker_of(negated_in_a_nested_comment), Some((false, negated_in_a_nested_comment.len())));
         let negated_in_a_comment = "#[cfg(/* not( */ test)]";
         assert_eq!(read_marker_of(negated_in_a_comment), Some((false, negated_in_a_comment.len())));
         let applied_in_a_comment = "#[cfg_attr(test, /* test, */ derive(Debug))]";
@@ -302,8 +365,32 @@ mod tests {
         assert_eq!(read_marker_of("#[doc = \"] #[test]\"]"), None);
         assert_eq!(read_marker_of("#[test_case(\"]\")]"), Some((false, 17)));
         assert_eq!(read_marker_of("#[test_case(r#\"]\"#)]"), Some((false, 20)));
+        assert_eq!(read_marker_of("#[test_case(r#type)]"), Some((false, 20)));
         assert_eq!(read_marker_of("#[test_case(\"\\\"]\")]"), Some((false, 19)));
         assert_eq!(read_marker_of("#[test"), None);
         assert!(is_opener("#[") && is_opener("#![") && !is_opener("#") && !is_opener("unittest"));
+    }
+
+    #[test]
+    fn a_comment_before_a_name_or_its_arguments_hides_nothing() {
+        for attribute in ["#[/* a note */ test]", "#[cfg /* a note */ (test)]", "#[cfg_attr(test, /* a note */ test)]",
+                "#[cfg_attr(test,\n    // a note\n    test)]"] {
+            assert_eq!(read_marker_of(attribute), Some((false, attribute.len())), "{attribute}");
+        }
+    }
+
+    #[test]
+    fn a_comma_inside_a_character_or_a_raw_string_of_a_cfg_attr_splits_nothing() {
+        assert_eq!(read_marker_of("#[cfg_attr(test, rustfmt::skip(')', test_x))]"), None);
+        let raw = "#[cfg_attr(test, doc = r\"\\\", test_case)]";
+        assert_eq!(read_marker_of(raw), Some((false, raw.len())));
+    }
+
+    #[test]
+    fn a_bracket_inside_a_character_of_the_attribute_does_not_close_it() {
+        for attribute in ["#[test_case(']')]", "#[test_case('[')]", "#[test_case('\\u{10_FFFF}', '\"')]",
+                "#[test_case(br\"\\\", ']')]"] {
+            assert_eq!(read_marker_of(attribute), Some((false, attribute.len())), "{attribute}");
+        }
     }
 }

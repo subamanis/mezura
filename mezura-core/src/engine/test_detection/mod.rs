@@ -8,6 +8,16 @@ pub(crate) use module_graph::{Declaration, FilesOnDisk, ModuleDeclarations, Modu
 pub(crate) use path_rules::{BuildFilesSeen, DirectoryScope, TestScope, TestsByPath, find_test_directory_along};
 pub(crate) use walk::TestWalk;
 
+pub(super) const fn build_byte_table(bytes: &[u8]) -> [bool; 256] {
+    let mut table = [false; 256];
+    let mut at = 0;
+    while at < bytes.len() {
+        table[bytes[at] as usize] = true;
+        at += 1;
+    }
+    table
+}
+
 pub(super) const fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
 }

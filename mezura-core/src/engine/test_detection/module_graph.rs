@@ -1,6 +1,7 @@
-// The declarations are read beside the extent walk and one row per file is kept, so the graph is
-// walked once the counting is over and which thread counted the declaring file and which the
-// declared one changes nothing.
+// Rust's module declarations and its rules for where the file one names sits, reached through the
+// MODULES keyword of a language file. The declarations are read beside the extent walk and one row
+// per file is kept, so the graph is walked once the counting is over and which thread counted the
+// declaring file and which the declared one changes nothing.
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -11,18 +12,18 @@ use crate::domain::FileStats;
 use crate::engine::file_parser::{BYTE_ORDER_MARK, NestedLanguageLookup, TestReport, read_module_declarations};
 use crate::engine::modules::ModuleId;
 use crate::engine::targets::spell_out;
-use super::{attribute, find_next_brace, find_word_end, is_word_byte, is_word_start, skip_whitespace};
+use super::attribute::RAW_IDENTIFIER;
+use super::{attribute, build_byte_table, find_next_brace, find_word_end, is_word_byte, is_word_start, skip_whitespace};
 
 // The files whose declarations resolve beside them. Any other file's resolve under a folder of its
 // own name, then beside it for a crate root.
 const ROOT_STEMS : [&str; 3] = ["lib", "main", "mod"];
 const MODULE_FILE_STEM : &str = "mod";
 const PUB : &[u8] = b"pub";
-const RAW_IDENTIFIER : &[u8] = b"r#";
 // A declaration under it names a file anywhere, so it is not followed at all, since the default
 // place may hold a file another declaration names
 const PATH_ATTRIBUTE : &[u8] = b"path";
-const COMMENT_STARTS : [&[u8]; 3] = [b"//", b"/*", b"*"];
+const COMMENT_AND_ATTRIBUTE_STOPS : [bool; 256] = build_byte_table(b"/\"'#[]");
 const MOST_HOPS : usize = 64;
 const EACH_BYTE : u64 = 0x0101_0101_0101_0101;
 const HIGH_BITS : u64 = 0x8080_8080_8080_8080;
@@ -126,6 +127,7 @@ pub(crate) struct ModuleDeclarations<'a> {
     keyword_at: Vec<usize>,
     next: usize,
     next_brace: usize,
+    comments_and_attributes: CommentsAndAttributes,
 }
 
 impl<'a> ModuleDeclarations<'a> {
@@ -135,7 +137,8 @@ impl<'a> ModuleDeclarations<'a> {
             false => memchr::memmem::find_iter(contents.as_bytes(), keyword.as_bytes()).collect()
         };
         ModuleDeclarations { keyword: keyword.as_bytes(), contents: contents.as_bytes(), found: Vec::new(),
-                open: Vec::new(), depth: 0, keyword_at, next: 0, next_brace: 0 }
+                open: Vec::new(), depth: 0, keyword_at, next: 0, next_brace: 0,
+                comments_and_attributes: CommentsAndAttributes::default() }
     }
 
     #[inline(always)]
@@ -167,14 +170,10 @@ impl<'a> ModuleDeclarations<'a> {
             self.next += 1;
         }
         if self.open.is_empty() && !holds_the_keyword { return; }
-        let Some(&(first, _)) = ranges.first() else { return };
         let line = &raw_line.as_bytes()[lead..];
-        let first = match line_start + lead + first == 0 && line.starts_with(BYTE_ORDER_MARK) {
-            true => skip_whitespace(line, BYTE_ORDER_MARK.len()),
-            false => first
-        };
+        let Some(first) = find_first_code_byte(line, ranges, line_start + lead == 0) else { return };
         if self.open.is_empty() && !line.get(first).is_some_and(|byte| matches!(byte, b'm' | b'p' | b'#')) { return; }
-        self.read_line(line_start, line, ranges, is_test, holds_the_keyword, first,
+        self.read_line(line_start + lead + first, line, ranges, is_test, holds_the_keyword, first,
                 last_keyword.saturating_sub(line_start + lead));
         if !self.open.is_empty() {
             self.next_brace = find_next_brace(self.contents, line_end);
@@ -185,11 +184,11 @@ impl<'a> ModuleDeclarations<'a> {
         self.found
     }
 
-    fn read_line(&mut self, line_start: usize, line: &[u8], ranges: &[(usize, usize)], is_test: bool,
+    fn read_line(&mut self, declaration_at: usize, line: &[u8], ranges: &[(usize, usize)], is_test: bool,
             holds_the_keyword: bool, first: usize, last_keyword: usize) {
-        let opened = holds_the_keyword && self.read_declaration(line_start, line, ranges, is_test, first, true);
+        let opened = holds_the_keyword && self.read_declaration(line, ranges, is_test, first, Some(declaration_at));
         if last_keyword > first {
-            self.read_later_declarations(line_start, line, ranges, is_test, last_keyword);
+            self.read_later_declarations(line, ranges, is_test, last_keyword);
             return;
         }
         if self.open.is_empty() && !opened { return; }
@@ -204,8 +203,7 @@ impl<'a> ModuleDeclarations<'a> {
         }
     }
 
-    fn read_later_declarations(&mut self, line_start: usize, line: &[u8], ranges: &[(usize, usize)], is_test: bool,
-            last_keyword: usize) {
+    fn read_later_declarations(&mut self, line: &[u8], ranges: &[(usize, usize)], is_test: bool, last_keyword: usize) {
         let mut counting = !self.open.is_empty();
         for &(from, to) in ranges {
             for at in memchr::memchr3_iter(b'{', b'}', b';', &line[from..to]).map(|at| from + at) {
@@ -215,7 +213,7 @@ impl<'a> ModuleDeclarations<'a> {
                     _ => ()
                 }
                 if at < last_keyword
-                        && self.read_declaration(line_start, line, ranges, is_test, skip_whitespace(line, at + 1), false) {
+                        && self.read_declaration(line, ranges, is_test, skip_whitespace(line, at + 1), None) {
                     counting = true;
                 }
             }
@@ -232,8 +230,8 @@ impl<'a> ModuleDeclarations<'a> {
 
     // The attributes are read over the whole line, since a string inside one is no code range, and
     // what follows them has to sit inside one
-    fn read_declaration(&mut self, line_start: usize, line: &[u8], ranges: &[(usize, usize)], is_test: bool,
-            first: usize, looks_back: bool) -> bool {
+    fn read_declaration(&mut self, line: &[u8], ranges: &[(usize, usize)], is_test: bool, first: usize,
+            looks_back_from: Option<usize>) -> bool {
         let Some((mut at, names_a_path)) = skip_attributes(line, first) else { return false };
         let Some(&(_, to)) = ranges.iter().find(|(from, to)| *from <= at && at < *to) else { return false };
         let code = &line[..to];
@@ -254,7 +252,7 @@ impl<'a> ModuleDeclarations<'a> {
         let Ok(name) = std::str::from_utf8(&code[at..end]) else { return false };
         match code.get(skip_whitespace(code, end)) {
             Some(b';') => {
-                if !names_a_path && !(looks_back && self.is_under_a_path_attribute(line_start)) {
+                if !names_a_path && !looks_back_from.is_some_and(|at| self.is_under_a_path_attribute(at)) {
                     self.found.push(Declaration { name: name.into(),
                             inline_modules: self.open.iter().map(|(name, _)| name.clone()).collect(), seed: is_test });
                 }
@@ -268,50 +266,22 @@ impl<'a> ModuleDeclarations<'a> {
         }
     }
 
-    // The last line of an attribute spanning lines ends in ']'. That attribute is read whole, from the
-    // '#[' whose ']' ends the line, and the look-back goes on above it.
-    fn is_under_a_path_attribute(&self, line_start: usize) -> bool {
-        let mut end = line_start;
-        while end > 0 {
-            let line_end = end - 1;
-            let start = memchr::memrchr(b'\n', &self.contents[..line_end]).map_or(0, |at| at + 1);
-            let line = match start {
-                0 => self.contents[..line_end].strip_prefix(BYTE_ORDER_MARK).unwrap_or(&self.contents[..line_end]),
-                _ => &self.contents[start..line_end]
-            }.trim_ascii();
-            if line.is_empty() || COMMENT_STARTS.iter().any(|comment| line.starts_with(comment)) {
-                end = start;
+    fn is_under_a_path_attribute(&mut self, declaration_at: usize) -> bool {
+        self.comments_and_attributes.read_up_to(self.contents, declaration_at);
+        let mut at = declaration_at;
+        loop {
+            while at > 0 && self.contents[at - 1].is_ascii_whitespace() { at -= 1; }
+            if at == 0 { return false; }
+            if let Some(start) = self.comments_and_attributes.find_comment_holding(at - 1) {
+                at = start;
                 continue;
             }
-            let Some((after, names_a_path)) = skip_attributes(line, 0) else { return false };
-            if after == 0 && line.ends_with(b"]") {
-                let close = start + self.contents[start..line_end].trim_ascii_end().len() - 1;
-                let Some((opener, names_a_path)) = self.find_attributes_closing_at(close, start) else { return false };
-                if names_a_path { return true; }
-                end = opener;
-                continue;
-            }
-            let carries_an_item = after == 0
-                    || (after < line.len() && !COMMENT_STARTS.iter().any(|comment| line[after..].starts_with(comment)));
-            if carries_an_item { return false; }
-            if names_a_path { return true; }
-            end = start;
-        }
-        false
-    }
-
-    fn find_attributes_closing_at(&self, close: usize, end: usize) -> Option<(usize, bool)> {
-        let floor = close.saturating_sub(attribute::MOST_ATTRIBUTE_BYTES).min(end);
-        let mut found = None;
-        for at in memchr::memrchr_iter(b'#', &self.contents[floor..end]).map(|at| floor + at) {
-            let start = memchr::memrchr(b'\n', &self.contents[..at]).map_or(0, |newline| newline + 1);
-            let skipped = if start == 0 && self.contents.starts_with(BYTE_ORDER_MARK) { BYTE_ORDER_MARK.len() } else { start };
-            if skip_whitespace(self.contents, skipped) != at { continue; }
-            if let Some((after, names_a_path)) = skip_attributes(&self.contents[..=close], at) && after == close + 1 {
-                found = Some((start, names_a_path));
+            match self.comments_and_attributes.find_attribute_holding(at - 1) {
+                Some((_, true)) => return true,
+                Some((start, false)) => at = start,
+                None => return false
             }
         }
-        found
     }
 }
 
@@ -513,18 +483,133 @@ fn build_dotted_extension_of(file: &Path) -> String {
     file.extension().map(|extension| format!(".{}", extension.to_string_lossy())).unwrap_or_default()
 }
 
-// Read as Rust's attribute, so a ']' inside a string of one closes nothing
+#[derive(Default)]
+struct CommentsAndAttributes {
+    comments: Vec<(usize, usize)>,
+    attributes: Vec<(usize, usize, bool)>,
+    reading_attribute: Option<usize>,
+    brackets: u32,
+    read_until: usize,
+}
+
+impl CommentsAndAttributes {
+    fn read_up_to(&mut self, contents: &[u8], end: usize) {
+        let mut at = self.read_until;
+        while at < end {
+            if !COMMENT_AND_ATTRIBUTE_STOPS[contents[at] as usize] {
+                at += 1;
+                continue;
+            }
+            at = match contents[at] {
+                b'/' => match attribute::skip_comment(contents, at, contents.len()) {
+                    Some(past) => {
+                        self.comments.push((at, past));
+                        past
+                    },
+                    None => at + 1
+                },
+                b'"' => attribute::skip_string(contents, find_string_start(contents, at), contents.len()).unwrap_or(contents.len()),
+                b'\'' => attribute::skip_character_literal(contents, at),
+                b'#' => self.begin_attribute(contents, at),
+                bracket => {
+                    self.count_bracket(bracket, at);
+                    at + 1
+                }
+            };
+        }
+        self.read_until = at;
+    }
+
+    // The brackets are counted as the file is read, since find_matching_bracket scans up to 4 KB from
+    // each '#[' and a file full of ones that never close pays that for every one. One that never
+    // closes holds nothing.
+    fn begin_attribute(&mut self, contents: &[u8], at: usize) -> usize {
+        if self.reading_attribute.is_some() { return at + 1; }
+        let Some((open, inner)) = find_attribute_bracket(contents, at) else { return at + 1 };
+        self.reading_attribute = Some(self.attributes.len());
+        self.attributes.push((at, at, is_a_path_attribute(contents, open, inner)));
+        self.brackets = 1;
+        open + 1
+    }
+
+    fn count_bracket(&mut self, bracket: u8, at: usize) {
+        let Some(index) = self.reading_attribute else { return };
+        if bracket == b'[' {
+            self.brackets += 1;
+            return;
+        }
+        self.brackets -= 1;
+        if self.brackets == 0 {
+            self.attributes[index].1 = at + 1;
+            self.reading_attribute = None;
+        }
+    }
+
+    fn find_comment_holding(&self, at: usize) -> Option<usize> {
+        let after = self.comments.partition_point(|&(start, _)| start <= at);
+        let &(start, end) = self.comments.get(after.checked_sub(1)?)?;
+        (at < end).then_some(start)
+    }
+
+    fn find_attribute_holding(&self, at: usize) -> Option<(usize, bool)> {
+        let after = self.attributes.partition_point(|&(start, _, _)| start <= at);
+        let &(start, end, names_a_path) = self.attributes.get(after.checked_sub(1)?)?;
+        (at < end).then_some((start, names_a_path))
+    }
+}
+
+// A code range opens on the space after a comment, and the file's first one on its byte order mark
+fn find_first_code_byte(line: &[u8], ranges: &[(usize, usize)], opens_the_file: bool) -> Option<usize> {
+    ranges.iter().find_map(|&(from, to)| {
+        let from = match opens_the_file && from == 0 && line.starts_with(BYTE_ORDER_MARK) {
+            true => BYTE_ORDER_MARK.len(),
+            false => from
+        };
+        let at = skip_whitespace(line, from);
+        (at < to).then_some(at)
+    })
+}
+
 fn skip_attributes(line: &[u8], from: usize) -> Option<(usize, bool)> {
-    let mut at = skip_whitespace(line, from);
+    let mut at = attribute::skip_whitespace_and_comments(line, from);
     let mut names_a_path = false;
     while line.get(at) == Some(&b'#') {
-        let open = at + 1 + usize::from(line.get(at + 1) == Some(&b'!'));
-        if line.get(open) != Some(&b'[') { return None; }
-        let name_start = skip_whitespace(line, open + 1);
-        names_a_path |= &line[name_start..find_word_end(line, name_start)] == PATH_ATTRIBUTE;
-        at = skip_whitespace(line, attribute::find_matching_bracket(line, open, b']')? + 1);
+        let (past, names) = read_attribute_at(line, at)?;
+        names_a_path |= names;
+        at = attribute::skip_whitespace_and_comments(line, past);
     }
     Some((at, names_a_path))
+}
+
+// Read as Rust's attribute, so a ']' inside a string of one closes nothing
+fn read_attribute_at(bytes: &[u8], at: usize) -> Option<(usize, bool)> {
+    let (open, inner) = find_attribute_bracket(bytes, at)?;
+    Some((attribute::find_matching_bracket(bytes, open, b']')? + 1, is_a_path_attribute(bytes, open, inner)))
+}
+
+fn find_attribute_bracket(bytes: &[u8], at: usize) -> Option<(usize, bool)> {
+    let mut open = attribute::skip_whitespace_and_comments(bytes, at + 1);
+    let inner = bytes.get(open) == Some(&b'!');
+    if inner { open = attribute::skip_whitespace_and_comments(bytes, open + 1); }
+    (bytes.get(open) == Some(&b'[')).then_some((open, inner))
+}
+
+// An inner attribute belongs to the module around it and names no declaration's file
+fn is_a_path_attribute(bytes: &[u8], open: usize, inner: bool) -> bool {
+    if inner { return false; }
+    let mut name_start = attribute::skip_whitespace_and_comments(bytes, open + 1);
+    if bytes[name_start..].starts_with(RAW_IDENTIFIER) { name_start += RAW_IDENTIFIER.len(); }
+    &bytes[name_start..find_word_end(bytes, name_start)] == PATH_ATTRIBUTE
+            || attribute::is_applied_through_cfg_attr(&bytes[name_start..], PATH_ATTRIBUTE)
+}
+
+fn find_string_start(contents: &[u8], quote: usize) -> usize {
+    let mut at = quote;
+    while at > 0 && contents[at - 1] == b'#' { at -= 1; }
+    match at > 0 && contents[at - 1] == b'r' && attribute::starts_a_raw_string(contents, at - 1) {
+        true => at - 1,
+        false => quote
+    }
 }
 
 fn find_closing(code: &[u8], open: usize, opener: u8, closer: u8) -> Option<usize> {
@@ -599,9 +684,22 @@ mod tests {
                 ("#[path = \"x.rs\"]", false), ("struct Between;", false), ("mod after_an_item;", false),
                 ("#[pathological]", false), ("mod under_a_longer_word;", false),
                 ("#[path = \"x.rs\"] mod on_the_line_above;", false), ("#[cfg(test)]", true), ("mod under_an_attribute_with_its_item;", true),
-                ("#[allow(dead_code)] #[path = \"x.rs\"]", false), ("mod under_a_second_attribute;", false), ("mod plain;", false)]);
+                ("#[allow(dead_code)] #[path = \"x.rs\"]", false), ("mod under_a_second_attribute;", false),
+                ("# [path = \"x.rs\"]", false), ("mod under_a_spaced_path;", false), ("#[r#path = \"x.rs\"]", false), ("mod under_a_raw_path;", false),
+                ("#[cfg_attr(test, path = \"x.rs\")]", true), ("#[cfg(test)]", true), ("mod under_a_conditional_path;", true),
+                ("#[cfg_attr(test, allow(dead_code))]", false), ("mod under_a_cfg_attr_without_a_path;", false),
+                ("#[cfg_attr(test, cfg_attr(test, path = \"x.rs\"))]", true), ("mod under_a_nested_conditional_path;", true),
+                ("#[cfg_attr(test, r#path = \"x.rs\")]", true), ("mod under_a_raw_conditional_path;", true),
+                ("#[cfg_attr(test, cfg_attr(test, allow(dead_code)))]", false), ("mod under_a_nested_cfg_attr_without_a_path;", false),
+                ("#[cfg_attr(test, /* why */ path = \"x.rs\")]", true), ("mod under_a_noted_conditional_path;", true),
+                ("#[cfg_attr(test, rustfmt::skip(')', path = \"x.rs\"))]", true), ("mod under_a_path_inside_a_tool_attribute;", true),
+                ("mod plain;", false)]);
         assert_eq!(vec![build_declaration("after_an_item", &[], false), build_declaration("under_a_longer_word", &[], false),
-                build_declaration("under_an_attribute_with_its_item", &[], true), build_declaration("plain", &[], false)], found);
+                build_declaration("under_an_attribute_with_its_item", &[], true), build_declaration("under_a_cfg_attr_without_a_path", &[], false),
+                build_declaration("under_a_nested_cfg_attr_without_a_path", &[], false),
+                build_declaration("under_a_path_inside_a_tool_attribute", &[], true), build_declaration("plain", &[], false)], found);
+        assert_eq!(vec![build_declaration("after_an_inner_path", &[], true)],
+                read(&[("#![path = \"x.rs\"]", false), ("#[cfg(test)]", true), ("mod after_an_inner_path;", true)]));
 
         // As the parser hands the lines over, with the string of the attribute outside the code ranges
         let path_line = "#[path = \"elsewhere.rs\"]";
@@ -628,6 +726,80 @@ mod tests {
         let long_line = format!("static A: &[u8] = &[{}1]", "1, ".repeat(2_000));
         assert_eq!(vec![build_declaration("after_a_long_line", &[], false)],
                 read(&[(long_line.as_str(), false), ("mod after_a_long_line;", false)]));
+    }
+
+    #[test]
+    fn a_path_attribute_is_found_through_the_comments_between_it_and_the_declaration() {
+        let tight = "*/mod on_the_closing_line;";
+        let spaced = "*/ mod on_the_closing_line_after_a_space;";
+        let found = read_with_ranges(&[("#[path = \"x.rs\"]", None, true), ("/* the checks", None, true), ("   live apart */", None, true),
+                ("mod under_two_lines;", None, true),
+                ("#[path = \"x.rs\"]", None, true), ("/* the checks", None, true), ("   live apart", None, true), ("*/", None, true),
+                ("mod under_a_lone_closer;", None, true),
+                ("#[path = \"x.rs\"]", None, true), ("/* the checks", None, true), (tight, Some(&[(2, tight.len())]), true),
+                ("#[path = \"x.rs\"]", None, true), ("/* the checks", None, true), (spaced, Some(&[(2, spaced.len())]), true),
+                ("#[path = \"x.rs\"]", None, true), ("/* outer", None, true), ("   /* inner */", None, true), ("   still outer */", None, true),
+                ("mod under_a_nested_comment;", None, true),
+                ("#[path = \"x.rs\"]", None, true), ("/* a /* b */* c */", None, true), ("mod under_a_star_after_a_closer;", None, true),
+                ("#[path = \"x.rs\"]", None, true), ("/* matches src/**/*.rs */", None, true), ("mod under_a_glob;", None, true),
+                ("#[path = \"x.rs\"]", None, true), ("/* a note */ // and another", None, true), ("mod under_two_comments;", None, true),
+                ("#[path = \"x.rs\"]", None, true), ("/*", None, true), (" * a note", None, true), (" */ // and another", None, true),
+                ("mod under_a_starred_comment;", None, true),
+                ("#[path = \"x.rs\"]", None, true), ("/* start", None, true), ("// middle */", None, true), ("mod under_a_closer_after_slashes;", None, true),
+                ("#[path = \"x.rs\"] /* a note */ // and another", None, true), ("mod under_an_attribute_and_two_comments;", None, true),
+                ("#[path = \"x.rs\"] /* the checks", None, true), ("   live apart */", None, true), ("mod under_an_opener_beside_it;", None, true),
+                ("#[path = \"x.rs\"]", None, true), ("/* a note */ #[cfg(test)]", None, true), ("mod under_a_comment_and_an_attribute;", None, true),
+                ("#[cfg(test)] /* a note */ #[path = \"x.rs\"]", None, true), ("mod under_a_path_behind_a_comment;", None, true),
+                ("#[path =", None, true), ("    \"x.rs\"] // where it lives", None, true), ("mod under_a_long_path_and_a_comment;", None, true),
+                ("/** banner **/", None, false), ("#[path = \"x.rs\"]", None, true), ("mod under_a_path_below_a_banner;", None, true),
+                ("#[ /* a note */ path = \"x.rs\"]", None, true), ("mod under_a_noted_path;", None, true),
+                ("#[path = \"x.rs\"]", None, false), ("struct Between; /* the checks", None, false), ("   live apart */", None, false),
+                ("mod after_an_item_and_a_comment;", None, false),
+                ("#[path = \"x.rs\"]", None, false), ("/* a note */ struct Between;", None, false), ("mod after_an_item_behind_a_comment;", None, false),
+                ("/* the checks", None, false), ("   live apart */", None, false), ("mod under_a_comment_alone;", None, false)]);
+        assert_eq!(vec![build_declaration("after_an_item_and_a_comment", &[], false), build_declaration("after_an_item_behind_a_comment", &[], false),
+                build_declaration("under_a_comment_alone", &[], false)], found);
+    }
+
+    #[test]
+    fn what_a_comment_a_string_or_a_character_holds_opens_nothing() {
+        let found = read(&[("#[path = \"gen.rs\"] // see /*", false), ("mod generated;", false), ("#[cfg(test)] // */", true), ("mod checks;", true),
+                ("pub const S: &str = \"/*\";", false), ("#[cfg(test)]", true), ("#[path = \"x.rs\"] // a note */", true), ("mod under_a_note;", true),
+                ("#[path = \"helpers.rs\"]", false), ("/// Loads every file matching src/*", false), ("mod helpers;", false),
+                ("pub fn f() {} // the end of it all */", false), ("#[cfg(test)]", true), ("mod after_a_function;", true),
+                ("#[path = \"x.rs\"]", false), ("// see /* here", false), ("struct S; // was */", false), ("#[cfg(test)]", true),
+                ("mod after_a_struct;", true),
+                ("const QUOTE: char = '\"';", false), ("#[path = \"x.rs\"]", true), ("mod after_a_quote_character;", true),
+                ("fn f<'a>(x: &'a str) -> &'a str { x }", false), ("#[path = \"x.rs\"]", true), ("mod after_a_lifetime;", true),
+                ("const RAW: &str = r#\"a \"/*\" b\"#;", false), ("#[path = \"x.rs\"]", true), ("mod after_a_raw_string;", true),
+                ("const Q: char = '\\\"';", false), ("#[path = \"x.rs\"]", true), ("mod after_an_escaped_quote;", true),
+                ("const B: &[u8] = br\"\\\";", false), ("#[path = \"x.rs\"]", true), ("mod after_a_raw_byte_string;", true),
+                ("const C: [char; 2] = ['é','\"'];", false), ("#[path = \"x.rs\"]", true), ("mod after_a_wide_character;", true),
+                ("pub fn q(c: char) -> bool { matches!(c, '\\u{10_FFFF}'|'\"') }", false), ("#[path = \"x.rs\"]", true),
+                ("mod after_a_long_escape;", true),
+                ("#[rustfmt::skip('\"', \"]\")]", false), ("pub struct A;", false), ("#[cfg(test)]", true), ("#[path = \"x.rs\"]", true),
+                ("mod after_a_quote_in_an_attribute;", true),
+                ("#[path = \"x.rs\"]", false), ("#[rustfmt::skip('[')]", false), ("mod bracketed;", false), ("#[cfg(test)]", true),
+                ("mod after_a_bracket_in_an_attribute;", true), ("pub const CLOSE: char = ']';", false)]);
+        assert_eq!(vec![build_declaration("checks", &[], true), build_declaration("after_a_function", &[], true),
+                build_declaration("after_a_struct", &[], true), build_declaration("after_a_bracket_in_an_attribute", &[], true)], found);
+    }
+
+    #[test]
+    fn a_declaration_after_a_comment_on_its_line_is_read() {
+        let comment = "/* a note */ mod after_a_comment;";
+        let attribute = "#[cfg(test)] /* a note */ mod after_an_attribute_and_a_comment;";
+        let two = "/* a */ /* b */ mod after_two_comments;";
+        let between = "mod before_a_comment; /* c */ mod after_one;";
+        let found = read_with_ranges(&[(comment, Some(&[(12, comment.len())]), false),
+                (attribute, Some(&[(0, 13), (25, attribute.len())]), true), (two, Some(&[(15, two.len())]), false),
+                (between, Some(&[(0, 22), (29, between.len())]), false)]);
+        assert_eq!(vec![build_declaration("after_a_comment", &[], false), build_declaration("after_an_attribute_and_a_comment", &[], true),
+                build_declaration("after_two_comments", &[], false), build_declaration("before_a_comment", &[], false),
+                build_declaration("after_one", &[], false)], found);
+        let marked = "\u{feff}/* a note */#[cfg(test)] mod after_a_byte_order_mark;";
+        assert_eq!(vec![build_declaration("after_a_byte_order_mark", &[], true)],
+                read_with_ranges(&[(marked, Some(&[(0, 3), (15, marked.len())]), true)]));
     }
 
     #[test]
