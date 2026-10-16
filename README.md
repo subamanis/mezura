@@ -711,9 +711,8 @@ consumers than cores on purpose: a consumer spends most of its life waiting for 
 the speed comes from how many reads are in flight, not from how many cores there are. Raising the
 consumers is worth up to twice the speed on a slow disk, or on the first run after a reboot.
 
-To see what a run actually spent its time on, set the environment variable `MEZURA_PHASE_TIMING`.
-An empty value, `0`, `no`, `false` and `off` mean off, the way `RUST_BACKTRACE` is read, and
-anything else means on:
+To see what a run actually spent its time on, set the environment variable `MEZURA_PHASE_TIMING`
+to `1`:
 
 ```bash
 MEZURA_PHASE_TIMING=1 mezura <some_big_directory>
@@ -722,28 +721,24 @@ MEZURA_PHASE_TIMING=1 mezura <some_big_directory>
 $env:MEZURA_PHASE_TIMING = "1"; mezura <some_big_directory>
 ```
 
-The report goes to the error output:
+The report goes to the error output, one line each:
 
-- `[startup]`: everything before the counting begins, step by step (the arguments, finding the data
-  directory, keeping it in step with the binary, the language files, the conflict rules, the
-  configuration, which languages this run counts with)
-- `[phase]`: how long the directory walk ran, how long the counting continued after it, and how many
-  files were still queued when the walk ended
-- `[phase]`: the share of the consumers' time spent starved (an empty queue while the walk was still
-  running), opening, reading and parsing, with the milliseconds behind each, summed over every
-  consumer thread, so the shares are the point
-- `[phase]`: how many files and megabytes were read, and at what rate per thread
-- `[phase]`: when the first counting thread ran out of work and when the last one finished, and the
-  spread between them, which is the tail of the run that one thread carries alone
-- `[finish]`: the counting, the printing, and the whole command
+| Line | What it measures |
+|---|---|
+| `[startup]` | Each step before the counting: the arguments, the data directory and keeping it in step with the binary, the language files, the conflict rules, the configuration |
+| `[phase] producers alive` | How long the directory walk ran, how long the counting went on after it, how many files were still queued when the walk ended |
+| `[phase] N consumers` | Where the counting threads' time went: starved (an empty queue while the walk still ran), opening, reading, parsing, summed over every thread, so the shares are the point |
+| `[phase] N files` | How many files and megabytes were read, and at what rate per thread |
+| `[phase] consumers' exit` | When the first counting thread ran out of work and when the last one finished, the tail one thread carries alone |
+| `[phase] test modules` | Rust modules declared on a line of test code, the files that made test code whole, and how long that took. Printed only when there is one |
+| `[finish]` | The counting, the printing, and the whole command |
 
-When there are more consumers than the machine has hardware threads, one more `[phase]` line says
-so: the shares are of elapsed time, so a thread waiting for a core is counted in whatever phase it
-was in, and a large "open" share can mean threads queued for a core with the disk idle.
+With more consumers than the machine has hardware threads, a thread waiting for a core is counted
+in whatever phase it was in, so a large "open" share can mean threads queued for a core while the
+disk sits idle. One more `[phase]` line is printed then, as a reminder.
 
 A deep queue and little starvation mean the parsing is the constraint, and more consumers pay. An
-empty queue and heavy starvation mean the walk is the constraint. Measure with a release build on a
-large directory, or the numbers say nothing.
+empty queue and heavy starvation mean the walk is the constraint.
 
 ### Windows and antivirus
 
