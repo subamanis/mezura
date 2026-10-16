@@ -1316,12 +1316,12 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
             walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted,
                     Candidates::At(lines.positions(), 0), scan, &mut shell, &mut shell_stats, code_spans, log)
         };
-        let mut is_test = false;
+        let whole_line = [(line_start, usize::MAX)];
+        let mut test_spans: &[(usize, usize)] = &[];
         if ranges_wanted && let Some(walk) = &mut test_walk {
             if line_end > walk.quiet_until() {
                 let bytes = end_of_line(contents, line_start, raw_line) - line_start;
                 if walk.observe_line(line_start, raw_line, had_code, scan.lead, &scan.code_ranges, class, bytes) {
-                    is_test = true;
                     let mut claimed = 1;
                     let mut from = line_start;
                     for (held_class, held_bytes) in walk.take_held() {
@@ -1343,12 +1343,13 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                                 from: line_start + bytes });
                     }
                 }
-            } else {
-                is_test = walk.skips_lines_inside();
+                test_spans = walk.get_test_spans();
+            } else if walk.skips_lines_inside() {
+                test_spans = &whole_line;
             }
         }
         if ranges_wanted && let Some(reader) = &mut declarations && had_code && line_end > reader.quiet_until() {
-            reader.observe_line(line_start, raw_line, scan.lead, &scan.code_ranges, is_test);
+            reader.observe_line(line_start, raw_line, scan.lead, &scan.code_ranges, test_spans);
         }
         if ranges_wanted { quiet_until = find_quiet_until(&test_walk, &declarations); }
 

@@ -122,7 +122,7 @@ pub(crate) struct ModuleDeclarations<'a> {
     keyword: &'a [u8],
     contents: &'a [u8],
     found: Vec<Declaration>,
-    open: Vec<(Box<str>, u32)>,
+    open: Vec<InlineModule>,
     depth: u32,
     keyword_at: Vec<usize>,
     next: usize,
@@ -152,12 +152,13 @@ impl<'a> ModuleDeclarations<'a> {
     }
 
     // The ranges are offsets into the line past its lead, the whitespace before its first byte. A
-    // declaration starts with the keyword, a visibility or an attribute, so outside an inline
-    // module a line whose first code byte is none of those costs one comparison, inlined into the
-    // line loop, and the reading below stays out of it.
+    // declaration starts with the keyword, a visibility or an attribute, or follows the ']' of an
+    // attribute opened on a line above. A line whose first code byte is none of those is searched
+    // for such a ']', which when found has the lexer read the file up to the line's end, and a
+    // declaration on it is looked for only after a brace or a semicolon.
     #[inline(always)]
     pub(crate) fn observe_line(&mut self, line_start: usize, raw_line: &str, lead: usize, ranges: &[(usize, usize)],
-            is_test: bool)
+            test_spans: &[(usize, usize)])
     {
         let line_end = line_start + raw_line.len();
         let mut holds_the_keyword = self.keyword.is_empty();
@@ -170,11 +171,15 @@ impl<'a> ModuleDeclarations<'a> {
             self.next += 1;
         }
         if self.open.is_empty() && !holds_the_keyword { return; }
+        let base = line_start + lead;
         let line = &raw_line.as_bytes()[lead..];
-        let Some(first) = find_first_code_byte(line, ranges, line_start + lead == 0) else { return };
-        if self.open.is_empty() && !line.get(first).is_some_and(|byte| matches!(byte, b'm' | b'p' | b'#')) { return; }
-        self.read_line(line_start + lead + first, line, ranges, is_test, holds_the_keyword, first,
-                last_keyword.saturating_sub(line_start + lead));
+        let Some(mut first) = find_first_code_byte(line, ranges, base == 0) else { return };
+        let last_keyword = last_keyword.saturating_sub(base);
+        if line.get(first) != Some(&b'#')
+                && let Some(end) = self.find_end_of_the_attribute_holding(line, base, first, last_keyword) {
+            first = attribute::skip_whitespace_and_comments(line, end);
+        }
+        self.read_line(base, line, ranges, test_spans, holds_the_keyword, first, last_keyword);
         if !self.open.is_empty() {
             self.next_brace = find_next_brace(self.contents, line_end);
         }
@@ -184,11 +189,12 @@ impl<'a> ModuleDeclarations<'a> {
         self.found
     }
 
-    fn read_line(&mut self, declaration_at: usize, line: &[u8], ranges: &[(usize, usize)], is_test: bool,
+    fn read_line(&mut self, base: usize, line: &[u8], ranges: &[(usize, usize)], test_spans: &[(usize, usize)],
             holds_the_keyword: bool, first: usize, last_keyword: usize) {
-        let opened = holds_the_keyword && self.read_declaration(line, ranges, is_test, first, Some(declaration_at));
+        let opened = holds_the_keyword && line.get(first).is_some_and(|byte| matches!(byte, b'm' | b'p' | b'#'))
+                && self.read_declaration(line, ranges, test_spans, first, base);
         if last_keyword > first {
-            self.read_later_declarations(line, ranges, is_test, last_keyword);
+            self.read_later_declarations(line, ranges, test_spans, last_keyword, base);
             return;
         }
         if self.open.is_empty() && !opened { return; }
@@ -203,7 +209,8 @@ impl<'a> ModuleDeclarations<'a> {
         }
     }
 
-    fn read_later_declarations(&mut self, line: &[u8], ranges: &[(usize, usize)], is_test: bool, last_keyword: usize) {
+    fn read_later_declarations(&mut self, line: &[u8], ranges: &[(usize, usize)], test_spans: &[(usize, usize)],
+            last_keyword: usize, base: usize) {
         let mut counting = !self.open.is_empty();
         for &(from, to) in ranges {
             for at in memchr::memchr3_iter(b'{', b'}', b';', &line[from..to]).map(|at| from + at) {
@@ -213,7 +220,7 @@ impl<'a> ModuleDeclarations<'a> {
                     _ => ()
                 }
                 if at < last_keyword
-                        && self.read_declaration(line, ranges, is_test, skip_whitespace(line, at + 1), None) {
+                        && self.read_declaration(line, ranges, test_spans, skip_whitespace(line, at + 1), base) {
                     counting = true;
                 }
             }
@@ -223,43 +230,49 @@ impl<'a> ModuleDeclarations<'a> {
     #[inline(always)]
     fn close_block(&mut self) {
         self.depth = self.depth.saturating_sub(1);
-        while self.open.last().is_some_and(|(_, opened_at)| *opened_at >= self.depth) {
+        while self.open.last().is_some_and(|module| module.opened_at >= self.depth) {
             self.open.pop();
         }
     }
 
     // The attributes are read over the whole line, since a string inside one is no code range, and
-    // what follows them has to sit inside one
-    fn read_declaration(&mut self, line: &[u8], ranges: &[(usize, usize)], is_test: bool, first: usize,
-            looks_back_from: Option<usize>) -> bool {
+    // what follows them has to sit inside one. The seed is read where the attributes end, since the
+    // test code opens at its marker.
+    fn read_declaration(&mut self, line: &[u8], ranges: &[(usize, usize)], test_spans: &[(usize, usize)], first: usize,
+            base: usize) -> bool {
         let Some((mut at, names_a_path)) = skip_attributes(line, first) else { return false };
-        let Some(&(_, to)) = ranges.iter().find(|(from, to)| *from <= at && at < *to) else { return false };
-        let code = &line[..to];
+        let Some(&(_, to)) = ranges[..ranges.partition_point(|&(from, _)| from <= at)].last().filter(|&&(_, to)| at < to)
+                else { return false };
+        let item_at = base + at;
+        let mut code = &line[..to];
         if code[at..].starts_with(PUB) && !code.get(at + PUB.len()).is_some_and(|byte| is_word_byte(*byte)) {
-            at = skip_whitespace(code, at + PUB.len());
+            (at, code) = skip_to_code(line, ranges, at + PUB.len());
             if code.get(at) == Some(&b'(') {
-                let Some(close) = find_closing(code, at, b'(', b')') else { return false };
-                at = skip_whitespace(code, close + 1);
+                let Some(close) = find_visibility_close(line, ranges, at) else { return false };
+                (at, code) = skip_to_code(line, ranges, close + 1);
             }
         }
         if !code[at..].starts_with(self.keyword) { return false; }
         at += self.keyword.len();
-        if !code.get(at).is_some_and(u8::is_ascii_whitespace) { return false; }
-        at = skip_whitespace(code, at);
+        if code.get(at).is_some_and(|byte| is_word_byte(*byte)) { return false; }
+        (at, code) = skip_to_code(line, ranges, at);
         if code[at..].starts_with(RAW_IDENTIFIER) { at += RAW_IDENTIFIER.len(); }
         if !code.get(at).is_some_and(|byte| is_word_start(*byte)) { return false; }
         let end = find_word_end(code, at);
         let Ok(name) = std::str::from_utf8(&code[at..end]) else { return false };
-        match code.get(skip_whitespace(code, end)) {
+        (at, code) = skip_to_code(line, ranges, end);
+        match code.get(at) {
             Some(b';') => {
-                if !names_a_path && !looks_back_from.is_some_and(|at| self.is_under_a_path_attribute(at)) {
+                if !names_a_path && !self.is_under_a_path_attribute(base + first)
+                        && !self.is_inside_a_module_under_a_path_attribute() {
+                    let seed = test_spans.iter().any(|&(from, to)| from <= item_at && item_at < to);
                     self.found.push(Declaration { name: name.into(),
-                            inline_modules: self.open.iter().map(|(name, _)| name.clone()).collect(), seed: is_test });
+                            inline_modules: self.open.iter().map(|module| module.name.clone()).collect(), seed });
                 }
                 false
             },
             Some(b'{') => {
-                self.open.push((name.into(), self.depth));
+                self.open.push(InlineModule { name: name.into(), opened_at: self.depth, names_a_path, looks_back_from: base + first });
                 true
             },
             _ => false
@@ -277,12 +290,38 @@ impl<'a> ModuleDeclarations<'a> {
                 continue;
             }
             match self.comments_and_attributes.find_attribute_holding(at - 1) {
-                Some((_, true)) => return true,
-                Some((start, false)) => at = start,
+                Some((_, _, true)) => return true,
+                Some((start, _, false)) => at = start,
                 None => return false
             }
         }
     }
+
+    // Only a declaration inside asks this, since asking where the module opens would lex every file
+    // with a mod tests up to it
+    fn is_inside_a_module_under_a_path_attribute(&mut self) -> bool {
+        (0..self.open.len()).any(|index| {
+            let InlineModule { names_a_path, looks_back_from, .. } = self.open[index];
+            names_a_path || self.is_under_a_path_attribute(looks_back_from)
+        })
+    }
+
+    // Read to the end of the line, so an attribute closing on it has its end and one closing below
+    // still holds nothing
+    fn find_end_of_the_attribute_holding(&mut self, line: &[u8], base: usize, first: usize, last_keyword: usize)
+            -> Option<usize> {
+        memchr::memchr(b']', line.get(first..last_keyword)?)?;
+        self.comments_and_attributes.read_up_to(self.contents, base + line.len());
+        let (_, end, _) = self.comments_and_attributes.find_attribute_holding(base + first)?;
+        Some(end - base)
+    }
+}
+
+struct InlineModule {
+    name: Box<str>,
+    opened_at: u32,
+    names_a_path: bool,
+    looks_back_from: usize,
 }
 
 fn build_declared_file_candidates(declaring: &Path, declaration: &Declaration) -> Vec<PathBuf> {
@@ -551,10 +590,10 @@ impl CommentsAndAttributes {
         (at < end).then_some(start)
     }
 
-    fn find_attribute_holding(&self, at: usize) -> Option<(usize, bool)> {
+    fn find_attribute_holding(&self, at: usize) -> Option<(usize, usize, bool)> {
         let after = self.attributes.partition_point(|&(start, _, _)| start <= at);
         let &(start, end, names_a_path) = self.attributes.get(after.checked_sub(1)?)?;
-        (at < end).then_some((start, names_a_path))
+        (at < end).then_some((start, end, names_a_path))
     }
 }
 
@@ -612,17 +651,19 @@ fn find_string_start(contents: &[u8], quote: usize) -> usize {
     }
 }
 
-fn find_closing(code: &[u8], open: usize, opener: u8, closer: u8) -> Option<usize> {
-    let mut depth = 0usize;
-    for (at, byte) in code.iter().enumerate().skip(open) {
-        if *byte == opener {
-            depth += 1;
-        } else if *byte == closer {
-            depth -= 1;
-            if depth == 0 { return Some(at); }
-        }
-    }
-    None
+// With no code left the line comes back cut where the skip began, so every read after it finds nothing
+fn skip_to_code<'a>(line: &'a [u8], ranges: &[(usize, usize)], from: usize) -> (usize, &'a [u8]) {
+    ranges.iter().filter(|(_, to)| from < *to).find_map(|&(start, to)| {
+        let at = skip_whitespace(&line[..to], from.max(start));
+        (at < to).then_some((at, &line[..to]))
+    }).unwrap_or((from, &line[..from]))
+}
+
+fn find_visibility_close(line: &[u8], ranges: &[(usize, usize)], open: usize) -> Option<usize> {
+    ranges.iter().filter(|(_, to)| open < *to).find_map(|&(start, to)| {
+        let from = open.max(start);
+        memchr::memchr(b')', &line[from..to]).map(|found| from + found)
+    })
 }
 
 #[cfg(test)]
@@ -639,8 +680,10 @@ mod tests {
         for (line, ranges, is_test) in lines {
             let lead = line.len() - line.trim_ascii_start().len();
             let whole = [(0, line.trim_ascii().len())];
+            let whole_line = [(line_start, usize::MAX)];
+            let test_spans: &[(usize, usize)] = if *is_test { &whole_line } else { &[] };
             if !line.trim_ascii().is_empty() {
-                reader.observe_line(line_start, line, lead, ranges.unwrap_or(&whole), *is_test);
+                reader.observe_line(line_start, line, lead, ranges.unwrap_or(&whole), test_spans);
             }
             line_start += line.len() + 1;
         }
@@ -649,6 +692,20 @@ mod tests {
 
     fn read(lines: &[(&str, bool)]) -> Vec<Declaration> {
         read_with_ranges(&lines.iter().map(|(line, is_test)| (*line, None, *is_test)).collect::<Vec<_>>())
+    }
+
+    // The spans are offsets into their own line
+    fn read_with_test_spans(lines: &[(&str, &[(usize, usize)])]) -> Vec<Declaration> {
+        let contents = lines.iter().map(|(line, _)| *line).collect::<Vec<_>>().join("\n");
+        let mut reader = ModuleDeclarations::of("mod", &contents);
+        let mut line_start = 0;
+        for (line, test_spans) in lines {
+            let lead = line.len() - line.trim_ascii_start().len();
+            let test_spans = test_spans.iter().map(|&(from, to)| (line_start + from, to.saturating_add(line_start))).collect::<Vec<_>>();
+            reader.observe_line(line_start, line, lead, &[(0, line.trim_ascii().len())], &test_spans);
+            line_start += line.len() + 1;
+        }
+        reader.into_declarations()
     }
 
     fn build_declaration(name: &str, inline_modules: &[&str], seed: bool) -> Declaration {
@@ -803,6 +860,100 @@ mod tests {
     }
 
     #[test]
+    fn a_comment_between_the_words_of_a_declaration_is_read_through() {
+        let visibility = "pub /* c */ mod after_a_visibility;";
+        let glued = "pub/* c */ mod glued_to_a_visibility;";
+        let keyword = "mod /* c */ after_the_keyword;";
+        let scoped = "pub(crate) /* c */ mod after_a_scoped_visibility;";
+        let scope = "pub /* c */ (crate) mod before_a_scope;";
+        let name = "mod after_the_name /* c */ ;";
+        let opened = "mod opened /* c */ { mod inside; }";
+        let everywhere = "#[cfg(test)] /* a */ pub /* b */ mod /* c */ everywhere /* d */;";
+        let two = "mod first; /* x */ pub /* y */ mod second;";
+        let commented = "mod read; /* mod unread; */";
+        let found = read_with_ranges(&[(visibility, Some(&[(0, 4), (11, visibility.len())]), false),
+                (glued, Some(&[(0, 3), (10, glued.len())]), false), (keyword, Some(&[(0, 4), (11, keyword.len())]), false),
+                (scoped, Some(&[(0, 11), (18, scoped.len())]), false), (scope, Some(&[(0, 4), (11, scope.len())]), false),
+                (name, Some(&[(0, 19), (26, name.len())]), false), (opened, Some(&[(0, 11), (18, opened.len())]), false),
+                (everywhere, Some(&[(0, 13), (20, 25), (32, 37), (44, 56), (63, everywhere.len())]), true),
+                (two, Some(&[(0, 11), (18, 23), (30, two.len())]), false), (commented, Some(&[(0, 10)]), false)]);
+        assert_eq!(vec![build_declaration("after_a_visibility", &[], false), build_declaration("glued_to_a_visibility", &[], false),
+                build_declaration("after_the_keyword", &[], false), build_declaration("after_a_scoped_visibility", &[], false),
+                build_declaration("before_a_scope", &[], false), build_declaration("after_the_name", &[], false),
+                build_declaration("inside", &["opened"], false), build_declaration("everywhere", &[], true),
+                build_declaration("first", &[], false), build_declaration("second", &[], false), build_declaration("read", &[], false)], found);
+        let glued_keyword = "mod/* c */ glued_to_the_keyword;";
+        let inside_a_scope = "pub(/* c */ crate) mod inside_a_scope;";
+        assert_eq!(vec![build_declaration("glued_to_the_keyword", &[], false), build_declaration("inside_a_scope", &[], false)],
+                read_with_ranges(&[(glued_keyword, Some(&[(0, 3), (10, glued_keyword.len())]), false),
+                (inside_a_scope, Some(&[(0, 4), (11, inside_a_scope.len())]), false)]));
+    }
+
+    #[test]
+    fn a_comment_or_a_string_never_supplies_the_name_or_the_end_of_a_declaration() {
+        let string = "pub mod \"x\";";
+        let name = "mod /* ; */ ;";
+        let opener = "mod x /* ; */ {";
+        let line_comment = "mod x // ;";
+        let second_name = "mod x /* y */ z;";
+        assert!(read_with_ranges(&[(string, Some(&[(0, 8), (11, string.len())]), false), (name, Some(&[(0, 4), (11, name.len())]), false),
+                (opener, Some(&[(0, 6), (13, opener.len())]), false), ("}", None, false), (line_comment, Some(&[(0, 6)]), false),
+                (second_name, Some(&[(0, 6), (13, second_name.len())]), false)]).is_empty());
+    }
+
+    #[test]
+    fn a_declaration_after_an_attribute_closing_on_its_line_is_read_from_where_the_attribute_ends() {
+        let found = read(&[("#[cfg(", true), ("    test)] mod m;", true),
+                ("#[cfg(", true), ("    test", true), (")] mod first; mod second;", true),
+                ("#[cfg(", true), ("    test)] mod t { mod x; } mod y;", true),
+                ("#[cfg(any(", true), ("    test,", true), ("    unix))] #[allow(dead_code)] mod after_a_second_attribute;", true),
+                ("mod outer {", false), ("    #[cfg(", true), ("        test)] mod inside;", true), ("}", false),
+                ("#[cfg(", true), ("    test,", true), ("    unix)]", true), ("mod on_the_next_line;", true),
+                ("let v = items[i]; model.run();", false)]);
+        assert_eq!(vec![build_declaration("m", &[], true), build_declaration("first", &[], true),
+                build_declaration("second", &[], true), build_declaration("x", &["t"], true), build_declaration("y", &[], true),
+                build_declaration("after_a_second_attribute", &[], true), build_declaration("inside", &["outer"], true),
+                build_declaration("on_the_next_line", &[], true)], found);
+
+        // As the parser hands the lines over, with the strings and the comments outside the code ranges
+        let after_a_string = "]\"] mod after_a_bracket_in_a_string;";
+        let after_a_note = "test)] /* a note */ mod after_a_note;";
+        let found = read_with_ranges(&[("#[doc = \"a", Some(&[(0, 8)]), false),
+                (after_a_string, Some(&[(2, after_a_string.len())]), false),
+                ("#[cfg( // why ]", Some(&[(0, 7)]), true), (after_a_note, Some(&[(0, 7), (19, after_a_note.len())]), true)]);
+        assert_eq!(vec![build_declaration("after_a_bracket_in_a_string", &[], false), build_declaration("after_a_note", &[], true)],
+                found);
+    }
+
+    #[test]
+    fn a_path_attribute_closing_on_the_line_of_its_declaration_still_refuses_it() {
+        let path_closes = "\"x.rs\"] mod under_a_path;";
+        let path_closes_under_a_cfg = "\"x.rs\"] mod under_a_cfg_and_a_path;";
+        let path_follows = "test)] #[path = \"x.rs\"] mod under_a_path_after_a_long_attribute;";
+        let found = read_with_ranges(&[("#[path =", None, true), (path_closes, Some(&[(6, path_closes.len())]), true),
+                ("#[cfg(test)]", None, true), ("#[path =", None, true),
+                (path_closes_under_a_cfg, Some(&[(6, path_closes_under_a_cfg.len())]), true),
+                ("#[cfg(", None, true), (path_follows, Some(&[(0, 16), (22, path_follows.len())]), true),
+                ("mod plain;", None, false)]);
+        assert_eq!(vec![build_declaration("plain", &[], false)], found);
+    }
+
+    #[test]
+    fn nothing_declared_inside_an_inline_module_under_a_path_attribute_is_followed() {
+        let found = read(&[("#[path = \"d\"] mod on_one_line { mod y; }", false),
+                ("#[path = \"d\"]", false), ("mod outer {", false), ("    mod y;", false), ("}", false), ("mod after;", false),
+                ("#[cfg(test)]", true), ("#[path = \"d\"]", true), ("mod tests {", true), ("    mod y;", true), ("}", true),
+                ("#[path = \"d\"] mod a { mod b { mod c; } }", false),
+                ("mod a { #[path = \"d\"] mod b { mod c; } mod e; }", false),
+                ("#[cfg_attr(test, path = \"d\")] mod conditional { mod y; }", false),
+                ("#[path = \"d\"]", false), ("mod empty {", false), ("}", false), ("mod after_an_empty_one;", false)]);
+        assert_eq!(vec![build_declaration("after", &[], false), build_declaration("e", &["a"], false),
+                build_declaration("after_an_empty_one", &[], false)], found);
+        assert_eq!(vec![build_declaration("y", &["outer"], false)],
+                read(&[("#![path = \"d\"]", false), ("mod outer { mod y; }", false)]));
+    }
+
+    #[test]
     fn an_indented_declaration_is_read_through_its_lead() {
         let found = read(&[("    mod indented;", false), ("\tpub mod tabbed;", false), ("  #[cfg(unix)] mod attributed;", false)]);
         assert_eq!(vec![build_declaration("indented", &[], false), build_declaration("tabbed", &[], false), build_declaration("attributed", &[], false)], found);
@@ -819,6 +970,41 @@ mod tests {
                 build_declaration("inner", &["outer"], false), build_declaration("after", &[], false),
                 build_declaration("second", &[], false), build_declaration("after_a_function", &[], false),
                 build_declaration("deep", &["m"], false)], found);
+    }
+
+    #[test]
+    fn a_declaration_after_another_item_on_a_top_level_line_is_read_once() {
+        let found = read(&[("struct S; #[cfg(test)] mod m;", true), ("fn f() {} mod after;", false),
+                ("const X: u8 = 1; mod a; mod b;", false), ("impl S {} #[cfg(test)] mod t;", true), ("use a::b; mod c;", false),
+                ("x[0]; mod m;", false), ("#[cfg(unix)] mod first; struct S; mod second;", false),
+                ("let model = 1;", false), ("fn modify() { x(); }", false), ("x = 1; model.run();", false),
+                ("fn f() {", false), ("    let mod_x = 1;", false), ("}", false), ("mod after_a_body;", false)]);
+        assert_eq!(vec![build_declaration("m", &[], true), build_declaration("after", &[], false), build_declaration("a", &[], false),
+                build_declaration("b", &[], false), build_declaration("t", &[], true), build_declaration("c", &[], false),
+                build_declaration("m", &[], false), build_declaration("first", &[], false), build_declaration("second", &[], false),
+                build_declaration("after_a_body", &[], false)], found);
+    }
+
+    #[test]
+    fn a_declaration_is_a_seed_only_where_it_lies_inside_the_test_code_of_its_line() {
+        let found = |line: &str, test_spans: &[(usize, usize)]| read_with_test_spans(&[(line, test_spans)]);
+        assert_eq!(vec![build_declaration("t", &[], true), build_declaration("x", &[], false)],
+                found("#[cfg(test)] mod t; mod x;", &[(0, 19)]));
+        assert_eq!(vec![build_declaration("a", &[], false), build_declaration("t", &[], true)],
+                found("mod a; #[cfg(test)] mod t;", &[(7, 26)]));
+        assert_eq!(vec![build_declaration("x", &["t"], true), build_declaration("y", &[], false)],
+                found("#[cfg(test)] mod t { mod x; } mod y;", &[(0, 29)]));
+        assert_eq!(vec![build_declaration("t", &["a"], true), build_declaration("y", &["a"], false)],
+                found("mod a { #[cfg(test)] mod t; mod y; }", &[(8, 27)]));
+        assert_eq!(vec![build_declaration("a", &[], true), build_declaration("b", &[], false), build_declaration("c", &[], true)],
+                found("#[cfg(test)] mod a; mod b; #[cfg(test)] mod c;", &[(0, 19), (27, 46)]));
+        assert_eq!(vec![build_declaration("t", &[], true), build_declaration("x", &[], false)],
+                found("#[allow(dead_code)] #[cfg(test)] mod t; mod x;", &[(20, 39)]), "an attribute in front of the marker hid the seed");
+        assert_eq!(vec![build_declaration("a", &[], false), build_declaration("t", &[], true)],
+                found("mod a; /* c */ #[cfg(test)] mod t;", &[(15, 34)]), "a comment in front of the marker hid the seed");
+        assert_eq!(vec![build_declaration("cases", &["tests"], true), build_declaration("after", &[], false)],
+                read_with_test_spans(&[("#[cfg(test)]", &[(0, usize::MAX)]), ("mod tests {", &[(0, usize::MAX)]),
+                        ("    mod cases;", &[(0, usize::MAX)]), ("}", &[(0, 1)]), ("mod after;", &[])]));
     }
 
     #[test]

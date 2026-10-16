@@ -22,6 +22,9 @@ pub(crate) struct TestWalk<'a> {
     // The offset the scan of the open extent resumes from, which can sit past the current line
     cursor: usize,
     held: Vec<(LineClass, usize)>,
+    // The test code of the line last observed, as offsets into the file. One still open at the end of
+    // the line runs to the largest offset.
+    test_spans: Vec<(usize, usize)>,
     // An 'if' under an attribute owns its 'else' arms. After a word such as D's 'unittest', or
     // after a cfg_if's 'if #[cfg(test)]', the 'else' is the branch built without it.
     else_continues: bool,
@@ -49,7 +52,7 @@ impl<'a> TestWalk<'a> {
         candidates.sort_unstable();
 
         let mut walk = TestWalk { contents: bytes, markers, file_markers, candidates: Vec::new(), next: 0, state: State::Idle,
-                cursor: 0, held: Vec::new(), else_continues: false, file_marker: None,
+                cursor: 0, held: Vec::new(), test_spans: Vec::new(), else_continues: false, file_marker: None,
                 looks_ahead: language.nested_languages.is_empty(), next_brace: 0 };
         candidates.retain(|&(at, index)| walk.could_be_counted(at, index as usize));
         walk.candidates = candidates;
@@ -75,6 +78,7 @@ impl<'a> TestWalk<'a> {
     pub(crate) fn observe_line(&mut self, line_start: usize, raw_line: &str, has_code: bool, lead: usize,
         ranges: &[(usize, usize)], class: LineClass, bytes: usize) -> bool
     {
+        self.test_spans.clear();
         let line_end = line_start + raw_line.len();
         if self.state == State::Idle {
             while self.candidates.get(self.next).is_some_and(|(at, _)| *at < line_start) {
@@ -89,6 +93,7 @@ impl<'a> TestWalk<'a> {
         let (line, ranges): (&[u8], &[(usize, usize)]) = if has_code { (&raw_line.as_bytes()[lead..], ranges) } else { (&[], &[]) };
 
         let mut is_test = matches!(self.state, State::Seeking { .. } | State::Inside { .. });
+        if is_test { self.test_spans.push((line_start, usize::MAX)); }
         loop {
             match self.state {
                 State::Idle => {
@@ -108,6 +113,7 @@ impl<'a> TestWalk<'a> {
                     }
                     let Some(found) = self.read_marker(at, &self.markers[index], base, ranges) else { continue };
                     is_test = true;
+                    self.test_spans.push((at, usize::MAX));
                     let under_an_attribute = attribute::is_opener(&self.markers[index]);
                     self.else_continues = under_an_attribute;
                     match found {
@@ -133,6 +139,7 @@ impl<'a> TestWalk<'a> {
                     },
                     Look::Else => {
                         is_test = true;
+                        self.test_spans.push((self.cursor - ELSE.len(), usize::MAX));
                         self.state = State::Seeking { depth: 0, ends: Terminator::BraceOrSemicolon };
                     },
                     Look::Other => {
@@ -164,6 +171,10 @@ impl<'a> TestWalk<'a> {
 
     pub(crate) fn get_file_marker(&self) -> Option<(usize, usize)> {
         self.file_marker
+    }
+
+    pub(crate) fn get_test_spans(&self) -> &[(usize, usize)] {
+        &self.test_spans
     }
 
     fn read_marker(&self, at: usize, marker: &str, base: usize, ranges: &[(usize, usize)]) -> Option<Marker> {
@@ -232,6 +243,7 @@ impl<'a> TestWalk<'a> {
                         if depth == 0 {
                             self.state = State::Idle;
                             self.cursor = base + at + 1;
+                            self.end_test_span();
                             return true;
                         }
                         depth -= 1;
@@ -248,6 +260,7 @@ impl<'a> TestWalk<'a> {
                     b';' if depth == 0 => {
                         self.state = State::Idle;
                         self.cursor = base + at + 1;
+                        self.end_test_span();
                         return true;
                     },
                     _ if depth == 0 && ends.is_open() && is_word_start(byte) => {
@@ -280,6 +293,7 @@ impl<'a> TestWalk<'a> {
                 if depth == 0 {
                     self.state = State::AfterClose;
                     self.cursor = base + start + at + 1;
+                    self.end_test_span();
                     return true;
                 }
             }
@@ -304,6 +318,10 @@ impl<'a> TestWalk<'a> {
             return Look::Other;
         }
         Look::Exhausted
+    }
+
+    fn end_test_span(&mut self) {
+        if let Some(span) = self.test_spans.last_mut() { span.1 = self.cursor; }
     }
 }
 
@@ -526,6 +544,36 @@ mod tests {
         };
         assert_eq!(None, marker_of("int x;\nunittest { @Test }\nint y;\n"), "an annotation inside a test block made the file whole");
         assert_eq!(Some((26, 0)), marker_of("unittest { @Test }\nint y; @Test void t();\n"));
+    }
+
+    #[test]
+    fn the_test_code_of_a_line_runs_from_its_marker_to_the_end_of_the_extent() {
+        let language = Language::new("Rust", ["rs"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
+                .with_test_markers(["#[", "#!["]);
+        let spans_of = |source: &str| {
+            let mut walk = TestWalk::of(&language, source, true, TestsByPath::Nothing).unwrap();
+            let mut line_start = 0;
+            let mut spans = Vec::new();
+            for line in source.split_inclusive('\n') {
+                let raw_line = line.trim_end_matches('\n');
+                let code = [(0, raw_line.trim_ascii().len())];
+                let lead = raw_line.len() - raw_line.trim_ascii_start().len();
+                walk.observe_line(line_start, raw_line, true, lead, &code, LineClass::WordsInCode, raw_line.len());
+                spans.push(walk.get_test_spans().to_vec());
+                line_start += line.len();
+            }
+            spans
+        };
+        assert_eq!(vec![vec![(0, 19)]], spans_of("#[cfg(test)] mod t; mod x;"));
+        assert_eq!(vec![vec![(7, 26)]], spans_of("mod a; #[cfg(test)] mod t;"));
+        assert_eq!(vec![vec![(0, 29)]], spans_of("#[cfg(test)] mod t { mod x; } mod y;"));
+        assert_eq!(vec![vec![(8, 27)]], spans_of("mod a { #[cfg(test)] mod t; mod y; }"));
+        assert_eq!(vec![vec![(0, 19), (27, 46)]], spans_of("#[cfg(test)] mod a; mod b; #[cfg(test)] mod c;"));
+        assert_eq!(vec![vec![(20, 39)]], spans_of("#[allow(dead_code)] #[cfg(test)] mod t; mod x;"));
+        assert_eq!(vec![vec![(0, 17)]], spans_of("#[test] fn t() {} mod x;"));
+        assert_eq!(vec![vec![(0, 21), (22, 30)]], spans_of("#[cfg(test)] if a { } else { } x;"));
+        assert_eq!(vec![vec![(0, usize::MAX)], vec![(13, usize::MAX)], vec![(25, usize::MAX)], vec![(40, 41)], vec![]],
+                spans_of("#[cfg(test)]\nmod tests {\n    mod cases;\n}\nmod y;\n"));
     }
 
     #[test]

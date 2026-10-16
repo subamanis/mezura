@@ -248,7 +248,7 @@ fn predicate_says_test(predicate: &[u8]) -> bool {
 }
 
 fn ends_a_term(predicate: &[u8], from: usize) -> bool {
-    matches!(predicate.get(skip_whitespace(predicate, from)), None | Some(b',') | Some(b')'))
+    matches!(predicate.get(skip_whitespace_and_comments(predicate, from)), None | Some(b',') | Some(b')'))
 }
 
 fn applies_a_test_attribute(arguments: &[u8]) -> bool {
@@ -374,9 +374,11 @@ mod tests {
     #[test]
     fn a_comment_before_a_name_or_its_arguments_hides_nothing() {
         for attribute in ["#[/* a note */ test]", "#[cfg /* a note */ (test)]", "#[cfg_attr(test, /* a note */ test)]",
-                "#[cfg_attr(test,\n    // a note\n    test)]"] {
+                "#[cfg_attr(test,\n    // a note\n    test)]", "#[cfg(test /* a note */)]", "#[cfg(test // a note\n)]",
+                "#[cfg(any(test /* a note */, unix))]", "#[cfg_attr(test /* a note */, test)]"] {
             assert_eq!(read_marker_of(attribute), Some((false, attribute.len())), "{attribute}");
         }
+        assert_eq!(read_marker_of("#[cfg(testing /* test */)]"), None);
     }
 
     #[test]
