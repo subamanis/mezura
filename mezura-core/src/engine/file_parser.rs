@@ -2214,7 +2214,13 @@ fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut
     fn resolve_collision(start_indices: &mut Vec<(usize, u8, u32)>, end_indices: &mut Vec<(usize, u8, u32)>, start_counter: &mut usize,
         end_counter: &mut usize, is_comment_open_m: &mut bool, language: &Language)
     {
-        if *is_comment_open_m {
+        // Inside a nesting comment an opener is still read, so one that begins first keeps the
+        // shared byte and the comment stays open
+        let (start_at, start_symbol, _) = start_indices[*start_counter];
+        let (end_at, end_symbol, _) = end_indices[*end_counter];
+        let deepens = *is_comment_open_m && language.comment_nests(start_symbol) && start_symbol == end_symbol
+                && start_at < end_at;
+        if *is_comment_open_m && !deepens {
             start_indices.remove(*start_counter);
             if *start_counter < start_indices.len() && start_indices[*start_counter].0 <
                     end_indices[*end_counter].0 + language.comment_end_len(end_indices[*end_counter].1, end_indices[*end_counter].2) {
@@ -2229,7 +2235,7 @@ fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut
             }
             *start_counter += 1;
         }
-        *is_comment_open_m = !*is_comment_open_m;
+        *is_comment_open_m = deepens || !*is_comment_open_m;
     }
 
     let mut is_comment_open_m = is_comment_open;
@@ -4135,6 +4141,29 @@ mod tests {
         // /* */*/*//*
         assert_eq!((vec![0,6,9],vec![3]), resolved_double_counting(vec![0,4,6,9], vec![3,5,7], false));
         assert_eq!((vec![0,6,9],vec![3]), resolved_double_counting(vec![0,4,6,9], vec![3,5,7], true));
+    }
+
+    #[test]
+    fn a_nesting_opener_sharing_a_byte_with_a_closer_deepens_the_comment() {
+        let nesting = Language::new("nesting", ["x"], build_backslashed_quotes(), ["//"], &[], [])
+                .with_nesting_comments(&[("/*", "*/")]);
+        let stats = parse_lines_whole("/*/*/\n*/\nlet x = 1;\n*/\nlet y = 2;\n", &nesting);
+        assert_eq!((1, 1, 3), (stats.classes.words_in_code, stats.classes.words_in_comment,
+                stats.classes.punctuation_in_comment));
+        assert_eq!(TextInfo::with_open_comment_at(0, 2), bounds_multi("/*/*/", &nesting, None, None));
+        assert_eq!(TextInfo::with_open_comment_at(0, 2), bounds_multi_deep("/*/", &nesting, Some((0, 1)), None));
+        assert_eq!(TextInfo::from_slice("*"), bounds_multi_deep("*/*", &nesting, Some((0, 1)), None));
+        assert_eq!(TextInfo::with_open_comment_at(0, 1), bounds_multi_deep("*/*", &nesting, Some((0, 2)), None));
+        assert_eq!(TextInfo::from_slice(" x"), bounds_multi("/*/*/ */ */ x", &nesting, None, None));
+
+        let plain = Language::new("plain", ["x"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], []);
+        assert_eq!(TextInfo::none_all(false), bounds_multi("/*/*/", &plain, None, None));
+        assert_eq!(TextInfo::none_all(false), bounds_multi("/*/", &plain, Some(0), None));
+
+        let contracts = Language::new("contracts", ["x"], build_backslashed_quotes(), ["//"], &[("<*", "*>")], [])
+                .with_nesting_comments(&[("/*", "*/")]);
+        assert_eq!(TextInfo::none_all(false), bounds_multi(" dir/*>", &contracts, Some(0), None));
+        assert_eq!(TextInfo::with_open_comment_at(1, 2), bounds_multi_deep(" dir/*/", &contracts, Some((1, 1)), None));
     }
 
     // Without the declaration the opener wins and the closer that shares its asterisk is dropped,
