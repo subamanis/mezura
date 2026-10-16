@@ -359,6 +359,9 @@ pub(crate) struct ScanPlan {
     line_comment_ends_the_line: bool,
     // Every byte the chunks search, for the pass that splits the file into lines
     finder: MaskFinder,
+    // Searched over a line's code once the walk has found it, never by the chunks, and numbered
+    // after every crossing string
+    heredoc: Option<(memmem::Finder<'static>, u8)>,
 }
 
 impl ScanPlan {
@@ -474,7 +477,11 @@ impl ScanPlan {
         let searched = chunks.iter().flat_map(|chunk| chunk.bytes[..chunk.len as usize].iter().copied())
                 .collect::<Vec<u8>>();
         let finder = MaskFinder::of(&searched);
-        ScanPlan { chunks, first, slots, symbols, sorted_kinds, line_comment_ends_the_line, finder }
+        let strings = &language.strings;
+        let heredoc = language.heredoc_opener.as_ref().map(|opener| (memmem::Finder::new(opener.as_bytes()).into_owned(),
+                (strings.get_symbols().len() + strings.get_char_literals().len()
+                        + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()) as u8));
+        ScanPlan { chunks, first, slots, symbols, sorted_kinds, line_comment_ends_the_line, finder, heredoc }
     }
 }
 
@@ -1190,6 +1197,8 @@ impl<'a> Iterator for MaskedLines<'a> {
 struct WalkState {
     open_comment: Option<(u8, u32)>,
     open_str_symbol: Option<(u8, u32)>,
+    // Opened on one line, they close one after the other, as the shell reads them
+    heredocs: Vec<Heredoc>,
     continued_comment: bool,
     opened_line: usize,
 }
@@ -1197,6 +1206,19 @@ struct WalkState {
 impl WalkState {
     fn holds_nothing(&self) -> bool {
         self.open_comment.is_none() && self.open_str_symbol.is_none() && !self.continued_comment
+    }
+}
+
+// The closing line is the word alone, trailing whitespace aside, which bash does not forgive
+struct Heredoc {
+    word: Box<[u8]>,
+    strips_tabs: bool,
+}
+
+impl Heredoc {
+    fn is_closed_by(&self, raw_line: &str) -> bool {
+        let line = if self.strips_tabs { raw_line.trim_start_matches('\t') } else { raw_line };
+        line.trim_ascii_end().as_bytes() == self.word.as_ref()
     }
 }
 
@@ -1379,7 +1401,9 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     let mut shell = WalkState::default();
     let mut buckets: Vec<SectionBucket> = Vec::new();
     let mut pending_tag = None;
-    let mut lines = MaskedLines::of(contents, &get_or_build_plan_of(language).finder);
+    let plan = get_or_build_plan_of(language);
+    let heredoc_finder = plan.heredoc.as_ref().map(|(finder, _)| finder);
+    let mut lines = MaskedLines::of(contents, &plan.finder);
     let mut handed_back = None;
     loop {
         let (line_start, raw_line, has_candidates) = match handed_back.take() {
@@ -1391,12 +1415,15 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         };
         let line_end = line_start + raw_line.len();
         let ranges_wanted = line_end > quiet_until;
-        let (class, had_code) = if !has_candidates && shell.holds_nothing() {
+        let plain = !has_candidates && shell.holds_nothing();
+        let (class, had_code) = if plain && !heredoc_finder.is_some_and(|finder| finder.find(raw_line.as_bytes()).is_some()) {
             walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted, scan,
                     &shell, &mut shell_stats, code_spans, log)
         } else {
+            // The heredoc opener is looked for by the walk alone, so a plain line holding one is walked
+            let candidates = if plain { Candidates::Unsearched } else { Candidates::At(lines.positions(), 0) };
             walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted,
-                    Candidates::At(lines.positions(), 0), scan, &mut shell, &mut shell_stats, code_spans, log)
+                    candidates, scan, &mut shell, &mut shell_stats, code_spans, log)
         };
         let whole_line = [(line_start, usize::MAX)];
         let mut test_spans: &[(usize, usize)] = &[];
@@ -1630,6 +1657,20 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
     scan.lead = lead;
     let base = line_start + lead;
 
+    // No symbol counts inside a heredoc, and the line holding its word is its closing quote
+    if let Some(heredoc) = state.heredocs.first() {
+        if heredoc.is_closed_by(raw_line) {
+            state.heredocs.remove(0);
+            if state.heredocs.is_empty() { state.open_str_symbol = None; }
+        }
+        file_stats.classes.bump(LineClass::StringContent);
+        if EXPLAIN {
+            log.record(LineClass::StringContent, carried.with_its_end_marked(state, OpenedHere::default()),
+                    language, vec![Span { from: lead, to: lead + line.len(), kind: SpanKind::String }]);
+        }
+        return (LineClass::StringContent, false);
+    }
+
     // A line joined to the one before it by a continuation symbol is the tail of that line's
     // comment: in C '// a comment \' makes the whole next line comment too, however it is written.
     if state.continued_comment {
@@ -1645,7 +1686,7 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
     }
 
     let mut line_spans: Vec<Span> = Vec::new();
-    let (line_info, opened_here) = get_bounds::<EXPLAIN>(line, language, state.open_comment,
+    let (mut line_info, mut opened_here) = get_bounds::<EXPLAIN>(line, language, state.open_comment,
             state.open_str_symbol, candidates.behind(lead), scan, &mut line_spans);
 
     state.open_comment = line_info.open_comment_after;
@@ -1656,6 +1697,25 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
             language.string_crosses_lines(*symbol)
             || (continues_in(language, |continuation| continuation.in_strings)
                 && ends_with_continuation(line, language)));
+
+    // The opener and its word are the string's opening quote, and its text begins on the next line
+    if line_info.has_code && state.open_comment.is_none() && state.open_str_symbol.is_none()
+            && let Some((finder, symbol)) = &get_or_build_plan_of(language).heredoc {
+        let mut after = 0;
+        while let Some((at, end, heredoc)) = find_heredoc_opening(line, &scan.code_ranges, finder,
+                language.strings.get_escape(), after) {
+            cut_out_of_code(&mut scan.code_ranges, line, at, end);
+            if EXPLAIN { mark_as_string(&mut line_spans, at, end); }
+            state.heredocs.push(heredoc);
+            after = end;
+        }
+        if !state.heredocs.is_empty() {
+            line_info.has_code = !scan.code_ranges.is_empty();
+            line_info.has_string_literal = true;
+            state.open_str_symbol = Some((*symbol, 0));
+            opened_here.string = true;
+        }
+    }
 
     // Each line lands in exactly one class, read off what it says and where it sits. The counting
     // models are folds over the classes at presentation time, so nothing here decides a bucket.
@@ -1708,6 +1768,96 @@ fn end_of_line(contents: &str, line_start: usize, raw_line: &str) -> usize {
     if contents.as_bytes().get(end) == Some(&b'\r') { end += 1; }
     if contents.as_bytes().get(end) == Some(&b'\n') { end += 1; }
     end
+}
+
+// A shift inside an arithmetic '((' that has not closed opens nothing. Only the opener has to be
+// code, since a quoted word was read by the walk as a string.
+fn find_heredoc_opening(line: &str, code_ranges: &[(usize, usize)], finder: &memmem::Finder,
+    escape: Option<u8>, after: usize) -> Option<(usize, usize, Heredoc)>
+{
+    let bytes = line.as_bytes();
+    for &(from, to) in code_ranges.iter().filter(|(_, to)| after < *to) {
+        let mut cursor = from.max(after);
+        while let Some(offset) = finder.find(&bytes[cursor..to]) {
+            let at = cursor + offset;
+            cursor = at + finder.needle().len();
+            if bytes.get(cursor) == Some(&b'<') {
+                while cursor < to && bytes[cursor] == b'<' { cursor += 1; }
+                continue;
+            }
+            let before = &bytes[..at];
+            if !is_not_escaped(at, bytes, escape)
+                    || memmem::find_iter(before, b"((").count() > memmem::find_iter(before, b"))").count() {
+                continue;
+            }
+            let strips_tabs = bytes.get(cursor) == Some(&b'-');
+            let mut word_at = cursor + usize::from(strips_tabs);
+            while bytes.get(word_at).is_some_and(|byte| *byte == b' ' || *byte == b'\t') { word_at += 1; }
+            if !bytes.get(word_at).is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'\'' | b'"' | b'\\')) {
+                continue;
+            }
+            if let Some((word, end)) = read_heredoc_word(bytes, word_at) {
+                return Some((at, end, Heredoc { word, strips_tabs }));
+            }
+        }
+    }
+    None
+}
+
+// None for a quote left open on the line
+fn read_heredoc_word(bytes: &[u8], from: usize) -> Option<(Box<[u8]>, usize)> {
+    let mut word = Vec::new();
+    let mut cursor = from;
+    while let Some(&byte) = bytes.get(cursor) {
+        match byte {
+            b' ' | b'\t' | b';' | b'&' | b'|' | b'<' | b'>' | b'(' | b')' => break,
+            b'\'' | b'"' => {
+                let closed_at = cursor + 1 + memchr::memchr(byte, &bytes[cursor + 1..])?;
+                word.extend_from_slice(&bytes[cursor + 1..closed_at]);
+                cursor = closed_at + 1;
+            },
+            b'\\' => {
+                word.push(*bytes.get(cursor + 1)?);
+                cursor += 2;
+            },
+            _ => {
+                word.push(byte);
+                cursor += 1;
+            }
+        }
+    }
+    (!word.is_empty()).then(|| (word.into_boxed_slice(), cursor))
+}
+
+fn cut_out_of_code(code_ranges: &mut Vec<(usize, usize)>, line: &str, from: usize, to: usize) {
+    for (start, end) in std::mem::take(code_ranges) {
+        if end <= from || start >= to {
+            code_ranges.push((start, end));
+            continue;
+        }
+        push_code(code_ranges, line, start, from);
+        push_code(code_ranges, line, to, end);
+    }
+}
+
+fn mark_as_string(spans: &mut Vec<Span>, from: usize, to: usize) {
+    let mut marked = false;
+    for span in std::mem::take(spans) {
+        if span.to <= from {
+            spans.push(span);
+            continue;
+        }
+        if span.from < from {
+            spans.push(Span { to: from, ..span });
+        }
+        if !marked {
+            spans.push(Span { from, to, kind: SpanKind::String });
+            marked = true;
+        }
+        if span.to > to {
+            spans.push(Span { from: span.from.max(to), ..span });
+        }
+    }
 }
 
 // A region opener that survived the shell's own reading of the line, with the language its section
@@ -3803,6 +3953,133 @@ mod tests {
         assert_eq!(TextInfo::new(Some("var s = ".to_owned()), true, None, Some(1)),
                 bounds_multi("var s = `open", &go, None, None));
         assert_eq!(TextInfo::none_all(true), bounds_multi("still \" /* text `", &go, None, Some(1)));
+    }
+
+    fn build_shell_with_heredocs() -> Language {
+        Language::new("shell-like", ["sh"], StringRules::escaping_with(b'\\').with_multiline_strings(["\""])
+                .with_raw_multiline_strings(["'"]), ["#"], &[], []).with_heredoc_opener("<<")
+    }
+
+    // Read the way explaining a file reads it, and held to the classes a counting run gives the same text
+    fn classify_lines(contents: &str, language: &Language) -> Vec<LineClass> {
+        let (_, log) = parse_lines_explained(contents, language, &empty_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
+        let classes = log.records().iter().map(|record| record.class).collect::<Vec<_>>();
+        let mut explained = LineClasses::default();
+        for class in &classes { explained.bump(*class); }
+        assert_eq!(parse_lines_whole(contents, language).classes, explained, "explaining and counting disagree on {contents:?}");
+        classes
+    }
+
+    #[test]
+    fn a_heredoc_runs_to_the_line_holding_its_word_and_nothing_inside_it_opens_a_string() {
+        use LineClass::{BlankInString, StringContent, WordsInCode, WordsInComment};
+        let shell = build_shell_with_heredocs();
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, WordsInComment, WordsInComment],
+                classify_lines("cat <<TEXT\nit's fine in here\nTEXT\n# a real comment\n# a second real comment\n", &shell));
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, WordsInComment],
+                classify_lines("cat <<EOF\n# not a comment \"quoted 'it's\nEOF\n# a comment\n", &shell));
+        assert_eq!(vec![WordsInCode, BlankInString, StringContent, WordsInComment],
+                classify_lines("cat <<EOF\n\nEOF\n# a comment\n", &shell));
+    }
+
+    #[test]
+    fn a_heredoc_opened_with_a_dash_closes_at_its_word_behind_tabs_and_one_without_does_not() {
+        use LineClass::{StringContent, WordsInCode, WordsInComment};
+        let shell = build_shell_with_heredocs();
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, WordsInComment],
+                classify_lines("cat <<-EOF\n\tit's indented\n\tEOF\n# a comment\n", &shell));
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, WordsInComment],
+                classify_lines("cat <<EOF\n\tEOF\n# still text\nEOF\n# a comment\n", &shell));
+        // spaces are not tabs, and the stripping form does not close behind them
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, WordsInComment],
+                classify_lines("cat <<-EOF\n  EOF\n# still text\nEOF\n# a comment\n", &shell));
+    }
+
+    #[test]
+    fn heredocs_opened_on_one_line_close_one_after_the_other() {
+        use LineClass::{StringContent, WordsInCode, WordsInComment};
+        let shell = build_shell_with_heredocs();
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, StringContent, WordsInComment],
+                classify_lines("cat <<A <<B\nit's a\nA\nit's b\nB\n# a comment\n", &shell));
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, StringContent, WordsInComment],
+                classify_lines("diff <(cat <<A) <(cat <<-B)\na's\nA\n\tb's\n\tB\n# a comment\n", &shell));
+    }
+
+    #[test]
+    fn a_quoted_or_escaped_heredoc_word_closes_at_the_word_its_quotes_spell() {
+        use LineClass::{StringContent, WordsInCode, WordsInComment};
+        let shell = build_shell_with_heredocs();
+        for opener in ["cat <<'EOF'", "cat <<\"EOF\"", "cat <<\\EOF", "cat << EOF", "cat <<E\"O\"F", "cat <<-'EOF'"] {
+            assert_eq!(vec![WordsInCode, StringContent, StringContent, WordsInComment],
+                    classify_lines(&format!("{opener}\nit's text\nEOF\n# a comment\n"), &shell), "{opener}");
+        }
+    }
+
+    #[test]
+    fn the_rest_of_the_line_that_opens_a_heredoc_is_read_like_any_other_line() {
+        use LineClass::{StringContent, WordsInCode, WordsInComment};
+        let shell = build_shell_with_heredocs();
+        let spans_of = |contents: &str| {
+            let (_, log) = parse_lines_explained(contents, &shell, &empty_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
+            log.records()[0].spans.iter().map(|span| (span.from, span.to, span.kind)).collect::<Vec<_>>()
+        };
+        assert_eq!(vec![(0, 4, SpanKind::Code), (4, 9, SpanKind::String), (9, 16, SpanKind::Code), (16, 29, SpanKind::Comment)],
+                spans_of("cat <<EOF > out # it's a note\ntext\nEOF\n"));
+        assert_eq!(vec![(0, 4, SpanKind::Code), (4, 11, SpanKind::String), (11, 18, SpanKind::Code), (18, 26, SpanKind::String)],
+                spans_of("cat <<'EOF' | sed 's/a/b/'\ntext\nEOF\n"));
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, WordsInComment],
+                classify_lines("cat <<EOF | sed 's/it/x/'\nit's text\nEOF\n# a comment\n", &shell));
+        // with nothing before it the opener is a string opening a line, the way a docstring is
+        assert_eq!(vec![StringContent, StringContent, StringContent, WordsInComment],
+                classify_lines("<<EOF\nit's text\nEOF\n# a comment\n", &shell));
+
+        let (_, log) = parse_lines_explained("cat <<EOF\ntext\nEOF\n", &shell, &empty_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
+        let carried = log.records().iter().map(|record| record.carried).collect::<Vec<_>>();
+        let CarriedRecord::Str { symbol, .. } = carried[1] else { panic!("the text of a heredoc carried {:?}", carried[1]) };
+        assert_eq!("<<", shell.get_string_pair_of(symbol).0);
+        assert_eq!(vec![CarriedRecord::Nothing, CarriedRecord::Str { symbol, level: 0, since_line: 1, ends: false },
+                CarriedRecord::Str { symbol, level: 0, since_line: 1, ends: true }], carried);
+    }
+
+    #[test]
+    fn a_here_string_and_a_shift_open_no_heredoc() {
+        use LineClass::{StringContent, WordsInCode, WordsInComment};
+        let shell = build_shell_with_heredocs();
+        for line in ["cat <<<word", "cat <<< \"$it\"", "echo $(( a << 2 ))", "echo $((a<<b))", "(( flags << shift ))",
+                "(( x <<= y ))"] {
+            assert_eq!(vec![WordsInCode, WordsInComment], classify_lines(&format!("{line}\n# a comment\n"), &shell), "{line}");
+        }
+        // an arithmetic that closed earlier on the line leaves the heredoc after it to open
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, WordsInComment],
+                classify_lines("x=$((1 + 2)); cat <<EOF\nit's text\nEOF\n# a comment\n", &shell));
+    }
+
+    #[test]
+    fn a_heredoc_opener_inside_a_comment_or_a_string_or_behind_an_escape_opens_nothing() {
+        use LineClass::{WordsInCode, WordsInComment};
+        let shell = build_shell_with_heredocs();
+        assert_eq!(vec![WordsInComment, WordsInComment], classify_lines("# cat <<EOF\n# a comment\n", &shell));
+        for line in ["echo hi # cat <<EOF", "echo \"<<EOF\"", "echo '<<EOF'", "cat \\<<EOF"] {
+            assert_eq!(vec![WordsInCode, WordsInComment], classify_lines(&format!("{line}\n# a comment\n"), &shell), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_heredoc_the_file_never_closes_holds_every_line_after_its_opener() {
+        use LineClass::{BlankInString, StringContent, WordsInCode};
+        assert_eq!(vec![WordsInCode, StringContent, BlankInString, StringContent],
+                classify_lines("cat <<EOF\nit's text\n\n# not a comment\n", &build_shell_with_heredocs()));
+    }
+
+    // A longer word starting with the word is text, and so is the word among other words
+    #[test]
+    fn only_the_word_alone_on_its_line_closes_a_heredoc_trailing_whitespace_aside() {
+        use LineClass::{StringContent, WordsInCode, WordsInComment};
+        let shell = build_shell_with_heredocs();
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, WordsInComment],
+                classify_lines("cat <<EOF\nEOF2\n# still text\nEOF \n# a comment\n", &shell));
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, StringContent, WordsInComment],
+                classify_lines("cat <<EOF\necho EOF\n  EOF\nEOF more\nEOF\n# a comment\n", &shell));
     }
 
     // The languages a section can resolve to, keyed the way the real run keys them: definitions by

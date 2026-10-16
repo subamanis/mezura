@@ -33,6 +33,8 @@ Main changes:
       close with one symbol, '###' and '"', which a language file may now declare.
   -> A '<script' or '<style' tag whose '>' sits on a later line opens its block, so what it holds
       is counted as the language it is written in.
+  -> A shell heredoc, 'cat <<EOF' down to the line holding 'EOF', is read as the string it is, so a
+      quote inside one opens nothing.
 
 Bugfixes:
   -> Where block comments nest, an opener sharing a byte with a closer, '/*/*/' in Rust, is read

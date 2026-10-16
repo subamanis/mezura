@@ -22,6 +22,9 @@ pub struct Language {
     pub shebangs : Vec<String>,
     /// Which quotes open a string, and what escapes one.
     pub strings : StringRules,
+    /// The shell's `<<`, after which a word chosen on the spot opens a string that ends at the
+    /// first line holding that word alone.
+    pub heredoc_opener : Option<String>,
     /// The symbols that make the rest of the line a comment.
     pub comment_symbols : Vec<String>,
     /// Block comments, opener and closer, ending at the first closer. Both halves may be one
@@ -79,6 +82,7 @@ impl Language {
             filenames : Vec::new(),
             shebangs : Vec::new(),
             strings,
+            heredoc_opener : None,
             comment_symbols : owned_strings(comment_symbols),
             multiline_comments : multiline_comments.iter()
                     .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())).collect(),
@@ -167,6 +171,14 @@ impl Language {
         self
     }
 
+    /// Sets the symbol a heredoc opens with. An empty symbol leaves the language with none.
+    pub fn with_heredoc_opener(mut self, symbol: &str) -> Self {
+        if !symbol.is_empty() {
+            self.heredoc_opener = Some(symbol.to_owned());
+        }
+        self
+    }
+
     /// Adds sections of the file that another language is counted inside.
     pub fn with_nested_languages(mut self, regions: &[NestedLanguage]) -> Self {
         self.nested_languages.extend(regions.iter().cloned());
@@ -210,9 +222,16 @@ impl Language {
         }
         match literals.get(symbol - symbols.len()) {
             Some(literal) => (literal, literal),
-            None => {
-                let crossing = &self.strings.get_multiline_strings()[symbol - symbols.len() - literals.len()];
-                (&crossing.open, &crossing.close)
+            None => match self.strings.get_multiline_strings().get(symbol - symbols.len() - literals.len()) {
+                Some(crossing) => (&crossing.open, &crossing.close),
+                // The heredoc, numbered after the leveled pairs, whose closer each opener chooses
+                None => {
+                    let heredoc = symbol - symbols.len() - literals.len() - self.strings.get_multiline_strings().len()
+                            - self.strings.get_leveled_pairs().len();
+                    let opener = self.heredoc_opener.as_deref().filter(|_| heredoc == 0)
+                            .expect("a string number that names no string of the language");
+                    (opener, "")
+                }
             }
         }
     }
@@ -233,7 +252,7 @@ impl Language {
     pub(crate) fn find_leveled_string(&self, symbol: u8) -> Option<&LeveledPair> {
         let first_leveled = self.strings.get_symbols().len() + self.strings.get_char_literals().len()
                 + self.strings.get_multiline_strings().len();
-        (symbol as usize).checked_sub(first_leveled).map(|leveled| &self.strings.get_leveled_pairs()[leveled])
+        (symbol as usize).checked_sub(first_leveled).and_then(|leveled| self.strings.get_leveled_pairs().get(leveled))
     }
 
     pub(crate) fn calculate_string_opener_width(&self, symbol: u8, level: u32) -> usize {
@@ -323,6 +342,7 @@ impl PartialEq for Language {
             && self.filenames == other.filenames
             && self.shebangs == other.shebangs
             && self.strings == other.strings
+            && self.heredoc_opener == other.heredoc_opener
             && self.comment_symbols == other.comment_symbols
             && self.multiline_comments == other.multiline_comments
             && self.nesting_comments == other.nesting_comments

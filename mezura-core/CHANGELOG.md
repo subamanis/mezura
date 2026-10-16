@@ -48,6 +48,9 @@ New:
   CoffeeScript's `###`, and the next one met inside the block closes it. CoffeeScript and
   Smalltalk ship as languages. `comment-pair-never-closes` now reports only a self-nesting pair
   written that way.
+- `Language::heredoc_opener` and `Language::with_heredoc_opener`, read from `Heredoc opener`, the
+  symbol after which a word chosen on the spot opens a string that ends at the line holding that
+  word alone, the shell's `<<`.
 
 Changed:
 

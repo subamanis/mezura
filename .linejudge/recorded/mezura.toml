@@ -213,16 +213,10 @@ counted = { lines = 5, code = 4, comments = 1, extra = 0 }
 counted = { lines = 5, code = 4, comments = 1, blanks = 0 }
 
 [answer.2120-heredoc_holding_an_apostrophe.content]
-is-known-failure = true
-counted = { lines = 5, code = 5, comments = 0, extra = 0 }
-note = """
-the apostrophe opens a string and every comment under it is counted as code"""
+counted = { lines = 5, code = 3, comments = 2, extra = 0 }
 
 [answer.2120-heredoc_holding_an_apostrophe.region]
-is-known-failure = true
-counted = { lines = 5, code = 5, comments = 0, blanks = 0 }
-note = """
-the apostrophe opens a string and every comment under it is counted as code"""
+counted = { lines = 5, code = 3, comments = 2, blanks = 0 }
 
 [answer.2130-raw_string_holding_quotes.content]
 counted = { lines = 2, code = 1, comments = 1, extra = 0 }

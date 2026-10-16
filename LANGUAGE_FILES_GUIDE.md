@@ -65,6 +65,7 @@ Three things to know before you start:
 | `Paired string openers` *(opt)* | Opens with one symbol, closes with another, a `*` marking a counted run | `R"( @" r#*"` |
 | `Paired string closers` | Their closers, in the same order | `)" " "#*` |
 | `Paired strings escaped by doubling` *(opt)* | The openers of the pairs whose closer written twice is one quote of the text | `@"` |
+| `Heredoc opener` *(opt)* | The symbol after which a word chosen on the spot opens a string that ends at the line holding that word alone | `<<` |
 | `Escape character` | Required by any language that declares a string. See below | `\` |
 | `Line continuation` *(opt)* | Joins a line to the next when it ends the line | `\` |
 | `Continues` | What the joining reaches: `strings`, `comments`, or both | `strings comments` |
@@ -118,6 +119,14 @@ or more ends at the last of a run of them, since nothing escapes a quote in fron
 `"""say "hi""""` holds `say "hi"`. Look it up rather than guessing, because getting it wrong is
 silent: a `` `C:\` `` in the wrong block leaves the string open to the end of the file and every
 comment under it counts as code.
+
+A heredoc is a string whose closer is chosen where it is written: the shell's `cat <<EOF` runs to
+the first line holding `EOF` alone. Declare the symbol under `Heredoc opener`, after the paired
+strings. The word after it may be quoted or backslashed (`<<'EOF'`, `<<\EOF`), a `-` right after the
+symbol lets the closing line carry leading tabs, and a word has to start with a letter, an
+underscore, a quote or a backslash, so `$(( 1 << 2 ))` and the here string `<<<` open nothing. The
+rest of the opening line stays code, the lines under it are the string, and several heredocs opened
+on one line close one after the other, as the shell reads them.
 
 ## The escape character
 

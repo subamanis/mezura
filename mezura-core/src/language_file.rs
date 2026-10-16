@@ -103,6 +103,7 @@ const MULTILINE_RAW_STRINGS    : &str = "Multi line raw string symbols";
 const PAIRED_STRING_OPENERS    : &str = "Paired string openers";
 const PAIRED_STRING_CLOSERS    : &str = "Paired string closers";
 const PAIRED_STRINGS_ESCAPED_BY_DOUBLING : &str = "Paired strings escaped by doubling";
+const HEREDOC_OPENER           : &str = "Heredoc opener";
 const CHARACTER_LITERALS       : &str = "Character literal symbols";
 const ESCAPE_CHARACTER         : &str = "Escape character";
 const ESCAPES_NOTHING          : &str = "none";
@@ -398,6 +399,15 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines)?;
     }
 
+    // One symbol, since the word after it and the line that closes it follow the shell's rules
+    let mut heredoc_opener = None;
+    if header == HEREDOC_OPENER {
+        let symbols = split_line_on_whitespace(&read_value_line(lines)?);
+        let [symbol] = symbols.as_slice() else { return None };
+        heredoc_opener = Some(symbol.clone());
+        header = read_next_header(lines)?;
+    }
+
     // What cancels a string symbol, which is a fact about the language and not about the symbol.
     // Required of any language declaring a string of any kind, so that a file states it instead of
     // inheriting whatever the parser last happened to do; 'none' is how a language says nothing
@@ -405,7 +415,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     let mut escape_character = None;
     let declares_a_string = !string_symbols.is_empty() || !char_literals.is_empty()
             || !multiline_strings.is_empty() || !raw_multiline_strings.is_empty()
-            || !string_pairs.is_empty() || !leveled_strings.is_empty();
+            || !string_pairs.is_empty() || !leveled_strings.is_empty() || heredoc_opener.is_some();
     if header == ESCAPE_CHARACTER {
         let value = read_value_line(lines)?;
         if value != ESCAPES_NOTHING {
@@ -440,12 +450,13 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     // Declaring no string at all is allowed and is what HTML needs: its quotes delimit attributes
     // rather than strings, and the free text between its tags is full of apostrophes.
     let crossing_openers = multiline_strings.iter().chain(raw_multiline_strings.iter())
-            .chain(string_pairs.iter().map(|(open, _)| open)).collect::<Vec<&String>>();
+            .chain(string_pairs.iter().map(|(open, _)| open)).chain(heredoc_opener.iter())
+            .collect::<Vec<&String>>();
     let opens_a_crossing_string = |symbol: &String| crossing_openers.contains(&symbol);
     if string_symbols.iter().any(opens_a_crossing_string) {return None;}
     if char_literals.iter().any(|literal| string_symbols.contains(literal)
             || opens_a_crossing_string(literal)) {return None;}
-    // One symbol in two of the three blocks would leave them to argue about whether it escapes
+    // One symbol in two string blocks would leave them to argue about which one it opens
     if crossing_openers.iter().enumerate()
             .any(|(at, open)| crossing_openers[at + 1..].contains(open)) {return None;}
 
@@ -618,6 +629,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     let mut language = Language::new(lang_name, extensions, strings, comment_symbols,
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>(), keywords);
+    language.heredoc_opener = heredoc_opener;
     language.line_continuation = line_continuation;
     language.module_keyword = module_keyword;
 
@@ -1245,6 +1257,26 @@ pl      Perl, Prolog
             assert!(language.strings.get_multiline_strings().iter().any(|crossing| crossing.escapes_by_doubling),
                     "{name} lost its pair escaped by doubling");
         }
+    }
+
+    #[test]
+    fn a_heredoc_opener_is_one_symbol_declared_after_the_strings_and_never_also_a_string_symbol() {
+        let good = "Language\nShlike\n\nExtensions\nshl\n\nString symbols\n\n\
+                Multi line raw string symbols\n'\n\nHeredoc opener\n<<\n\nEscape character\n\\\n\nComment symbols\n#\n";
+        assert_eq!(Some("<<".to_owned()), parse_language(good).expect("the declaration must parse").heredoc_opener);
+
+        for (refused, why) in [(good.replace("opener\n<<", "opener\n"), "an empty opener"),
+                (good.replace("opener\n<<", "opener\n<< <<-"), "two openers"),
+                (good.replace("opener\n<<", "opener\n'"), "an opener that is also a raw string symbol"),
+                (good.replace("Multi line raw string symbols\n'\n\n", "").replace("Escape character\n\\\n\n", ""),
+                        "an opener with no escape character")] {
+            assert!(parse_language(&refused).is_none(), "{why} was accepted");
+        }
+        let after_the_escape = good.replace("Heredoc opener\n<<\n\nEscape character\n\\", "Escape character\n\\\n\nHeredoc opener\n<<");
+        assert!(parse_language(&after_the_escape).is_none(), "the block was accepted after the escape character");
+
+        let shell = parse_language_file(LANGUAGES_DIR.to_owned() + "Shell.txt").unwrap();
+        assert_eq!(Some("<<".to_owned()), shell.heredoc_opener, "Shell.txt lost its heredoc opener");
     }
 
     #[test]
