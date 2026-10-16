@@ -645,7 +645,7 @@ All of this is measured against the [LineJudge](https://loc-conformance.github.i
 
 With that said, it is important to mention the following limitations:
 
-- Another language inside a file is only found where its opening tag sits on one line, the way ```<script>``` and ```<style>``` do. Languages that interleave mid-line are outside that: the ```<?php ?>``` of PHP and the ERB, JSP and Blade family are read as one language from beginning to end. An opening tag split over two lines stays with the file's own language. A section fenced by something that is not a tag is outside it too: the ```---``` frontmatter at the top of an Astro file holds TypeScript, and its ```//``` lines are counted as code. The ```<script>``` and ```<style>``` blocks of the same file are read as the languages they hold, as they are in Vue and Svelte.
+- Another language inside a file is only found where a tag opens it, the way ```<script>``` and ```<style>``` do, the tag running over as many lines as it needs. Languages that interleave mid-line are outside that: the ```<?php ?>``` of PHP and the ERB, JSP and Blade family are read as one language from beginning to end. A section fenced by something that is not a tag is outside it too: the ```---``` frontmatter at the top of an Astro file holds TypeScript, and its ```//``` lines are counted as code. The ```<script>``` and ```<style>``` blocks of the same file are read as the languages they hold, as they are in Vue and Svelte.
 
 - Keywords are counted as words. Every ```class``` in code is counted, whatever it means there.
 

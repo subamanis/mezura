@@ -1318,6 +1318,30 @@ struct QuietLines {
     from: usize,
 }
 
+// An opening tag whose '>' is not on the line it began, with its text after the name gathered from
+// the code of each line so far
+struct PendingTag<'a> {
+    region: &'a NestedLanguage,
+    text: String,
+}
+
+impl PendingTag<'_> {
+    // Where the first '<' or '>' in the line's code stands, with the text before it gathered, and
+    // None with the whole of its code gathered when the line holds neither
+    fn gather_line(&mut self, line: &str, code_ranges: &[(usize, usize)]) -> Option<usize> {
+        for (from, to) in code_ranges {
+            let found = memchr::memchr2(b'<', b'>', &line.as_bytes()[*from..*to]).map(|offset| from + offset);
+            // A space before each piece keeps a name at its start apart from the text before it
+            self.text.push(' ');
+            self.text.push_str(&line[*from..found.unwrap_or(*to)]);
+            if found.is_some() {
+                return found;
+            }
+        }
+        None
+    }
+}
+
 fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup: &NestedLanguageLookup,
     matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
     tests_by_path: TestsByPath, log: &mut ExplainLog) -> FileReport
@@ -1354,6 +1378,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
 
     let mut shell = WalkState::default();
     let mut buckets: Vec<SectionBucket> = Vec::new();
+    let mut pending_tag = None;
     let mut lines = MaskedLines::of(contents, &get_or_build_plan_of(language).finder);
     let mut handed_back = None;
     loop {
@@ -1413,7 +1438,8 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         // A region opener only counts where the shell left it as code, so one sitting inside a
         // comment or a string of the shell opens nothing
         if had_code && !language.nested_languages.is_empty()
-                && let Some((region, inner)) = find_region_opening(raw_line.trim_ascii(), &scan.code_ranges, language, lookup) {
+                && let Some((region, inner)) = find_region_opening(raw_line.trim_ascii(), &scan.code_ranges, language, lookup,
+                        &mut pending_tag) {
             let section_from = end_of_line(contents, line_start, raw_line);
             // A section is only a section if it closes. Nothing forces an opener to be a tag rather
             // than the same text written inside one, and on the strength of one word that is not a
@@ -1685,12 +1711,27 @@ fn end_of_line(contents: &str, line_start: usize, raw_line: &str) -> usize {
 }
 
 // A region opener that survived the shell's own reading of the line, with the language its section
-// is in. None when the tag does not close on this line, when its section also closes on this line,
-// or when no language can be found for it: all three count as shell.
+// is in. None when its section also closes on the line of the tag's '>', or when no language can be
+// found for it, and both count as shell. A tag whose '>' is on a later line waits in 'pending_tag'.
 fn find_region_opening<'a>(line: &str, code_ranges: &[(usize, usize)], language: &'a Language,
-    lookup: &'a NestedLanguageLookup) -> Option<(&'a NestedLanguage, &'a Language)>
+    lookup: &'a NestedLanguageLookup, pending_tag: &mut Option<PendingTag<'a>>) -> Option<(&'a NestedLanguage, &'a Language)>
 {
     let bytes = line.as_bytes();
+    if let Some(mut pending) = pending_tag.take() {
+        match pending.gather_line(line, code_ranges) {
+            None => {
+                *pending_tag = Some(pending);
+                return None;
+            },
+            Some(at) if bytes[at] == b'>' && find_tag_ignoring_case(&bytes[at..], pending.region.end.as_bytes()).is_none() => {
+                if let Some(inner) = find_section_language(pending.region, &pending.text, lookup) {
+                    return Some((pending.region, inner));
+                }
+            },
+            // A '<' before the '>' is read as the word written out in the text of a page
+            Some(_) => ()
+        }
+    }
     for (from, to) in code_ranges {
         let mut cursor = *from;
         while let Some(offset) = memchr::memchr(b'<', &bytes[cursor..*to]) {
@@ -1705,26 +1746,34 @@ fn find_region_opening<'a>(line: &str, code_ranges: &[(usize, usize)], language:
                 // not the opener of a script block
                 match bytes.get(after_start) {
                     Some(byte) if byte.is_ascii_whitespace() || *byte == b'>' => (),
+                    None => (),
                     _ => continue
                 }
-                // The tag has to close on its own line; split over two, the line stays shell
-                let Some(tag_close) = memchr::memchr(b'>', &bytes[after_start..]) else { continue };
+                let Some(tag_close) = memchr::memchr(b'>', &bytes[after_start..]) else {
+                    *pending_tag = Some(PendingTag { region, text: line[after_start.min(*to)..*to].to_owned() });
+                    return None;
+                };
                 // A section that opens and closes on one line stays shell whole, tags and all
                 if find_tag_ignoring_case(&bytes[after_start + tag_close..], region.end.as_bytes()).is_some() {
                     continue;
                 }
                 let tag_text = &line[after_start..after_start + tag_close];
-                let named = find_attribute_value(tag_text, "lang")
-                        .or_else(|| find_attribute_value(tag_text, "type").map(strip_mime_family));
-                let inner = named.and_then(|value| lookup.find_by_spelling(value))
-                        .or_else(|| lookup.find_by_spelling(&region.default));
-                if let Some(inner) = inner {
+                if let Some(inner) = find_section_language(region, tag_text, lookup) {
                     return Some((region, inner));
                 }
             }
         }
     }
     None
+}
+
+fn find_section_language<'a>(region: &NestedLanguage, tag_text: &str, lookup: &'a NestedLanguageLookup)
+    -> Option<&'a Language>
+{
+    let named = find_attribute_value(tag_text, "lang")
+            .or_else(|| find_attribute_value(tag_text, "type").map(strip_mime_family));
+    named.and_then(|value| lookup.find_by_spelling(value))
+            .or_else(|| lookup.find_by_spelling(&region.default))
 }
 
 // The value of one attribute inside a tag's text, with either quote or none: lang="ts", lang='ts'
@@ -1775,8 +1824,8 @@ fn find_tag_ignoring_case(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 // The closing tag is read the way 'find_region_opening' reads the opening one: the name, then
 // whitespace or '>'. What sits between the name and the '>' is not this counter's business, and a
 // browser agrees: measured, '</script >' and '</script foo>' both close the element while
-// '</scriptfoo>' is a different name and closes nothing. A tag that never reaches a '>' on the line
-// it began is not a tag, which is the same line the opener draws.
+// '</scriptfoo>' is a different name and closes nothing. A closer that never reaches a '>' on the
+// line it began is not a tag.
 fn closes_a_tag(rest: &[u8], name: &[u8]) -> bool {
     if !starts_with_ignoring_case(rest, name) {
         return false;
@@ -3904,9 +3953,6 @@ mod tests {
     #[test]
     fn what_cannot_be_a_section_counts_as_the_shell_it_always_was() {
         let (languages, extensions) = section_fixture();
-        let report = parse_with_sections("<script\nlang=\"js\">\nvar x = 1;\n</script>\n", &web_shell(), &languages, &extensions);
-        assert!(report.sections.is_empty(), "a tag split over two lines opened a section");
-
         let report = parse_with_sections("<script>var x = 1;</script>\n<p>y</p>\n", &web_shell(), &languages, &extensions);
         assert!(report.sections.is_empty(), "a one line section left the line");
         assert_eq!((2, 2, 0), content_counts(&report.shell));
@@ -3918,6 +3964,72 @@ mod tests {
         let report = parse_with_sections("<script>\nvar x = 1;\n</script>\n", &unknown, &languages, &extensions);
         assert!(report.sections.is_empty(), "a section resolved to a language nothing declares");
         assert_eq!((3, 3, 0), content_counts(&report.shell));
+    }
+
+    #[test]
+    fn an_opening_tag_split_over_lines_opens_its_section_after_the_line_holding_its_bracket() {
+        let (languages, extensions) = section_fixture();
+        let contents = "<script\n  type=\"text/javascript\">\n// a comment inside the script\nvar x = 1;\n</script>\n";
+        let report = parse_with_sections(contents, &web_shell(), &languages, &extensions);
+        assert_eq!((3, 3, 0), content_counts(&report.shell), "the tag lines and the closer belong to the shell");
+        assert_eq!(1, report.sections.len(), "a tag split over two lines opened no section");
+        assert_eq!("JS", report.sections[0].language);
+        assert_eq!((2, 1, 1), content_counts(&report.sections[0].stats));
+        assert_eq!(contents.find("</script>").unwrap() - contents.find("// a").unwrap(), report.sections[0].bytes);
+
+        let report = parse_with_sections("<script\n  src=\"x.js\"\n>\nvar x = 1;\n</script>\n", &web_shell(), &languages, &extensions);
+        assert_eq!(4, report.shell.lines, "a '>' alone on its line did not stay with the shell");
+        assert_eq!((1, 1, 0), content_counts(&report.sections[0].stats));
+    }
+
+    #[test]
+    fn a_split_tag_names_its_language_on_any_of_its_lines() {
+        let html = LANGUAGE_MAP_REF.get("HTML").unwrap();
+        let contents = "<script\n  defer\n  type=\"text/typescript\"\n>\nlet x: number = 1;\n</script>\n";
+        let report = parse_lines_report(contents, html, &shipped_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
+        assert_eq!("TypeScript", report.sections[0].language, "an attribute opening a line of the tag was not read");
+
+        let vue = LANGUAGE_MAP_REF.get("Vue").unwrap();
+        let contents = "<style\n  scoped\n  lang=\"scss\">\n$gap: 1rem;\n</style>\n";
+        let report = parse_lines_report(contents, vue, &shipped_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
+        assert_eq!("SCSS", report.sections[0].language);
+
+        let report = parse_lines_report("<style\n>\n.a { color: red; }\n</style>\n", vue, &shipped_lookup(),
+                &EngineConfig::default(), TestsByPath::Nothing);
+        assert_eq!("CSS", report.sections[0].language, "a split tag naming nothing missed the region's default");
+    }
+
+    #[test]
+    fn a_split_tag_that_opens_no_section_leaves_every_line_to_the_shell() {
+        let (languages, extensions) = section_fixture();
+        let shell_alone = |contents: &str| {
+            let report = parse_with_sections(contents, &web_shell(), &languages, &extensions);
+            assert!(report.sections.is_empty(), "{contents:?} opened a section");
+            assert_eq!(contents.lines().count(), report.shell.lines, "{contents:?}");
+        };
+        shell_alone("<script\n  src=\"x.js\"></script>\n// one\n</script>\n");
+        shell_alone("<p>x</p>\n<script\n");
+        shell_alone("<scripture\n  is a word>\n// one\n</script>\n");
+        // A '<' before any '>' shows the word was text in a page
+        shell_alone("<p>a <script\nword</p>\n// one\n</script>\n");
+    }
+
+    #[test]
+    fn a_one_line_tag_after_a_split_one_opens_its_own_section() {
+        let (languages, extensions) = section_fixture();
+        let contents = "<style\n>\n/* css */\n</style>\n<script>\n// js\nvar x = 1;\n</script>\n";
+        let report = parse_with_sections(contents, &web_shell(), &languages, &extensions);
+        assert_eq!(2, report.sections.len());
+        assert_eq!("CSS", report.sections[0].language);
+        assert_eq!((1, 0, 1), content_counts(&report.sections[0].stats));
+        assert_eq!("JS", report.sections[1].language);
+        assert_eq!((2, 1, 1), content_counts(&report.sections[1].stats));
+        assert_eq!(5, report.shell.lines);
+
+        let contents = "<script\n  src=\"x.js\"></script><script>\n// js\n</script>\n";
+        let report = parse_with_sections(contents, &web_shell(), &languages, &extensions);
+        assert_eq!(1, report.sections.len(), "a tag on the line that ended a split one was not read");
+        assert_eq!((1, 0, 1), content_counts(&report.sections[0].stats));
     }
 
     #[test]

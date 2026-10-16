@@ -427,20 +427,16 @@ HTML declares no string symbols, on purpose, because its quotes hold attributes 
 full of apostrophes. The price is this one: a quoted opener cannot be seen"""
 
 [answer.6030-opening_tag_split_over_two_lines.content]
-is-known-failure = true
-counted = { lines = 5, code = 5, comments = 0, extra = 0 }
-counted-regions = []
-note = """
-the block is not found, so the comment inside it is read with the page's symbols, and HTML has
-no //"""
+counted = { lines = 5, code = 4, comments = 1, extra = 0 }
+counted-regions = [
+    { language = "JavaScript", lines = 2, code = 1, comments = 1, extra = 0 },
+]
 
 [answer.6030-opening_tag_split_over_two_lines.region]
-is-known-failure = true
-counted = { lines = 5, code = 5, comments = 0, blanks = 0 }
-counted-regions = []
-note = """
-the block is not found, so the comment inside it is read with the page's symbols, and HTML has
-no //"""
+counted = { lines = 5, code = 4, comments = 1, blanks = 0 }
+counted-regions = [
+    { language = "JavaScript", lines = 2, code = 1, comments = 1, blanks = 0 },
+]
 
 [answer.6040-script_tag_in_upper_case.content]
 counted = { lines = 6, code = 5, comments = 1, extra = 0 }

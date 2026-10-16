@@ -31,6 +31,8 @@ Main changes:
       form, '[==[ ]==]', are read as the strings they are, so a quote inside one opens nothing.
   -> CoffeeScript ('.coffee') and Smalltalk ('.st') are counted. Their block comments open and
       close with one symbol, '###' and '"', which a language file may now declare.
+  -> A '<script' or '<style' tag whose '>' sits on a later line opens its block, so what it holds
+      is counted as the language it is written in.
 
 Bugfixes:
   -> Where block comments nest, an opener sharing a byte with a closer, '/*/*/' in Rust, is read
