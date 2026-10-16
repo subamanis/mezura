@@ -62,8 +62,8 @@ Three things to know before you start:
 | `Character literal symbols` *(opt)* | Wraps a single character, like Rust's `'a'` | `'` |
 | `Multi line string symbols` *(opt)* | Crosses lines, backslash escapes | `"""` |
 | `Multi line raw string symbols` *(opt)* | Crosses lines, nothing escapes | `` ` `` |
-| `Paired string openers` *(opt)* | Opens with one symbol, closes with another | `r#" @"` |
-| `Paired string closers` | Their closers, in the same order | `"# "` |
+| `Paired string openers` *(opt)* | Opens with one symbol, closes with another, a `*` marking a counted run | `R"( @" r#*"` |
+| `Paired string closers` | Their closers, in the same order | `)" " "#*` |
 | `Paired strings escaped by doubling` *(opt)* | The openers of the pairs whose closer written twice is one quote of the text | `@"` |
 | `Escape character` | Required by any language that declares a string. See below | `\` |
 | `Line continuation` *(opt)* | Joins a line to the next when it ends the line | `\` |
@@ -150,8 +150,8 @@ A language can declare several pairs, matched by position, and only the closer o
 opened a block ends it. Pascal writes both `{ }` and `(* *)`, so a stray `*)` inside a `{ }` comment
 is text.
 
-The two characters `=*` mean "any number of `=` here", which declares Lua's `--[[ ]]`, `--[=[ ]=]`
-and every level above in one line:
+A `*` after a character means "any number of that character here", which declares Lua's `--[[ ]]`,
+`--[=[ ]=]` and every level above in one line:
 
 ```
 Multi line comment start
@@ -160,8 +160,12 @@ Multi line comment end
 ]=*]
 ```
 
-That is the only place in the format where characters do not stand for themselves, and it works
-only in these two blocks.
+The same marker declares a paired string whose two ends carry a counted run, Lua's `[=*[` with
+`]=*]` and Rust's `r#*"` with `"#*`. A closer that ends in its run, Rust's `"#*`, closes at any run
+at least as long as the opener's and takes exactly that many; a closer with a character after the
+run, Lua's `]=*]`, closes only at the same count. That is the only place in the format where
+characters do not stand for themselves, and it works only in the block comment and paired string
+blocks.
 
 ## When a symbol is part of something longer
 

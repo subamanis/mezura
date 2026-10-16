@@ -359,7 +359,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines)?;
     }
 
-    // Strings that open with one symbol and close with another, 'r#"' with '"#'. The two value
+    // Strings that open with one symbol and close with another, 'R"(' with ')"'. The two value
     // lines are lists paired by position, the shape the multiline comment block also has. No escape
     // byte works inside one, which is the reason such a form has a distinct opener at all.
     let mut string_pairs = Vec::new();
@@ -370,6 +370,23 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         if closers.len() != openers.len() {return None;}
         string_pairs = openers.into_iter().zip(closers).collect::<Vec<_>>();
         header = read_next_header(lines)?;
+    }
+    // A pair written with a '*' counts the run of the byte in front of it, Lua's '[=*[' and Rust's
+    // 'r#*"'. It leaves the plain pairs here, so naming its opener below refuses the file.
+    let mut leveled_strings = Vec::new();
+    let mut half_a_marker = false;
+    string_pairs.retain(|(open, close)| {
+        if !open.contains('*') && !close.contains('*') {
+            return true;
+        }
+        match LeveledPair::of(open, close) {
+            Some(pair) => leveled_strings.push(pair),
+            None => half_a_marker = true
+        }
+        false
+    });
+    if half_a_marker {
+        return None;
     }
     let mut doubling_openers = Vec::new();
     if header == PAIRED_STRINGS_ESCAPED_BY_DOUBLING {
@@ -388,7 +405,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     let mut escape_character = None;
     let declares_a_string = !string_symbols.is_empty() || !char_literals.is_empty()
             || !multiline_strings.is_empty() || !raw_multiline_strings.is_empty()
-            || !string_pairs.is_empty();
+            || !string_pairs.is_empty() || !leveled_strings.is_empty();
     if header == ESCAPE_CHARACTER {
         let value = read_value_line(lines)?;
         if value != ESCAPES_NOTHING {
@@ -469,7 +486,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
 
     // A pair written with '=*' is Lua's long bracket: the run of '=' is counted at the opener and
     // only an end with the same count closes. It is declared in the multiline block, since the
-    // counting is what such a pair has instead of nesting. Half a marker is a typo, refused.
+    // counting is what such a pair has instead of nesting. Half a marker is a typo, refused, and so
+    // is an end with nothing after its run, which only the string pairs read.
     let mut leveled_comments = Vec::new();
     let mut half_a_marker = false;
     multiline_comments.retain(|(start, end)| {
@@ -477,8 +495,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             return true;
         }
         match LeveledPair::of(start, end) {
-            Some(pair) => leveled_comments.push(pair),
-            None => half_a_marker = true
+            Some(pair) if pair.end_suffix.is_some() => leveled_comments.push(pair),
+            _ => half_a_marker = true
         }
         false
     });
@@ -595,7 +613,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         strings.with_string_pairs_escaped_by_doubling(std::slice::from_ref(pair))
     } else {
         strings.with_string_pairs(std::slice::from_ref(pair))
-    });
+    }).with_leveled_pairs(&leveled_strings);
 
     let mut language = Language::new(lang_name, extensions, strings, comment_symbols,
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
@@ -1416,13 +1434,50 @@ pl      Perl, Prolog
         assert!(parsed.multiline_comments.is_empty());
         assert_eq!(1, parsed.leveled_comments.len());
         assert_eq!(("--[", b'['), (parsed.leveled_comments[0].start_prefix.as_str(), parsed.leveled_comments[0].start_suffix));
-        assert_eq!(("]", b']'), (parsed.leveled_comments[0].end_prefix.as_str(), parsed.leveled_comments[0].end_suffix));
+        assert_eq!(("]", Some(b']')), (parsed.leveled_comments[0].end_prefix.as_str(), parsed.leveled_comments[0].end_suffix));
 
         let half = good.replace("]=*]", "]]");
         assert!(parse_language(&half).is_none(), "one leveled half was accepted");
+        let open_ended = good.replace("]=*]", "]=*");
+        assert!(parse_language(&open_ended).is_none(), "a comment end with nothing after its run was accepted");
 
         let lua = parse_language_file(LANGUAGES_DIR.to_owned() + "Lua.txt").unwrap();
         assert_eq!(1, lua.leveled_comments.len(), "Lua.txt no longer declares its long bracket");
+    }
+
+    // The counted byte is the one the '*' stands after, so Rust's run of '#' is declared the way
+    // Lua's run of '=' is, and the end of a raw string may stop at its run.
+    #[test]
+    fn a_string_pair_written_with_the_counted_marker_is_leveled() {
+        let good = "Language\nRawlike\n\nExtensions\nrwl\n\nString symbols\n\"\n\n\
+                Paired string openers\nr#*\" @\"\nPaired string closers\n\"#* \"\n\n\
+                Escape character\n\\\n\nComment symbols\n//\n";
+        let parsed = parse_language(good).expect("the leveled declaration must parse");
+        assert_eq!(vec![MultilineString::of("@\"", "\"")], parsed.strings.get_multiline_strings());
+        let pair = &parsed.strings.get_leveled_pairs()[0];
+        assert_eq!(("r", b'"', "\"", None, b'#'),
+                (pair.start_prefix.as_str(), pair.start_suffix, pair.end_prefix.as_str(), pair.end_suffix, pair.filler));
+
+        let wrong = [
+            ("half a marker", good.replace("\"#* \"\n", "\"# \"\n")),
+            ("two halves counting different bytes", good.replace("\"#* \"\n", "\"=* \"\n")),
+            ("an opener that stops at its run", good.replace("r#*\" @", "r#* @")),
+            ("a prefix ending in the counted byte", good.replace("r#*\" @", "r##*\" @")),
+            ("a leveled opener escaped by doubling", good.replace("\"#* \"\n", "\"#* \"\nPaired strings escaped by doubling\nr#*\"\n")),
+            ("a string declared without saying what escapes it", good.replace("Escape character\n\\\n\n", ""))
+        ];
+        for (name, contents) in wrong {
+            assert_ne!(good, contents, "the '{name}' mutation changed nothing");
+            assert!(parse_language(&contents).is_none(), "'{name}' was accepted");
+        }
+        let only_leveled = good.replace("String symbols\n\"", "String symbols\n").replace("r#*\" @\"", "r#*\"")
+                .replace("\"#* \"\n", "\"#*\n").replace("Escape character\n\\\n\n", "");
+        assert!(parse_language(&only_leveled).is_none(), "a language whose only string is leveled skipped its escape");
+
+        let rust = parse_language_file(LANGUAGES_DIR.to_owned() + "Rust.txt").unwrap();
+        assert_eq!(3, rust.strings.get_leveled_pairs().len(), "Rust.txt no longer declares its three raw prefixes");
+        let lua = parse_language_file(LANGUAGES_DIR.to_owned() + "Lua.txt").unwrap();
+        assert_eq!(1, lua.strings.get_leveled_pairs().len(), "Lua.txt no longer declares its long bracket string");
     }
 
     #[test]

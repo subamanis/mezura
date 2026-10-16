@@ -651,13 +651,13 @@ With that said, it is important to mention the following limitations:
 
 - Hard links count twice. Symbolic links and nested targets are dropped, but a hard link is indistinguishable from an ordinary file.
 
-- A string delimiter invented on the spot cannot be declared: heredocs, Rust's ```r##"..."##``` past one hash, Lua's ```[=[ ]=]``` past the plain form. mezura keeps counting quotes inside them, so one apostrophe looks like a string opening. In languages whose strings may cross lines (Rust, Ruby, the shells, PHP, SQL) that runs on until the next quote.
+- A heredoc cannot be declared. mezura keeps counting quotes inside one, so one apostrophe looks like a string opening. In languages whose strings may cross lines (Ruby, the shells, PHP, SQL) that runs on until the next quote.
 
 - A comment opener inside a regex literal, like the ```/*``` in ```/a[/*]b/```, opens a comment. A regex inside a string is fine.
 
 - Case is ignored in extensions, so the Unix convention where ```.C``` is C++ and ```.c``` is C is lost.
 
-- ```=*``` in a comment symbol means "any number of ```=```", so a language whose symbol really contained ```=*``` could not be declared. None is known.
+- A ```*``` after a character in a block comment symbol or a paired string symbol means "any number of that character", as in Lua's ```--[=*[``` and Rust's ```r#*"```, so a language whose symbol really contained such a run could not be declared. None is known.
 
 - Two languages claiming one extension is settled per file, by a ```#!``` line or by evidence the language files declare. A file whose content decides neither way follows the standing order of ```language_conflicts.txt```, and is parsed with that winner's symbols. ```--force-language``` decides outright, ```--no-heuristics``` turns the content reading off, and ```--no-shebang``` takes the ```#!``` line out of the whole business, the naming of files that carry no extension included.
 

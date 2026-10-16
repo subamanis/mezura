@@ -11,9 +11,9 @@ String symbols
 " '
 
 Paired string openers
-[[
+[=*[
 Paired string closers
-]]
+]=*]
 
 Escape character
 \

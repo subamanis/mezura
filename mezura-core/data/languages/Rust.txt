@@ -13,9 +13,9 @@ Multi line string symbols
 "
 
 Paired string openers
-r" r#"
+r#*" br#*" cr#*"
 Paired string closers
-" "#
+"#* "#* "#*
 
 Escape character
 \

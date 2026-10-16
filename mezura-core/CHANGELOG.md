@@ -40,8 +40,15 @@ New:
 - `MultilineString::escapes_by_doubling` and `StringRules::with_string_pairs_escaped_by_doubling`,
   read from `Paired strings escaped by doubling`, for a pair whose closer written twice is one quote
   of the text, `""` inside C#'s and F#'s `@"..."`.
+- `StringRules::with_leveled_pairs` and `get_leveled_pairs`, a string pair whose ends carry a
+  counted run, read from a `*` in `Paired string openers`: Rust's `r#*"` with `"#*` and Lua's `[=*[`
+  with `]=*]`. `LeveledPair::of` reads the byte of the run from the written form, so a comment pair
+  may count a character other than `=`, and a closer may end in its run.
 
 Changed:
+
+- The fields of `LeveledPair` are no longer public; `LeveledPair::of` is the way to build one. A
+  `Carried::Str` opener is spelled with its run, `r##"` for a string opened that way.
 
 - `EngineConfig::exclude_dirs` is now `exclude_patterns`, a `PathPatterns`. A name pattern matches
   at any depth below the folder that holds the target and no folder above it, a pattern starting

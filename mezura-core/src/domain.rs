@@ -108,8 +108,9 @@ impl Language {
         self
     }
 
-    /// Adds long-bracket comment pairs. Takes the parsed pair rather than its text, so the one
-    /// place that decides whether a pair is written correctly is [`LeveledPair::of`].
+    /// Adds long-bracket comment pairs. Takes the parsed pair rather than its text, which
+    /// [`LeveledPair::of`] reads, and a comment closer whose run ends it is refused by the file
+    /// reader.
     pub fn with_leveled_comments(mut self, pairs: &[LeveledPair]) -> Self {
         self.leveled_comments.extend(pairs.iter().cloned());
         self
@@ -197,8 +198,9 @@ impl Language {
     }
 
     // The scan numbers every string symbol of a language in one sequence, the single line ones
-    // first, the character literals after them and the crossing ones last, which is the order the
-    // plan is built in.
+    // first, the character literals after them, then the crossing ones and the leveled pairs last,
+    // which is the order the plan is built in. A leveled pair has no fixed spelling to answer with
+    // here, and 'find_leveled_string' answers for it.
     pub(crate) fn get_string_pair_of(&self, symbol: u8) -> (&str, &str) {
         let (symbols, literals) = (self.strings.get_symbols(), self.strings.get_char_literals());
         let symbol = symbol as usize;
@@ -225,6 +227,35 @@ impl Language {
     pub(crate) fn string_closes_at_the_end_of_a_run(&self, symbol: u8) -> bool {
         self.find_crossing_string(symbol).is_some_and(|crossing| !crossing.escapes && crossing.close.len() >= 3
                 && crossing.close.bytes().all(|byte| byte == crossing.close.as_bytes()[0]))
+    }
+
+    pub(crate) fn find_leveled_string(&self, symbol: u8) -> Option<&LeveledPair> {
+        let first_leveled = self.strings.get_symbols().len() + self.strings.get_char_literals().len()
+                + self.strings.get_multiline_strings().len();
+        (symbol as usize).checked_sub(first_leveled).map(|leveled| &self.strings.get_leveled_pairs()[leveled])
+    }
+
+    pub(crate) fn calculate_string_opener_width(&self, symbol: u8, level: u32) -> usize {
+        match self.find_leveled_string(symbol) {
+            Some(pair) => pair.calculate_start_width(level),
+            None => self.get_string_pair_of(symbol).0.len()
+        }
+    }
+
+    pub(crate) fn calculate_string_closer_width(&self, symbol: u8, level: u32) -> usize {
+        match self.find_leveled_string(symbol) {
+            Some(pair) => pair.calculate_end_width(level),
+            None => self.get_string_pair_of(symbol).1.len()
+        }
+    }
+
+    // Rust's three raw prefixes share one closer, which the scan reports once under the first of
+    // them, so a leveled string closes at the end of any pair written with the same end
+    pub(crate) fn string_is_closed_by(&self, open: (u8, u32), closer: (u8, u32)) -> bool {
+        match (self.find_leveled_string(open.0), self.find_leveled_string(closer.0)) {
+            (Some(opened), Some(closing)) => opened.has_the_end_of(closing) && opened.is_closed_by(open.1, closer.1),
+            _ => open.0 == closer.0
+        }
     }
 
     // The one place that knows the numbering: a pair kind added later is one match arm here and not
@@ -260,21 +291,21 @@ impl Language {
     // carried; a plain or nesting pair ignores the level
     pub(crate) fn comment_start_len(&self, symbol: u8, level: u32) -> usize {
         match self.get_comment_pair_of(symbol) {
-            CommentPair::Leveled(pair) => pair.start_prefix.len() + level as usize + 1,
+            CommentPair::Leveled(pair) => pair.calculate_start_width(level),
             CommentPair::Plain { start, .. } | CommentPair::Nesting { start, .. } => start.len()
         }
     }
 
     pub(crate) fn comment_end_len(&self, symbol: u8, level: u32) -> usize {
         match self.get_comment_pair_of(symbol) {
-            CommentPair::Leveled(pair) => pair.end_prefix.len() + level as usize + 1,
+            CommentPair::Leveled(pair) => pair.calculate_end_width(level),
             CommentPair::Plain { end, .. } | CommentPair::Nesting { end, .. } => end.len()
         }
     }
 
     fn find_crossing_string(&self, symbol: u8) -> Option<&MultilineString> {
         let first_crossing = self.strings.get_symbols().len() + self.strings.get_char_literals().len();
-        (symbol as usize).checked_sub(first_crossing).map(|crossing| &self.strings.get_multiline_strings()[crossing])
+        (symbol as usize).checked_sub(first_crossing).and_then(|crossing| self.strings.get_multiline_strings().get(crossing))
     }
 }
 
@@ -325,19 +356,21 @@ pub struct StringRules {
     escape : Option<u8>,
     symbols : Vec<String>,
     char_literals : Vec<String>,
-    multiline : Vec<MultilineString>
+    multiline : Vec<MultilineString>,
+    leveled : Vec<LeveledPair>
 }
 
 impl StringRules {
     /// Rules whose strings are escaped by the given byte, usually a backslash.
     pub fn escaping_with(escape: u8) -> StringRules {
         StringRules { escape: Some(escape), symbols: Vec::new(), char_literals: Vec::new(),
-                multiline: Vec::new() }
+                multiline: Vec::new(), leveled: Vec::new() }
     }
 
     /// Rules for the languages that escape a quote by doubling it and have no escape byte at all.
     pub fn escaping_nothing() -> StringRules {
-        StringRules { escape: None, symbols: Vec::new(), char_literals: Vec::new(), multiline: Vec::new() }
+        StringRules { escape: None, symbols: Vec::new(), char_literals: Vec::new(), multiline: Vec::new(),
+                leveled: Vec::new() }
     }
 
     /// Adds quotes that open a string ending with its own line.
@@ -366,7 +399,7 @@ impl StringRules {
         self
     }
 
-    /// The same again, for the forms opened and closed by different text, such as `r#"` with `"#`.
+    /// The same again, for the forms opened and closed by different text, such as `R"(` with `)"`.
     pub fn with_string_pairs(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
         self.multiline.extend(pairs.iter().map(|(open, close)| MultilineString::of(open.as_ref(), close.as_ref())));
         self
@@ -378,6 +411,13 @@ impl StringRules {
         self.multiline.extend(pairs.iter().map(|(open, close)| MultilineString {
             escapes_by_doubling: true, ..MultilineString::of(open.as_ref(), close.as_ref())
         }));
+        self
+    }
+
+    /// The same again, for pairs whose run of one byte decides which closer ends them, Lua's `[=*[`
+    /// with `]=*]` and Rust's `r#*"` with `"#*`. Nothing escapes inside one.
+    pub fn with_leveled_pairs(mut self, pairs: &[LeveledPair]) -> Self {
+        self.leveled.extend(pairs.iter().cloned());
         self
     }
 
@@ -400,10 +440,15 @@ impl StringRules {
     pub fn get_multiline_strings(&self) -> &[MultilineString] {
         &self.multiline
     }
+
+    /// The pairs whose run decides which closer ends them, which cross lines as well.
+    pub fn get_leveled_pairs(&self) -> &[LeveledPair] {
+        &self.leveled
+    }
 }
 
-/// A string that crosses lines: the same symbol twice for Python's `"""`, two different ones for a
-/// raw form like `r#"` with `"#`.
+/// A string that crosses lines. The same symbol twice for Python's `"""`, two different ones for a
+/// raw form like `R"(` with `)"`.
 ///
 /// Whether it escapes is the one thing the shape cannot answer, since a backtick escapes nothing in
 /// Go, Odin and D and does escape in a JavaScript template literal, and `"""` splits the same way
@@ -523,26 +568,55 @@ pub struct LineContinuation {
     pub in_comments : bool
 }
 
-/// A long-bracket comment pair, split around the run of `=` that gives it its level: `--[=*[` is
-/// the prefix `--[` and the suffix `[`.
+/// A pair split around the run of one byte that gives it its level, written as that byte and a
+/// `*`. Lua's `--[=*[` is the prefix `--[`, a run of `=` and the suffix `[`, and Rust's `"#*` is
+/// the prefix `"` and a run of `#` with no suffix at all.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LeveledPair {
-    /// The fixed bytes before the run of `=` in the opener.
-    pub start_prefix : String,
-    /// The single byte that closes the opener after that run.
-    pub start_suffix : u8,
-    /// The fixed bytes before the run of `=` in the closer.
-    pub end_prefix : String,
-    /// The single byte that closes the closer after that run.
-    pub end_suffix : u8,
+    pub(crate) start_prefix : String,
+    pub(crate) start_suffix : u8,
+    pub(crate) end_prefix : String,
+    // None where the run ends the closer, as Rust's "#* does
+    pub(crate) end_suffix : Option<u8>,
+    pub(crate) filler : u8,
 }
 
 impl LeveledPair {
-    /// Splits both halves around their `=*`, and answers `None` if either is not written that way.
+    /// Splits both halves around their marker, and answers `None` if either is not written that
+    /// way, if the two count different bytes, or if the opener ends in its run.
     pub fn of(start: &str, end: &str) -> Option<LeveledPair> {
-        let (start_prefix, start_suffix) = split_leveled_half(start)?;
-        let (end_prefix, end_suffix) = split_leveled_half(end)?;
-        Some(LeveledPair { start_prefix, start_suffix, end_prefix, end_suffix })
+        let (start_prefix, filler, start_suffix) = split_leveled_half(start)?;
+        let (end_prefix, end_filler, end_suffix) = split_leveled_half(end)?;
+        if end_filler != filler {
+            return None;
+        }
+        Some(LeveledPair { start_prefix, start_suffix: start_suffix?, end_prefix, end_suffix, filler })
+    }
+
+    // An end with no suffix cannot say where its run stops, so a longer run closes it too, and the
+    // bytes past the opener's count are left outside
+    pub(crate) fn is_closed_by(&self, opened: u32, found: u32) -> bool {
+        match self.end_suffix {
+            Some(_) => found == opened,
+            None => found >= opened
+        }
+    }
+
+    pub(crate) fn has_the_end_of(&self, other: &LeveledPair) -> bool {
+        self.end_prefix == other.end_prefix && self.end_suffix == other.end_suffix && self.filler == other.filler
+    }
+
+    pub(crate) fn calculate_start_width(&self, level: u32) -> usize {
+        self.start_prefix.len() + level as usize + 1
+    }
+
+    pub(crate) fn calculate_end_width(&self, level: u32) -> usize {
+        self.end_prefix.len() + level as usize + usize::from(self.end_suffix.is_some())
+    }
+
+    pub(crate) fn format_opener(&self, level: u32) -> String {
+        format!("{}{}{}", self.start_prefix, (self.filler as char).to_string().repeat(level as usize),
+                self.start_suffix as char)
     }
 }
 
@@ -979,13 +1053,20 @@ pub(crate) fn owned_strings(items: impl IntoIterator<Item = impl AsRef<str>>) ->
     items.into_iter().map(|x| x.as_ref().to_owned()).collect()
 }
 
-// The half before '=*' and the one byte after it; anything else is not a leveled symbol
-fn split_leveled_half(pattern: &str) -> Option<(String, u8)> {
-    let (prefix, rest) = pattern.split_once("=*")?;
-    if prefix.is_empty() || rest.len() != 1 || rest.contains("=*") {
+// The half before the counted byte, that byte, and the one byte after its '*' if there is one. A
+// prefix ending in the counted byte, or a suffix that is it, would be read as part of the run
+fn split_leveled_half(pattern: &str) -> Option<(String, u8, Option<u8>)> {
+    let marker = pattern.find('*')?;
+    let filler = *pattern.as_bytes().get(marker.checked_sub(1)?)?;
+    if !filler.is_ascii() {
         return None;
     }
-    Some((prefix.to_owned(), rest.as_bytes()[0]))
+    let (prefix, rest) = (&pattern[..marker - 1], &pattern.as_bytes()[marker + 1..]);
+    if prefix.is_empty() || prefix.ends_with(filler as char) || rest.len() > 1
+            || rest.first().is_some_and(|suffix| *suffix == filler || *suffix == b'*') {
+        return None;
+    }
+    Some((prefix.to_owned(), filler, rest.first().copied()))
 }
 
 fn combine_classes(one: &LineClasses, other: &LineClasses,

@@ -280,8 +280,8 @@ fn spell_out_carried(carried: CarriedRecord, language: Option<&Language>) -> Car
     match carried {
         CarriedRecord::Nothing => Carried::Nothing,
         CarriedRecord::Continuation { since_line } => Carried::CommentContinuation { since_line },
-        CarriedRecord::Str { symbol, since_line, ends } => Carried::Str {
-            opener: language.map(|x| x.get_string_pair_of(symbol).0.to_owned()).unwrap_or_default(),
+        CarriedRecord::Str { symbol, level, since_line, ends } => Carried::Str {
+            opener: language.map(|x| spell_string_opener(x, symbol, level)).unwrap_or_default(),
             since_line, ends_on_this_line: ends
         },
         CarriedRecord::Comment { symbol, depth, since_line, ends } => {
@@ -295,10 +295,15 @@ fn spell_out_carried(carried: CarriedRecord, language: Option<&Language>) -> Car
 fn spell_comment_opener(language: &Language, symbol: u8, depth: u32) -> (String, u32) {
     match language.get_comment_pair_of(symbol) {
         CommentPair::Plain { start, .. } | CommentPair::Nesting { start, .. } => (start.to_owned(), depth),
-        // The walk carries the level in the depth slot, and the filler is the '=' the scan plan
-        // counts, so the opener comes back exactly as written
-        CommentPair::Leveled(pair) => (format!("{}{}{}", pair.start_prefix,
-                "=".repeat(depth as usize), pair.start_suffix as char), 1)
+        // The walk carries the level in the depth slot, so the opener comes back exactly as written
+        CommentPair::Leveled(pair) => (pair.format_opener(depth), 1)
+    }
+}
+
+fn spell_string_opener(language: &Language, symbol: u8, level: u32) -> String {
+    match language.find_leveled_string(symbol) {
+        Some(pair) => pair.format_opener(level),
+        None => language.get_string_pair_of(symbol).0.to_owned()
     }
 }
 
@@ -364,6 +369,25 @@ mod tests {
         assert_eq!("Lua", explained.language);
         assert_eq!(&Carried::Comment { opener: "--[==[".to_owned(), depth: 1, since_line: 2,
                 ends_on_this_line: false }, &explained.lines[2].carried);
+    }
+
+    #[test]
+    fn a_leveled_string_is_spelled_with_its_level_and_spans_its_whole_symbols() {
+        let spans = |explained: &FileExplanation, at: usize| explained.lines[at].spans.iter()
+                .map(|span| (span.from, span.to, span.kind)).collect::<Vec<_>>();
+
+        let rust = explain_in_own_dir("mezura-explain-leveled-string", "a.rs",
+                "let s = br##\"one \"# two\nthree\"###; x\n");
+        assert_eq!(&Carried::Str { opener: "br##\"".to_owned(), since_line: 1, ends_on_this_line: true },
+                &rust.lines[1].carried);
+        assert_eq!(vec![(0, 8, crate::SpanKind::Code), (8, 23, crate::SpanKind::String)], spans(&rust, 0));
+        // the closer takes as many hashes as the opener carried, and the one past them is code
+        assert_eq!(vec![(0, 8, crate::SpanKind::String), (8, 12, crate::SpanKind::Code)], spans(&rust, 1));
+
+        let lua = explain_in_own_dir("mezura-explain-long-string", "a.lua", "s = [==[ a ]]\n]==] x\n");
+        assert_eq!(&Carried::Str { opener: "[==[".to_owned(), since_line: 1, ends_on_this_line: true },
+                &lua.lines[1].carried);
+        assert_eq!(vec![(0, 4, crate::SpanKind::String), (4, 6, crate::SpanKind::Code)], spans(&lua, 1));
     }
 
     #[test]

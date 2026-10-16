@@ -27,6 +27,8 @@ Main changes:
       '--explain --output json' marks a line with 'in_test' and names the rule under 'test_file'.
   -> Themes gained the 'tests-*' and 'production-*' families, one for each of the two rows.
   -> '.t' files are counted as Perl.
+  -> Rust's raw strings past one hash, 'r##"..."##', and Lua's long bracket strings past the plain
+      form, '[==[ ]==]', are read as the strings they are, so a quote inside one opens nothing.
 
 Bugfixes:
   -> The JSON document now carries the keywords of each nested language, so a '--diff' against a
