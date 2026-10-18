@@ -17,6 +17,8 @@ Paired string openers
 R"(
 Paired string closers
 )"
+Paired strings with a delimiter
+R"(
 
 Escape character
 \

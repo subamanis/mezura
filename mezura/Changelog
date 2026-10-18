@@ -35,6 +35,8 @@ Main changes:
       is counted as the language it is written in.
   -> A shell heredoc, 'cat <<EOF' down to the line holding 'EOF', is read as the string it is, so a
       quote inside one opens nothing.
+  -> A C++ raw string carrying a delimiter, 'R"js(' down to ')js"', is read as the string it is, so
+      a ')"' or a comment symbol inside one ends or opens nothing.
 
 Bugfixes:
   -> Where block comments nest, an opener sharing a byte with a closer, '/*/*/' in Rust, is read

@@ -103,6 +103,7 @@ const MULTILINE_RAW_STRINGS    : &str = "Multi line raw string symbols";
 const PAIRED_STRING_OPENERS    : &str = "Paired string openers";
 const PAIRED_STRING_CLOSERS    : &str = "Paired string closers";
 const PAIRED_STRINGS_ESCAPED_BY_DOUBLING : &str = "Paired strings escaped by doubling";
+const PAIRED_STRINGS_WITH_A_DELIMITER : &str = "Paired strings with a delimiter";
 const HEREDOC_OPENER           : &str = "Heredoc opener";
 const CHARACTER_LITERALS       : &str = "Character literal symbols";
 const ESCAPE_CHARACTER         : &str = "Escape character";
@@ -398,6 +399,17 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         }
         header = read_next_header(lines)?;
     }
+    // The delimiter stands inside both halves, so each needs a character on either side of it
+    let mut delimited_openers = Vec::new();
+    if header == PAIRED_STRINGS_WITH_A_DELIMITER {
+        delimited_openers = split_line_on_whitespace(&read_value_line(lines)?);
+        let names_a_pair_that_can_hold_one = |named: &String| !doubling_openers.contains(named)
+                && string_pairs.iter().any(|(open, close)| open == named && open.len() >= 2 && close.len() >= 2);
+        if delimited_openers.is_empty() || !delimited_openers.iter().all(names_a_pair_that_can_hold_one) {
+            return None;
+        }
+        header = read_next_header(lines)?;
+    }
 
     // One symbol, since the word after it and the line that closes it follow the shell's rules
     let mut heredoc_opener = None;
@@ -622,6 +634,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             .with_raw_multiline_strings(raw_multiline_strings);
     let strings = string_pairs.iter().fold(strings, |strings, pair| if doubling_openers.contains(&pair.0) {
         strings.with_string_pairs_escaped_by_doubling(std::slice::from_ref(pair))
+    } else if delimited_openers.contains(&pair.0) {
+        strings.with_delimited_string_pairs(std::slice::from_ref(pair))
     } else {
         strings.with_string_pairs(std::slice::from_ref(pair))
     }).with_leveled_pairs(&leveled_strings);
@@ -1277,6 +1291,33 @@ pl      Perl, Prolog
 
         let shell = parse_language_file(LANGUAGES_DIR.to_owned() + "Shell.txt").unwrap();
         assert_eq!(Some("<<".to_owned()), shell.heredoc_opener, "Shell.txt lost its heredoc opener");
+    }
+
+    #[test]
+    fn a_pair_with_a_delimiter_is_named_by_an_opener_the_file_declared() {
+        let good = "Language\nRawlike\n\nExtensions\nrwl\n\nString symbols\n\"\n\n\
+                Paired string openers\nR\"( @\"\nPaired string closers\n)\" \"\n\
+                Paired strings with a delimiter\nR\"(\n\nEscape character\n\\\n\nComment symbols\n//\n";
+        let parsed = parse_language(good).expect("the declaration must parse");
+        let delimited = MultilineString { delimited: true, ..MultilineString::of("R\"(", ")\"") };
+        assert_eq!(vec![delimited, MultilineString::of("@\"", "\"")], parsed.strings.get_multiline_strings());
+
+        let undeclared = good.replace("delimiter\nR\"(", "delimiter\nL\"(");
+        assert!(parse_language(&undeclared).is_none(), "an opener no pair declared was accepted");
+        let empty = good.replace("delimiter\nR\"(", "delimiter\n");
+        assert!(parse_language(&empty).is_none());
+        let one_character = good.replace("delimiter\nR\"(", "delimiter\n@\"");
+        assert!(parse_language(&one_character).is_none(), "a pair whose closer has no room for a delimiter was accepted");
+        let both = good.replace("Paired strings with a delimiter", "Paired strings escaped by doubling\nR\"(\nPaired strings with a delimiter");
+        assert!(parse_language(&both).is_none(), "a pair escaped by doubling and delimited at once was accepted");
+        let before_doubling = good.replace("Paired strings with a delimiter\nR\"(\n", "Paired strings with a delimiter\nR\"(\nPaired strings escaped by doubling\n@\"\n");
+        assert!(parse_language(&before_doubling).is_none(), "the block was accepted ahead of the doubling one");
+
+        for name in ["C++.txt", "C++ Header.txt"] {
+            let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
+            assert!(language.strings.get_multiline_strings().iter().any(|crossing| crossing.delimited && crossing.open == "R\"("),
+                    "{name} lost its delimited raw string");
+        }
     }
 
     #[test]

@@ -249,6 +249,10 @@ impl Language {
                 && crossing.close.bytes().all(|byte| byte == crossing.close.as_bytes()[0]))
     }
 
+    pub(crate) fn string_is_delimited(&self, symbol: u8) -> bool {
+        self.find_crossing_string(symbol).is_some_and(|crossing| crossing.delimited)
+    }
+
     pub(crate) fn find_leveled_string(&self, symbol: u8) -> Option<&LeveledPair> {
         let first_leveled = self.strings.get_symbols().len() + self.strings.get_char_literals().len()
                 + self.strings.get_multiline_strings().len();
@@ -439,6 +443,15 @@ impl StringRules {
         self
     }
 
+    /// The same, for pairs the writer may give a delimiter of their own, C++'s `R"(` with `)"`, which
+    /// `R"xy(` opens and only `)xy"` closes.
+    pub fn with_delimited_string_pairs(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
+        self.multiline.extend(pairs.iter().map(|(open, close)| MultilineString {
+            delimited: true, ..MultilineString::of(open.as_ref(), close.as_ref())
+        }));
+        self
+    }
+
     /// The same again, for pairs whose run of one byte decides which closer ends them, Lua's `[=*[`
     /// with `]=*]` and Rust's `r#*"` with `"#*`. Nothing escapes inside one.
     pub fn with_leveled_pairs(mut self, pairs: &[LeveledPair]) -> Self {
@@ -488,23 +501,29 @@ pub struct MultilineString {
     /// Whether the language's escape byte works inside it.
     pub escapes : bool,
     /// Whether its closer written twice is one quote of the text, C#'s `""` inside `@"..."`.
-    pub escapes_by_doubling : bool
+    pub escapes_by_doubling : bool,
+    /// Whether a delimiter of up to 16 characters may stand in front of the opener's last character
+    /// and behind the closer's first, the same one at both ends, so C++'s `R"xy(` ends only at `)xy"`.
+    pub delimited : bool
 }
 
 impl MultilineString {
     /// One symbol at both ends, escapes obeyed inside.
     pub fn escaping(symbol: &str) -> MultilineString {
-        MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: true, escapes_by_doubling: false }
+        MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: true, escapes_by_doubling: false,
+                delimited: false }
     }
 
     /// One symbol at both ends, nothing escaping inside.
     pub fn raw(symbol: &str) -> MultilineString {
-        MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: false, escapes_by_doubling: false }
+        MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: false, escapes_by_doubling: false,
+                delimited: false }
     }
 
     /// Different text at each end, which is raw by construction.
     pub fn of(open: &str, close: &str) -> MultilineString {
-        MultilineString { open: open.to_owned(), close: close.to_owned(), escapes: false, escapes_by_doubling: false }
+        MultilineString { open: open.to_owned(), close: close.to_owned(), escapes: false, escapes_by_doubling: false,
+                delimited: false }
     }
 }
 

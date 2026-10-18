@@ -1,4 +1,4 @@
-// mezura-expect lines=13 code=5 comments=5 extra=3 classes=1 structs=1
+// mezura-expect lines=15 code=7 comments=5 extra=3 classes=1 structs=1
 #pragma once
 
 /* a block
@@ -11,3 +11,5 @@ class Widget {
    onto the next line
 const char *s = "// not a comment";
 const char *raw = R"(a raw string)";
+const char *tagged = R"x(a " /* b)x";
+int after = 1;

@@ -231,18 +231,10 @@ counted = { lines = 5, code = 5, comments = 0, extra = 0 }
 counted = { lines = 5, code = 5, comments = 0, blanks = 0 }
 
 [answer.2150-delimited_raw_string_names_its_own_closer.content]
-is-known-failure = true
-counted = { lines = 4, code = 1, comments = 3, extra = 0 }
-note = """
-the plain R"( is declared and this delimited form is not, so the block opener inside the string
-opens a comment"""
+counted = { lines = 4, code = 4, comments = 0, extra = 0 }
 
 [answer.2150-delimited_raw_string_names_its_own_closer.region]
-is-known-failure = true
-counted = { lines = 4, code = 1, comments = 3, blanks = 0 }
-note = """
-the plain R"( is declared and this delimited form is not, so the block opener inside the string
-opens a comment"""
+counted = { lines = 4, code = 4, comments = 0, blanks = 0 }
 
 [answer.2170-lua_level_bracket_holding_plain_close.content]
 counted = { lines = 4, code = 1, comments = 2, extra = 1 }

@@ -51,6 +51,8 @@ const IDENTIFICATION_BYTES : usize = 8_192;
 const NOT_CODE_MARKER_LINES : usize = 8;
 
 const NO_SLOT : u16 = u16::MAX;
+// C++ refuses a raw string whose delimiter is longer
+const MAX_DELIMITER_BYTES : usize = 16;
 
 // The four kinds of declared symbol, as indices into the per-kind arrays of a scan
 const STRINGS    : u8 = 0;
@@ -73,6 +75,8 @@ const ROLE_RAW     : u8 = 4;
 // is an ordinary byte, so it may still close one; outside, it is an escape like any other and may
 // not open one. Shell is where the two answers differ: 'echo I\'m done' writes one apostrophe.
 const ROLE_RAW_ESCAPED : u8 = 5;
+// The opener of a pair whose writer picks the delimiter, searched without its last character
+const ROLE_DELIMITED : u8 = 6;
 
 pub(crate) struct FileReport {
     pub shell: FileStats,
@@ -380,7 +384,11 @@ impl ScanPlan {
         for (i, crossing) in language.strings.get_multiline_strings().iter().enumerate() {
             let index = (symbols.len() + literals.len() + i) as u8;
             let (open, close) = (&crossing.open, &crossing.close);
-            if open != close {
+            // Only what stands in front of the delimiter is a symbol, and the closer is looked for
+            // by the string it closes
+            if crossing.delimited {
+                entries.push(PlanEntry::of(STRINGS, index, ROLE_DELIMITED, &open.as_bytes()[..open.len().saturating_sub(1)]));
+            } else if open != close {
                 entries.push(PlanEntry::of(STRINGS, index, ROLE_OPEN, open.as_bytes()));
                 entries.push(PlanEntry::of(STRINGS, index, ROLE_CLOSE, close.as_bytes()));
             } else {
@@ -610,6 +618,8 @@ pub(crate) struct ScanBuffers {
     code_ranges: Vec<(usize, usize)>,
     // How far into the raw line the trimmed line begins, written for every line that holds anything
     lead: usize,
+    // The delimiter of the delimited string open when the line began, then of the last one it opened
+    delimiter: Delimiter,
 }
 
 impl ScanBuffers {
@@ -1199,6 +1209,8 @@ struct WalkState {
     open_str_symbol: Option<(u8, u32)>,
     // Opened on one line, they close one after the other, as the shell reads them
     heredocs: Vec<Heredoc>,
+    // Read only while 'open_str_symbol' is a delimited string
+    delimiter: Delimiter,
     continued_comment: bool,
     opened_line: usize,
 }
@@ -1219,6 +1231,24 @@ impl Heredoc {
     fn is_closed_by(&self, raw_line: &str) -> bool {
         let line = if self.strips_tabs { raw_line.trim_start_matches('\t') } else { raw_line };
         line.trim_ascii_end().as_bytes() == self.word.as_ref()
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct Delimiter {
+    bytes: [u8; MAX_DELIMITER_BYTES],
+    len: u8,
+}
+
+impl Delimiter {
+    fn of(bytes: &[u8]) -> Delimiter {
+        let mut delimiter = Delimiter { len: bytes.len() as u8, ..Delimiter::default() };
+        delimiter.bytes[..bytes.len()].copy_from_slice(bytes);
+        delimiter
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
     }
 }
 
@@ -1685,6 +1715,9 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
         return (class, false);
     }
 
+    if state.open_str_symbol.is_some_and(|(symbol, _)| language.string_is_delimited(symbol)) {
+        scan.delimiter = state.delimiter;
+    }
     let mut line_spans: Vec<Span> = Vec::new();
     let (mut line_info, mut opened_here) = get_bounds::<EXPLAIN>(line, language, state.open_comment,
             state.open_str_symbol, candidates.behind(lead), scan, &mut line_spans);
@@ -1697,6 +1730,9 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
             language.string_crosses_lines(*symbol)
             || (continues_in(language, |continuation| continuation.in_strings)
                 && ends_with_continuation(line, language)));
+    if opened_here.string && state.open_str_symbol.is_some_and(|(symbol, _)| language.string_is_delimited(symbol)) {
+        state.delimiter = scan.delimiter;
+    }
 
     // The opener and its word are the string's opening quote, and its text begins on the next line
     if line_info.has_code && state.open_comment.is_none() && state.open_str_symbol.is_none()
@@ -2591,10 +2627,23 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
 fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_symbol: Option<(u8, u32)>,
     buffers: &mut ScanBuffers, cancelled: &[usize])
 {
-    let ScanBuffers { raw_strings, strings, string_symbols, string_levels, .. } = buffers;
+    let ScanBuffers { raw_strings, strings, string_symbols, string_levels, delimiter, .. } = buffers;
 
     let mut open = open_str_symbol;
     let mut consumed_up_to = 0;
+
+    // A line holding no closer of a carried delimited string is string from end to end. The walk measures
+    // a closer by its declared symbol, so a delimited one is recorded as far in as its delimiter is long
+    if let Some((symbol, _)) = open && language.string_is_delimited(symbol) {
+        let closer = language.get_string_pair_of(symbol).1.as_bytes();
+        let carried = delimiter.as_bytes();
+        let Some(closed_at) = find_delimited_closer(line_bytes, 0, closer, carried) else { return };
+        strings.push(closed_at + carried.len());
+        string_symbols.push(symbol);
+        string_levels.push(0);
+        consumed_up_to = closed_at + carried.len() + closer.len();
+        open = None;
+    }
 
     for &(at, symbol, role, level) in raw_strings.iter() {
         // What sits inside a symbol that was already taken is part of it, not a symbol of its own
@@ -2602,13 +2651,14 @@ fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_sy
             continue;
         }
         // A cancelled opener stands inside a comment, so the bytes it spans are comment text too
-        if role == ROLE_OPEN && cancelled.contains(&at) {
+        if (role == ROLE_OPEN || role == ROLE_DELIMITED) && cancelled.contains(&at) {
             consumed_up_to = at + language.calculate_string_opener_width(symbol, level);
             continue;
         }
         let (at, length, level) = match open {
             Some((open_symbol, open_level)) => {
-                if role == ROLE_OPEN || !language.string_is_closed_by((open_symbol, open_level), (symbol, level)) {
+                if role == ROLE_OPEN || role == ROLE_DELIMITED
+                        || !language.string_is_closed_by((open_symbol, open_level), (symbol, level)) {
                     continue;
                 }
                 let length = language.calculate_string_closer_width(symbol, open_level);
@@ -2629,6 +2679,29 @@ fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_sy
                 // A closer opens nothing, and neither does a raw symbol the language escaped.
                 // Outside a string there is nothing for the escape to be an ordinary byte of
                 if role == ROLE_CLOSE || role == ROLE_RAW_ESCAPED { continue; }
+                if role == ROLE_DELIMITED {
+                    let (opener, closer) = language.get_string_pair_of(symbol);
+                    let (from, bracket) = (at + opener.len() - 1, opener.as_bytes()[opener.len() - 1]);
+                    let Some(width) = find_delimiter_length(line_bytes, from, bracket) else { continue };
+                    *delimiter = Delimiter::of(&line_bytes[from..from + width]);
+                    strings.push(at);
+                    string_symbols.push(symbol);
+                    string_levels.push(0);
+                    let text_from = from + width + 1;
+                    match find_delimited_closer(line_bytes, text_from, closer.as_bytes(), delimiter.as_bytes()) {
+                        Some(closed_at) => {
+                            strings.push(closed_at + width);
+                            string_symbols.push(symbol);
+                            string_levels.push(0);
+                            consumed_up_to = closed_at + width + closer.len();
+                        },
+                        None => {
+                            open = Some((symbol, 0));
+                            consumed_up_to = text_from;
+                        }
+                    }
+                    continue;
+                }
                 open = Some((symbol, level));
                 (at, language.calculate_string_opener_width(symbol, level), level)
             }
@@ -2638,6 +2711,22 @@ fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_sy
         string_symbols.push(symbol);
         string_levels.push(level);
     }
+}
+
+// A delimiter holds no bracket, backslash, whitespace or byte above ASCII. One of those before the
+// bracket, or no bracket within sixteen bytes, leaves the quote an ordinary string
+fn find_delimiter_length(line_bytes: &[u8], from: usize, bracket: u8) -> Option<usize> {
+    let is_delimiter_byte = |byte: u8| byte.is_ascii_graphic() && !matches!(byte, b'(' | b')' | b'\\');
+    line_bytes.get(from..)?.iter().take(MAX_DELIMITER_BYTES + 1)
+            .position(|byte| *byte == bracket || !is_delimiter_byte(*byte))
+            .filter(|width| line_bytes[from + width] == bracket)
+}
+
+fn find_delimited_closer(line_bytes: &[u8], from: usize, closer: &[u8], delimiter: &[u8]) -> Option<usize> {
+    let (first, rest) = closer.split_first()?;
+    memchr::memchr_iter(*first, &line_bytes[from..]).map(|offset| from + offset)
+            .find(|at| line_bytes[at + 1..].starts_with(delimiter)
+                    && line_bytes[at + 1 + delimiter.len()..].starts_with(rest))
 }
 
 // When a comment symbol and a multiline start overlap only one of them is real: whichever begins
@@ -3590,6 +3679,10 @@ mod tests {
                     .with_multiline_strings(["\""]),
             ["//"], &[("/*", "*/")], []));
 
+    static CPP_DELIMITED : LazyLock<Language> = LazyLock::new(|| Language::new(
+            "cpp-delimited", ["cpp"], build_backslashed_quotes().with_delimited_string_pairs(&[("R\"(", ")\"")]),
+            ["//"], &[("/*", "*/")], []));
+
     // A character literal that does not close on its own line is not a literal at all, which keeps
     // a lifetime's lone ' from swallowing the rest of its line. One that does close shields what it
     // holds, which keeps the quote of '"' from opening a string that never closes.
@@ -3734,6 +3827,94 @@ mod tests {
                 bounds_multi(r#"still text "quoted" // not a comment"#, &cpp, None, Some(1)));
         assert_eq!(TextInfo::new(Some(";".to_owned()), true, None, None),
                 bounds_multi(r#"done)";"#, &cpp, None, Some(1)));
+    }
+
+    #[test]
+    fn a_delimited_raw_string_closes_only_at_its_own_delimiter() {
+        use LineClass::{StringContent, WordsInCode, WordsInComment};
+        let case = "const char *raw = R\"xy(a lone \" quote and\n/* this opens nothing, it is inside the raw string\n)xy\";\nprintf(\"done\");\n";
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, WordsInCode], classify_lines(case, &CPP_DELIMITED));
+        let (_, log) = parse_lines_explained(case, &CPP_DELIMITED, &empty_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
+        let collect_spans_of = |line: usize| log.records()[line].spans.iter().map(|span| (span.from, span.to, span.kind)).collect::<Vec<_>>();
+        assert_eq!(vec![(0, 18, SpanKind::Code), (18, 41, SpanKind::String)], collect_spans_of(0));
+        assert_eq!(vec![(0, 4, SpanKind::String), (4, 5, SpanKind::Code)], collect_spans_of(2));
+
+        assert_eq!(TextInfo::from_slice_w_literal("auto s = ; int b;"),
+                bounds_multi(r#"auto s = R"xy(a)" still open)xy"; int b;"#, &CPP_DELIMITED, None, None));
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, WordsInCode, WordsInComment],
+                classify_lines("auto q = R\"sql(\nselect \")\" /* not a comment\n)sq\" and )sqlx\" are text )sql\n)sql\"; int after;\n// a comment\n",
+                        &CPP_DELIMITED));
+    }
+
+    #[test]
+    fn the_plain_raw_string_is_the_delimited_one_with_an_empty_delimiter() {
+        use LineClass::{StringContent, WordsInCode, WordsInComment};
+        assert_eq!(TextInfo::from_slice_w_literal("auto s = ;"),
+                bounds_multi(r#"auto s = R"(say "hi" /* x)";"#, &CPP_DELIMITED, None, None));
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, WordsInComment],
+                classify_lines("auto s = R\"(open \" quote\n/* inside\n)x\" is text\n)\";\n// a comment\n", &CPP_DELIMITED));
+
+        let plain = Language::new("cpp-like", ["cpp"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], []);
+        let collect_searched_bytes = |language: &Language| {
+            let plan = ScanPlan::build(language);
+            let mut bytes = plan.chunks.iter().flat_map(|c| c.bytes[..c.len as usize].to_vec()).collect::<Vec<u8>>();
+            bytes.sort_unstable();
+            (bytes, plan.chunks.len())
+        };
+        assert_eq!(collect_searched_bytes(&plain), collect_searched_bytes(&CPP_DELIMITED),
+                "declaring the delimited pair changed what the scan searches");
+    }
+
+    #[test]
+    fn a_prefixed_delimited_raw_string_is_found_through_the_r_inside_it() {
+        assert_eq!(TextInfo::from_slice_w_literal("auto s = L;"),
+                bounds_multi(r#"auto s = LR"d(say ")" here)d";"#, &CPP_DELIMITED, None, None));
+        assert_eq!(TextInfo::from_slice_w_literal("auto s = u8;"),
+                bounds_multi(r#"auto s = u8R"d(text)d";"#, &CPP_DELIMITED, None, None));
+    }
+
+    #[test]
+    fn a_delimiter_runs_to_sixteen_characters_and_may_hold_comment_symbols() {
+        assert_eq!(TextInfo::from_slice_w_literal("auto s = ;"),
+                bounds_multi(r#"auto s = R"0123456789abcdef(a ")" b)0123456789abcdef";"#, &CPP_DELIMITED, None, None));
+        // seventeen is no delimiter, and the quote opens an ordinary string
+        assert_eq!(TextInfo::from_slice_w_literal("auto s = R;"),
+                bounds_multi(r#"auto s = R"0123456789abcdefg(a)0123456789abcdefg";"#, &CPP_DELIMITED, None, None));
+        for line in [r#"auto s = R"//(x)//"; int a;"#, r#"auto s = R"/*(x)/*"; int a;"#, r#"auto s = R"*/(x)*/"; int a;"#] {
+            assert_eq!(TextInfo::from_slice_w_literal("auto s = ; int a;"), bounds_multi(line, &CPP_DELIMITED, None, None), "{line}");
+        }
+    }
+
+    // The compiler refuses all three, so any reading will do as long as nothing panics
+    #[test]
+    fn a_quote_after_r_with_no_delimiter_and_bracket_opens_an_ordinary_string() {
+        use LineClass::{WordsInCode, WordsInComment};
+        assert_eq!(TextInfo::from_slice_w_literal("auto s = R;"),
+                bounds_multi(r#"auto s = R"a b(x)a b";"#, &CPP_DELIMITED, None, None));
+        assert_eq!(TextInfo::from_slice_w_literal("auto s = R;"),
+                bounds_multi(r#"auto s = R"a\b(x)a\b";"#, &CPP_DELIMITED, None, None));
+        assert_eq!(TextInfo::new(Some("auto s = R".to_owned()), true, None, Some(0)),
+                bounds_multi(r#"auto s = R"abc"#, &CPP_DELIMITED, None, None));
+        assert_eq!(vec![WordsInCode, WordsInComment], classify_lines("auto s = R\"abc\n// a comment\n", &CPP_DELIMITED));
+    }
+
+    #[test]
+    fn a_delimited_raw_string_never_closed_holds_the_rest_of_the_file() {
+        use LineClass::{BlankInString, StringContent, WordsInCode};
+        assert_eq!(vec![WordsInCode, BlankInString, StringContent, StringContent],
+                classify_lines("auto s = R\"d(it's text\n\n/* not a comment\nint x = 1; )\"\n", &CPP_DELIMITED));
+    }
+
+    #[test]
+    fn two_delimited_raw_strings_on_one_line_each_close_at_their_own_delimiter() {
+        assert_eq!(TextInfo::from_slice_w_literal("f(, ); "),
+                bounds_multi(r#"f(R"a(x)b")a", R"b(y)a")b"); // done"#, &CPP_DELIMITED, None, None));
+    }
+
+    #[test]
+    fn a_delimited_opener_written_inside_a_comment_opens_nothing() {
+        assert_eq!(TextInfo::from_slice_w_literal(" int s = ;"),
+                bounds_multi(r#"/* R"x( */ int s = "/*";"#, &CPP_DELIMITED, None, None));
     }
 
     // Rust's shortest raw form is one letter and a quote, so every string ending in 'r' carries

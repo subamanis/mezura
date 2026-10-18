@@ -65,6 +65,7 @@ Three things to know before you start:
 | `Paired string openers` *(opt)* | Opens with one symbol, closes with another, a `*` marking a counted run | `R"( @" r#*"` |
 | `Paired string closers` | Their closers, in the same order | `)" " "#*` |
 | `Paired strings escaped by doubling` *(opt)* | The openers of the pairs whose closer written twice is one quote of the text | `@"` |
+| `Paired strings with a delimiter` *(opt)* | The openers of the pairs that may carry a delimiter of the writer's choosing, which the closer repeats | `R"(` |
 | `Heredoc opener` *(opt)* | The symbol after which a word chosen on the spot opens a string that ends at the line holding that word alone | `<<` |
 | `Escape character` | Required by any language that declares a string. See below | `\` |
 | `Line continuation` *(opt)* | Joins a line to the next when it ends the line | `\` |
@@ -119,6 +120,14 @@ or more ends at the last of a run of them, since nothing escapes a quote in fron
 `"""say "hi""""` holds `say "hi"`. Look it up rather than guessing, because getting it wrong is
 silent: a `` `C:\` `` in the wrong block leaves the string open to the end of the file and every
 comment under it counts as code.
+
+C++ lets the writer of a raw string put a delimiter of up to sixteen characters inside both ends,
+so `R"js(` closes only at `)js"` and a `)"` in the text ends nothing. Name such a pair's opener
+under `Paired strings with a delimiter`, after the pairs escaped by doubling. The delimiter stands
+in front of the opener's last character and behind the closer's first, so both halves need two
+characters or more, and a pair escaped by doubling cannot carry one. A quote after `R` with a space
+or a backslash before the bracket, or no bracket within sixteen characters, opens an ordinary
+string, since the compiler takes none of the three as a raw string.
 
 A heredoc is a string whose closer is chosen where it is written: the shell's `cat <<EOF` runs to
 the first line holding `EOF` alone. Declare the symbol under `Heredoc opener`, after the paired

@@ -51,6 +51,9 @@ New:
 - `Language::heredoc_opener` and `Language::with_heredoc_opener`, read from `Heredoc opener`, the
   symbol after which a word chosen on the spot opens a string that ends at the line holding that
   word alone, the shell's `<<`.
+- `MultilineString::delimited` and `StringRules::with_delimited_string_pairs`, read from `Paired
+  strings with a delimiter`, for a pair whose writer may put a delimiter of up to sixteen
+  characters inside both ends, C++'s `R"js(` closing only at `)js"`.
 
 Changed:
 
