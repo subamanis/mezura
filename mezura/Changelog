@@ -37,6 +37,8 @@ Main changes:
       quote inside one opens nothing.
   -> A C++ raw string carrying a delimiter, 'R"js(' down to ')js"', is read as the string it is, so
       a ')"' or a comment symbol inside one ends or opens nothing.
+  -> Perl's documentation, from a line like '=head1' down to '=cut', is counted as comments, so an
+      apostrophe inside it no longer opens a string.
 
 Bugfixes:
   -> Where block comments nest, an opener sharing a byte with a closer, '/*/*/' in Rust, is read

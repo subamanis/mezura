@@ -21,6 +21,11 @@ Escape character
 Comment symbols
 #
 
+Line-start comment start
+=
+Line-start comment end
+=cut
+
 Tests
     FILE NAMES
     *.t

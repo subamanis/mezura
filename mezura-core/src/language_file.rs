@@ -1,8 +1,5 @@
-//! The format of a language file, which is the one thing under this roof that decides a number:
-//! what a language is called, which extensions it claims and which symbols open a comment.
-//!
-//! Reading a definition is this crate's business. Installing, replacing and migrating the files
-//! that hold them belongs to whoever owns the directory they live in.
+//! Reads a language file, which names a language, the files it claims, the symbols of its strings
+//! and comments, how its tests are found and the keywords it counts.
 
 use std::collections::HashMap;
 use std::fs;
@@ -117,6 +114,8 @@ const MULTILINE_COMMENT_START  : &str = "Multi line comment start";
 const MULTILINE_COMMENT_END    : &str = "Multi line comment end";
 const SELF_NESTING_COMMENT_START : &str = "Self-nesting comment start";
 const SELF_NESTING_COMMENT_END   : &str = "Self-nesting comment end";
+const LINE_START_COMMENT_START : &str = "Line-start comment start";
+const LINE_START_COMMENT_END   : &str = "Line-start comment end";
 const CANCELLED_SYMBOLS        : &str = "Cancelled symbols";
 const CANCELLED_AFTER          : &str = "Cancelled after";
 const NESTED_LANGUAGE_START    : &str = "Nested language start";
@@ -527,6 +526,17 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         return None;
     }
 
+    // One pair, since the start is a symbol and a word, and every word opens the same block
+    let mut line_start_comment = None;
+    if header.as_deref() == Some(LINE_START_COMMENT_START) {
+        let starts = split_line_on_whitespace(&read_value_line(lines)?);
+        if read_next_header(lines)?.as_str() != LINE_START_COMMENT_END {return None;}
+        let ends = split_line_on_whitespace(&read_value_line(lines)?);
+        let ([start], [end]) = (starts.as_slice(), ends.as_slice()) else { return None };
+        line_start_comment = Some((start.clone(), end.clone()));
+        header = read_next_header(lines);
+    }
+
     // A symbol the character in front of it takes away, because there the two are one longer form
     // of the language. A symbol this language never declared, or a cancelling character wider than
     // one byte, would do nothing at all, so both refuse the file.
@@ -644,6 +654,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>(), keywords);
     language.heredoc_opener = heredoc_opener;
+    language.line_start_comment = line_start_comment;
     language.line_continuation = line_continuation;
     language.module_keyword = module_keyword;
 
@@ -1318,6 +1329,21 @@ pl      Perl, Prolog
             assert!(language.strings.get_multiline_strings().iter().any(|crossing| crossing.delimited && crossing.open == "R\"("),
                     "{name} lost its delimited raw string");
         }
+    }
+
+    #[test]
+    fn a_line_start_comment_is_one_start_and_one_end_declared_after_the_block_comments() {
+        let good = "Language\nPerlish\n\nExtensions\npx\n\nString symbols\n\"\n\nEscape character\n\\\n\nComment symbols\n#\n\n\
+                Line-start comment start\n=\nLine-start comment end\n=cut\n";
+        let pod = Some(("=".to_owned(), "=cut".to_owned()));
+        assert_eq!(pod, parse_language(good).expect("the declaration must parse").line_start_comment);
+        for (refused, why) in [(good.replace("start\n=\n", "start\n= =begin\n"), "two starts"),
+                (good.replace("end\n=cut\n", "end\n=cut =end\n"), "two ends"),
+                (good.replace("Line-start comment end\n=cut\n", ""), "a start with no end")] {
+            assert!(parse_language(&refused).is_none(), "{why} was accepted");
+        }
+        let perl = parse_language_file(LANGUAGES_DIR.to_owned() + "Perl.txt").unwrap();
+        assert_eq!(pod, perl.line_start_comment, "Perl.txt lost its POD");
     }
 
     #[test]

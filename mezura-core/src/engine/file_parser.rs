@@ -1212,12 +1212,14 @@ struct WalkState {
     // Read only while 'open_str_symbol' is a delimited string
     delimiter: Delimiter,
     continued_comment: bool,
+    in_line_start_comment: bool,
     opened_line: usize,
 }
 
 impl WalkState {
     fn holds_nothing(&self) -> bool {
         self.open_comment.is_none() && self.open_str_symbol.is_none() && !self.continued_comment
+                && !self.in_line_start_comment
     }
 }
 
@@ -1260,6 +1262,7 @@ impl Delimiter {
 pub(crate) enum CarriedRecord {
     Nothing,
     Comment { symbol: u8, depth: u32, since_line: usize, ends: bool },
+    LineStartComment { since_line: usize, ends: bool },
     Str { symbol: u8, level: u32, since_line: usize, ends: bool },
     Continuation { since_line: usize },
 }
@@ -1270,6 +1273,8 @@ impl CarriedRecord {
             CarriedRecord::Str { symbol, level, since_line: state.opened_line, ends: false }
         } else if let Some((symbol, depth)) = state.open_comment {
             CarriedRecord::Comment { symbol, depth, since_line: state.opened_line, ends: false }
+        } else if state.in_line_start_comment {
+            CarriedRecord::LineStartComment { since_line: state.opened_line, ends: false }
         } else if state.continued_comment {
             CarriedRecord::Continuation { since_line: state.opened_line }
         } else {
@@ -1284,6 +1289,8 @@ impl CarriedRecord {
             CarriedRecord::Comment { symbol, depth, since_line, .. } => CarriedRecord::Comment {
                 symbol, depth, since_line,
                 ends: state.open_comment.is_none() || opened_here.comment },
+            CarriedRecord::LineStartComment { since_line, .. } => CarriedRecord::LineStartComment {
+                since_line, ends: !state.in_line_start_comment },
             CarriedRecord::Str { symbol, level, since_line, .. } => CarriedRecord::Str {
                 symbol, level, since_line,
                 ends: state.open_str_symbol.is_none() || opened_here.string },
@@ -1433,6 +1440,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     let mut pending_tag = None;
     let plan = get_or_build_plan_of(language);
     let heredoc_finder = plan.heredoc.as_ref().map(|(finder, _)| finder);
+    let line_start_opener = language.line_start_comment.as_ref().map(|(start, _)| start.as_bytes());
     let mut lines = MaskedLines::of(contents, &plan.finder);
     let mut handed_back = None;
     loop {
@@ -1446,11 +1454,13 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         let line_end = line_start + raw_line.len();
         let ranges_wanted = line_end > quiet_until;
         let plain = !has_candidates && shell.holds_nothing();
-        let (class, had_code) = if plain && !heredoc_finder.is_some_and(|finder| finder.find(raw_line.as_bytes()).is_some()) {
+        let (class, had_code) = if plain && !heredoc_finder.is_some_and(|finder| finder.find(raw_line.as_bytes()).is_some())
+                && !line_start_opener.is_some_and(|start| begins_a_line_start_comment(raw_line.as_bytes(), start)) {
             walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted, scan,
                     &shell, &mut shell_stats, code_spans, log)
         } else {
-            // The heredoc opener is looked for by the walk alone, so a plain line holding one is walked
+            // The heredoc opener and the start of a line-start comment are looked for by the walk
+            // alone, so a plain line holding one is walked
             let candidates = if plain { Candidates::Unsearched } else { Candidates::At(lines.positions(), 0) };
             walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted,
                     candidates, scan, &mut shell, &mut shell_stats, code_spans, log)
@@ -1671,7 +1681,9 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
         let carried_by_a_continuation = state.continued_comment;
         state.continued_comment = false;
         let class = if state.open_str_symbol.is_some() { LineClass::BlankInString }
-                else if state.open_comment.is_some() || carried_by_a_continuation { LineClass::BlankInComment }
+                else if state.open_comment.is_some() || carried_by_a_continuation || state.in_line_start_comment {
+                    LineClass::BlankInComment
+                }
                 else { LineClass::Blank };
         file_stats.classes.bump(class);
         if EXPLAIN { log.record(class, carried, language, Vec::new()); }
@@ -1710,6 +1722,24 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
         state.continued_comment = ends_with_continuation(line, language);
         if EXPLAIN {
             log.record(class, carried, language,
+                    vec![Span { from: lead, to: lead + line.len(), kind: SpanKind::Comment }]);
+        }
+        return (class, false);
+    }
+
+    // The line that opens the block never closes it. Perl takes a '=cut' met in code as the start of
+    // a block that runs to the next one
+    if let Some((start, end)) = &language.line_start_comment
+            && (state.in_line_start_comment
+                || (state.holds_nothing() && begins_a_line_start_comment(raw_line.as_bytes(), start.as_bytes()))) {
+        let opened = !state.in_line_start_comment;
+        state.in_line_start_comment = opened || !ends_a_line_start_comment(raw_line.as_bytes(), end.as_bytes());
+        let class = if has_word_byte(line.as_bytes()) { LineClass::WordsInComment }
+                else { LineClass::PunctuationInComment };
+        file_stats.classes.bump(class);
+        if EXPLAIN {
+            if opened { state.opened_line = log.get_current_line_number(); }
+            log.record(class, carried.with_its_end_marked(state, OpenedHere::default()), language,
                     vec![Span { from: lead, to: lead + line.len(), kind: SpanKind::Comment }]);
         }
         return (class, false);
@@ -1863,6 +1893,16 @@ fn read_heredoc_word(bytes: &[u8], from: usize) -> Option<(Box<[u8]>, usize)> {
         }
     }
     (!word.is_empty()).then(|| (word.into_boxed_slice(), cursor))
+}
+
+// Perl opens at '=head1' and reads '= 5' as code. It closes at '=cut' and '=cut2', and '=cutting'
+// is a word of its own
+fn begins_a_line_start_comment(raw_line: &[u8], start: &[u8]) -> bool {
+    raw_line.starts_with(start) && raw_line.get(start.len()).is_some_and(u8::is_ascii_alphabetic)
+}
+
+fn ends_a_line_start_comment(raw_line: &[u8], end: &[u8]) -> bool {
+    raw_line.starts_with(end) && !raw_line.get(end.len()).is_some_and(u8::is_ascii_alphabetic)
 }
 
 fn cut_out_of_code(code_ranges: &mut Vec<(usize, usize)>, line: &str, from: usize, to: usize) {
@@ -4261,6 +4301,50 @@ mod tests {
                 classify_lines("cat <<EOF\nEOF2\n# still text\nEOF \n# a comment\n", &shell));
         assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, StringContent, WordsInComment],
                 classify_lines("cat <<EOF\necho EOF\n  EOF\nEOF more\nEOF\n# a comment\n", &shell));
+    }
+
+    fn build_perl_with_pod() -> Language {
+        Language::new("perl-pod", ["pl"], StringRules::escaping_with(b'\\').with_multiline_strings(["\"", "'"]),
+                ["#"], &[], []).with_line_start_comment("=", "=cut")
+    }
+
+    #[test]
+    fn any_word_after_the_start_opens_a_line_start_comment_and_nothing_inside_it_is_read() {
+        use LineClass::{Blank, BlankInComment, WordsInCode, WordsInComment};
+        assert_eq!(vec![WordsInCode, Blank, WordsInComment, BlankInComment, WordsInComment, BlankInComment, WordsInComment,
+                WordsInCode],
+                classify_lines("print 1;\n\n=mitsos\n\nit's text ) (\n\n=cut back to code\nprint 2;\n", &build_perl_with_pod()));
+    }
+
+    #[test]
+    fn a_line_start_comment_opens_and_closes_only_at_the_start_of_a_line() {
+        use LineClass::{WordsInCode, WordsInComment};
+        assert_eq!(vec![WordsInCode, WordsInCode, WordsInComment, WordsInComment, WordsInComment, WordsInComment, WordsInCode],
+                classify_lines("  =head1 indented\n= 5;\n=head1 NAME\n=cutting\nx\n=cut2\nprint 1;\n", &build_perl_with_pod()));
+    }
+
+    #[test]
+    fn an_end_met_in_code_opens_a_block_that_runs_to_the_next_one() {
+        use LineClass::{WordsInCode, WordsInComment};
+        assert_eq!(vec![WordsInCode, WordsInComment, WordsInComment, WordsInComment, WordsInCode],
+                classify_lines("print 1;\n=cut\nnot perl\n=cut\nprint 2;\n", &build_perl_with_pod()));
+    }
+
+    #[test]
+    fn a_line_start_comment_start_inside_a_string_is_text() {
+        use LineClass::{StringContent, WordsInCode};
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, WordsInCode],
+                classify_lines("my $s = \"one\n=head1 inside\ntwo\";\nprint 1;\n", &build_perl_with_pod()));
+    }
+
+    #[test]
+    fn explaining_a_line_start_comment_carries_it_from_its_start_to_its_end() {
+        let (_, log) = parse_lines_explained("=pod\ntext\n\n=cut\n", &build_perl_with_pod(), &empty_lookup(),
+                &EngineConfig::default(), TestsByPath::Nothing);
+        let carried = log.records().iter().map(|record| record.carried).collect::<Vec<_>>();
+        assert_eq!(vec![CarriedRecord::Nothing, CarriedRecord::LineStartComment { since_line: 1, ends: false },
+                CarriedRecord::LineStartComment { since_line: 1, ends: false },
+                CarriedRecord::LineStartComment { since_line: 1, ends: true }], carried);
     }
 
     // The languages a section can resolve to, keyed the way the real run keys them: definitions by

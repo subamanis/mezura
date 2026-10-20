@@ -54,6 +54,10 @@ New:
 - `MultilineString::delimited` and `StringRules::with_delimited_string_pairs`, read from `Paired
   strings with a delimiter`, for a pair whose writer may put a delimiter of up to sixteen
   characters inside both ends, C++'s `R"js(` closing only at `)js"`.
+- `Language::line_start_comment` and `Language::with_line_start_comment`, read from `Line-start
+  comment start` and `Line-start comment end`, a comment block whose ends count only at the start of
+  a line: a line beginning with the start and a letter opens it and one beginning with the end
+  closes it, Perl's POD from `=head1` to `=cut`. `Carried::Comment` names its start as the opener.
 
 Changed:
 

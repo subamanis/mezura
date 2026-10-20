@@ -33,9 +33,13 @@ pub struct Language {
     /// The pairs that nest inside themselves, so a closer only ends the block when it has closed
     /// as many as were opened: OCaml's whole comment syntax, D's `/+ +/` beside its plain `/* */`.
     pub nesting_comments : Vec<(String, String)>,
-    /// Lua's long brackets, `--[=*[` with `]=*]`: the run of `=` is counted at the opener and only
+    /// Lua's long brackets, `--[=*[` with `]=*]`. The run of `=` is counted at the opener and only
     /// an end carrying the same count closes, so a `]]` inside a `--[==[` block is text.
     pub leveled_comments : Vec<LeveledPair>,
+    /// Perl's POD, `=` with `=cut`. A line beginning with the start and a letter opens the block, so
+    /// `=head1` or any other word does. A line beginning with the end and no letter after it closes
+    /// the block and belongs to it. Neither counts when indented.
+    pub line_start_comment : Option<(String, String)>,
     /// Symbols the character before them takes away, because there the two belong to a longer form
     /// of the language. C3 opens a documentation comment with `<*` and writes a vector of unknown
     /// length as `int[<*>]`, where `[<` is one token and neither half is a comment.
@@ -88,6 +92,7 @@ impl Language {
                     .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())).collect(),
             nesting_comments : Vec::new(),
             leveled_comments : Vec::new(),
+            line_start_comment : None,
             cancelled_symbols : Vec::new(),
             line_continuation : None,
             nested_languages : Vec::new(),
@@ -192,6 +197,15 @@ impl Language {
         self
     }
 
+    /// Sets the comment block whose ends count only at the start of a line, Perl's `=` with `=cut`.
+    /// An empty start or end leaves the language with none.
+    pub fn with_line_start_comment(mut self, start: &str, end: &str) -> Self {
+        if !start.is_empty() && !end.is_empty() {
+            self.line_start_comment = Some((start.to_owned(), end.to_owned()));
+        }
+        self
+    }
+
     /// Adds symbols that stop counting as themselves when the given character sits right in front
     /// of them.
     pub fn with_cancelled_symbols(mut self, symbols: &[(impl AsRef<str>, u8)]) -> Self {
@@ -200,10 +214,10 @@ impl Language {
         self
     }
 
-    /// Whether it has any kind of block comment: plain, nesting or long bracket.
+    /// Whether it has a block comment of any kind, the line-start one included.
     pub fn supports_multiline_comments(&self) -> bool {
         !self.multiline_comments.is_empty() || !self.nesting_comments.is_empty()
-                || !self.leveled_comments.is_empty()
+                || !self.leveled_comments.is_empty() || self.line_start_comment.is_some()
     }
 
     pub(crate) fn declares_identification(&self) -> bool {
@@ -351,6 +365,7 @@ impl PartialEq for Language {
             && self.multiline_comments == other.multiline_comments
             && self.nesting_comments == other.nesting_comments
             && self.leveled_comments == other.leveled_comments
+            && self.line_start_comment == other.line_start_comment
             && self.cancelled_symbols == other.cancelled_symbols
             && self.line_continuation == other.line_continuation
             && self.nested_languages == other.nested_languages

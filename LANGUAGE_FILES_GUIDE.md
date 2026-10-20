@@ -75,6 +75,8 @@ Three things to know before you start:
 | `Multi line comment end` | Their closers, in the same order | `*/ }` |
 | `Self-nesting comment start` *(opt)* | Openers of blocks that nest inside themselves | `(*` |
 | `Self-nesting comment end` | Their closers, in the same order | `*)` |
+| `Line-start comment start` *(opt)* | Opens a block at a line beginning with it and a letter | `=` |
+| `Line-start comment end` | Closes it at a line beginning with it and no letter after it | `=cut` |
 | `Cancelled symbols` *(opt)* | Symbols that stop counting when one character sits in front of them | `<* *>` |
 | `Cancelled after` | The character that cancels each, in the same order | `[ <` |
 | `Nested language start` *(opt)* | Openers of sections written in another language | `<script <style` |
@@ -193,6 +195,14 @@ at least as long as the opener's and takes exactly that many; a closer with a ch
 run, Lua's `]=*]`, closes only at the same count. That is the only place in the format where
 characters do not stand for themselves, and it works only in the block comment and paired string
 blocks.
+
+Perl's documentation, POD, is a block whose two ends count only at the very start of a line,
+declared as one pair under `Line-start comment start` and `Line-start comment end`, after the other
+comment blocks. A line beginning with the start and a letter opens it, `=head1`, `=pod` or any other
+word, and every line down to one beginning with the end and no letter after it is comment, both of
+those lines whole, `=cut back to code` included. An indented `=head1` and a `= 5` are code, and
+`=cutting` does not close what `=cut` would. Inside the block nothing is read, so an apostrophe in
+the documentation opens no string.
 
 ## When a symbol is part of something longer
 

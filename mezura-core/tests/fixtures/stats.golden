@@ -1,4 +1,4 @@
-files=89 lines=1208 code=653 comments=278
+files=89 lines=1214 code=653 comments=281
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -209,8 +209,8 @@ Pascal
   words_in_code=9 string_content=0 comment_words_beside_code=0 words_in_comment=6 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1 records=1
 Perl
-  files=1 lines=11 code=6 comments=2
-  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=1 punctuation_in_comment=0 blank=2 blank_in_comment=0 blank_in_string=0
+  files=1 lines=17 code=6 comments=5
+  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=1 punctuation_in_comment=0 blank=3 blank_in_comment=2 blank_in_string=0
   packages=1
 PowerShell
   files=1 lines=17 code=10 comments=3
