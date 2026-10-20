@@ -43,6 +43,10 @@ Main changes:
 Bugfixes:
   -> Where block comments nest, an opener sharing a byte with a closer, '/*/*/' in Rust, is read
       the way the compiler reads it, so the comment no longer closes on that line.
+  -> Comment symbols sharing bytes are read by the rules of the file's language: '/* x /*/' in C
+      and '*/*/*/' closing three nested levels in Rust end the comment there, a '*//' in code
+      starts a line comment, a '//*' inside a Rust comment opens one more level, and a '/*' after
+      two stray '*/' in code opens its comment.
   -> A raw string opener written inside a block comment that closes on its line, '/* r#" */', no
       longer pairs with a real closer after it, so what follows the comment is read as it is.
   -> The JSON document now carries the keywords of each nested language, so a '--diff' against a

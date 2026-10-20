@@ -83,6 +83,10 @@ Fixes:
   project that sits under a folder named `tests`, and a pattern starting with `./` excludes what
   it names. A full path pattern works under a folder with brackets in its name and in any letter
   case.
+- Comment symbols sharing bytes are read by the rules of the file's language: `/* x /*/` in C and
+  `*/*/*/` closing three nested levels in Rust end the comment there, a `*//` in code starts a line
+  comment, a `//*` inside a Rust comment opens one more level, and a `/*` after two stray `*/` in
+  code opens its comment.
 
 -----------------------------------------------------------------------------------------------------------
 

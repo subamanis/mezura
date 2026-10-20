@@ -2251,13 +2251,11 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language
         }
     }
 
-    resolve_comment_and_multiline_end_overlap(line, language, comment_indices, com_end_indices);
-
-    resolve_comment_and_multiline_start_overlap(line, language, comment_indices, com_start_indices);
-
-    if !com_end_indices.is_empty() && !com_start_indices.is_empty() {
-        resolve_double_counting_of_adjacent_start_and_end_symbols(com_start_indices, com_end_indices,
-            open_comment.is_some(), language);
+    let kinds_found = [comment_indices.is_empty(), com_start_indices.is_empty(), com_end_indices.is_empty()]
+            .into_iter().filter(|empty| !empty).count();
+    if kinds_found > 1 {
+        resolve_comment_symbols_sharing_bytes(line, language, open_comment, comment_indices, com_start_indices,
+                com_end_indices);
     }
 
     if str_indices.is_empty() && comment_indices.is_empty() && com_start_indices.is_empty() && com_end_indices.is_empty() {
@@ -2441,7 +2439,7 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language
                 return (LineInfo::of(!code_ranges.is_empty(), has_string_literal), ends);
             } else if next_symbol_is_string(comment_counter, str_counter, start_com_counter) {
                 let this_index = str_indices[str_counter];
-                if skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
+                while skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
                     end_com_counter += 1;
                 }
                 push_code(code_ranges, line, slice_start_index, this_index);
@@ -2460,7 +2458,7 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language
                 last_symbol_index = this_index;
             } else if next_symbol_is_com_start(comment_counter, str_counter, start_com_counter) {
                 let (this_index, this_symbol, this_level) = com_start_indices[start_com_counter];
-                if skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
+                while skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
                     end_com_counter += 1;
                 }
 
@@ -2494,73 +2492,96 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language
     }
 }
 
-// The collision window around each symbol is that symbol's own span: an end beginning inside a
-// start's bytes, or a start beginning inside an end's bytes. One shared length for both sides is
-// wrong wherever a pair's halves differ in length, as Lua's and HTML's do: ']]--[[' would read as
-// a collision when the two symbols merely touch, and the reopening start would be discarded.
-fn resolve_double_counting_of_adjacent_start_and_end_symbols(start_indices: &mut Vec<(usize, u8, u32)>,
-    end_indices: &mut Vec<(usize, u8, u32)>, is_comment_open: bool, language: &Language)
+// Of a line comment, a block start and a block end sharing bytes, the one the language's lexer reads
+// depends on what is open when it meets them, so the symbols are taken left to right with the open
+// block and its depth. Strings are not known yet here, so a line comment does not end the pass and a
+// start inside a string counts as opening a block.
+fn resolve_comment_symbols_sharing_bytes(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
+    comment_indices: &mut Vec<usize>, start_indices: &mut Vec<(usize, u8, u32)>, end_indices: &mut Vec<(usize, u8, u32)>)
 {
-    fn resolve_collision(start_indices: &mut Vec<(usize, u8, u32)>, end_indices: &mut Vec<(usize, u8, u32)>, start_counter: &mut usize,
-        end_counter: &mut usize, is_comment_open_m: &mut bool, language: &Language)
-    {
-        // Inside a nesting comment an opener is still read, so one that begins first keeps the
-        // shared byte and the comment stays open
-        let (start_at, start_symbol, _) = start_indices[*start_counter];
-        let (end_at, end_symbol, _) = end_indices[*end_counter];
-        let deepens = *is_comment_open_m && language.comment_nests(start_symbol) && start_symbol == end_symbol
-                && start_at < end_at;
-        if *is_comment_open_m && !deepens {
-            start_indices.remove(*start_counter);
-            if *start_counter < start_indices.len() && start_indices[*start_counter].0 <
-                    end_indices[*end_counter].0 + language.comment_end_len(end_indices[*end_counter].1, end_indices[*end_counter].2) {
-                start_indices.remove(*start_counter);
-            }
-            *end_counter += 1;
-        } else {
-            end_indices.remove(*end_counter);
-            if *end_counter < end_indices.len() && end_indices[*end_counter].0 <
-                    start_indices[*start_counter].0 + language.comment_start_len(start_indices[*start_counter].1, start_indices[*start_counter].2) {
-                end_indices.remove(*end_counter);
-            }
-            *start_counter += 1;
-        }
-        *is_comment_open_m = deepens || !*is_comment_open_m;
-    }
+    let bytes = line.as_bytes();
+    let calculate_comment_width = |at: usize| language.comment_symbols.iter()
+            .filter(|symbol| bytes[at..].starts_with(symbol.as_bytes())).map(String::len).max().unwrap_or(0);
+    let starts_a_comment = |at: usize| language.comment_symbols.iter()
+            .any(|symbol| bytes[at..].starts_with(symbol.as_bytes()) && stands_as_its_own_word(bytes, at, symbol.len()));
+    let start_to = |(at, symbol, level): (usize, u8, u32)| at + language.comment_start_len(symbol, level);
+    let end_to = |(at, symbol, level): (usize, u8, u32)| at + language.comment_end_len(symbol, level);
+    // What is open after the symbol, or None when what is open makes the symbol text
+    let apply_start = |open: Option<(u8, u32)>, symbol: u8, level: u32| match open {
+        None => Some(Some((symbol, if language.comment_is_leveled(symbol) { level } else { 1 }))),
+        Some((pair, depth)) if pair == symbol && language.comment_nests(pair) => Some(Some((pair, depth.saturating_add(1)))),
+        Some((pair, _)) if pair == symbol && language.comment_closes_with_its_opener(pair) => Some(None),
+        Some(_) => None,
+    };
+    let apply_end = |open: Option<(u8, u32)>, symbol: u8, level: u32| match open {
+        Some((pair, depth)) if pair == symbol && language.comment_nests(pair) && depth > 1 => Some(Some((pair, depth - 1))),
+        Some((pair, carried)) if pair == symbol && (!language.comment_is_leveled(pair) || level == carried) => Some(None),
+        _ => None,
+    };
 
-    let mut is_comment_open_m = is_comment_open;
-    let (mut start_counter, mut end_counter) = (0,0);
+    let mut open = open_comment;
+    let mut read_to = 0;
+    let (mut comment_counter, mut start_counter, mut end_counter) = (0, 0, 0);
     loop {
-        if start_counter == start_indices.len() || end_counter == end_indices.len() {break;}
+        let comment = comment_indices.get(comment_counter).copied();
+        let start = start_indices.get(start_counter).copied();
+        let end = end_indices.get(end_counter).copied();
+        let Some(at) = [comment, start.map(|(at, _, _)| at), end.map(|(at, _, _)| at)].into_iter().flatten().min()
+                else { break };
+        // Outside a block the longer of a line comment and a start beginning together is read, and
+        // the line comment when the two are as long
+        let start_is_next = start.is_some_and(|found| found.0 == at && (comment != Some(at) || open.is_some()
+                || calculate_comment_width(at) < start_to(found) - at));
 
-        let (start_index, start_symbol, start_level) = start_indices[start_counter];
-        let (end_index, end_symbol, end_level) = end_indices[end_counter];
-
-        if end_index > start_index && end_index < start_index + language.comment_start_len(start_symbol, start_level) ||
-                start_index > end_index && start_index < end_index + language.comment_end_len(end_symbol, end_level) {
-            resolve_collision(start_indices, end_indices, &mut start_counter, &mut end_counter, &mut is_comment_open_m, language);
+        if let Some(found) = end.filter(|(end_at, _, _)| *end_at == at) {
+            if at < read_to {
+                end_indices.remove(end_counter);
+                continue;
+            }
+            end_counter += 1;
+            let Some(after) = apply_end(open, found.1, found.2) else { continue };
+            open = after;
+            read_to = end_to(found);
+            drop_text_running_past(start_indices, &mut start_counter, at, start_to);
+        } else if let Some(found) = start.filter(|_| start_is_next) {
+            if at < read_to {
+                start_indices.remove(start_counter);
+                continue;
+            }
+            start_counter += 1;
+            let Some(after) = apply_start(open, found.1, found.2) else { continue };
+            open = after;
+            read_to = start_to(found);
+            drop_text_running_past(end_indices, &mut end_counter, at, end_to);
         } else {
-            if start_index < end_index {
-                start_counter += 1;
-                if start_counter < start_indices.len() {
-                    if start_indices[start_counter].0 > end_index {
-                        is_comment_open_m = true;
-                    }
-                } else {
-                    break;
+            // The scan never reports a symbol overlapping itself, so in '*///' the real '//' is the
+            // one past the closer and only the one lying across it was found
+            if at < read_to {
+                while comment_indices.get(comment_counter).is_some_and(|&inside| inside < read_to) {
+                    comment_indices.remove(comment_counter);
                 }
-            }
-            else {
-                end_counter += 1;
-                if end_counter < end_indices.len() {
-                    if end_indices[end_counter].0 > start_counter {
-                        is_comment_open_m = false;
-                    }
-                } else {
-                    break;
+                if read_to < bytes.len() && starts_a_comment(read_to) && comment_indices.get(comment_counter) != Some(&read_to) {
+                    comment_indices.insert(comment_counter, read_to);
                 }
+                continue;
             }
+            comment_counter += 1;
+            if open.is_some() { continue; }
+            read_to = at + calculate_comment_width(at);
+            drop_text_running_past(start_indices, &mut start_counter, at, start_to);
+            drop_text_running_past(end_indices, &mut end_counter, at, end_to);
+            continue;
         }
+        drop_text_running_past(comment_indices, &mut comment_counter, at, |comment_at| comment_at + calculate_comment_width(comment_at));
+    }
+}
+
+// A symbol behind the counter whose bytes run past the one just read was passed over as text, and it
+// gives up the bytes the two share
+fn drop_text_running_past<T: Copy>(symbols: &mut Vec<T>, counter: &mut usize, at: usize, find_end: impl Fn(T) -> usize) {
+    while *counter > 0 && find_end(symbols[*counter - 1]) > at {
+        *counter -= 1;
+        symbols.remove(*counter);
     }
 }
 
@@ -2769,69 +2790,6 @@ fn find_delimited_closer(line_bytes: &[u8], from: usize, closer: &[u8], delimite
                     && line_bytes[at + 1 + delimiter.len()..].starts_with(rest))
 }
 
-// When a comment symbol and a multiline start overlap only one of them is real: whichever begins
-// first swallows the other, and on a tie the longer one wins. All three shapes occur. A '/*' inside a
-// '//' opens nothing. PowerShell's '<#' contains a '#', and reading that as a comment of its own
-// stops the block ever opening, which silently breaks every block comment in the language. Lua's
-// '--[[' begins exactly where its own '--' does, with the same result if the shorter one wins.
-fn resolve_comment_and_multiline_start_overlap(line: &str, language: &Language,
-    comment_indices: &mut Vec<usize>, com_start_indices: &mut Vec<(usize, u8, u32)>)
-{
-    if comment_indices.is_empty() || com_start_indices.is_empty() {
-        return;
-    }
-    let longest_comment_at = |at: usize| {
-        language.comment_symbols.iter()
-                .filter(|symbol| line.as_bytes()[at..].starts_with(symbol.as_bytes()))
-                .map(String::len)
-                .max()
-                .unwrap_or(0)
-    };
-
-    com_start_indices.retain(|(start, _, _)| !comment_indices.iter()
-            .any(|at| start > at && *start < at + longest_comment_at(*at)));
-    comment_indices.retain(|at| !com_start_indices.iter()
-            .any(|(start, symbol, level)| at > start && *at < start + language.comment_start_len(*symbol, *level)));
-
-    // On a tie the longer symbol wins, and with several pairs the start at that position is the
-    // longest of them, since same-position candidates arrive longest first
-    comment_indices.retain(|at| match com_start_indices.iter().find(|(start, _, _)| start == at) {
-        Some((_, symbol, level)) => longest_comment_at(*at) >= language.comment_start_len(*symbol, *level),
-        None => true
-    });
-    // A start of a pair closing with its opener stays beside the longer comment that won, since
-    // inside its own block it is the end, and outside it the walk meets the comment first
-    com_start_indices.retain(|(at, symbol, _)| !comment_indices.contains(at)
-            || language.comment_closes_with_its_opener(*symbol));
-}
-
-// A comment symbol beginning inside a multiline end symbol is part of it and not a comment of its
-// own. It is moved past that end symbol rather than dropped: no symbol is searched overlapping
-// itself, so in '*///' the real '//' was already suppressed by the one lying across the closer,
-// and discarding that one without giving its bytes back leaves the line with no comment at all.
-fn resolve_comment_and_multiline_end_overlap(line: &str, language: &Language,
-    comment_indices: &mut Vec<usize>, com_end_indices: &[(usize, u8, u32)])
-{
-    if comment_indices.is_empty() || com_end_indices.is_empty() {
-        return;
-    }
-    let past_the_end_symbol_at = |at: usize| com_end_indices.iter().find_map(|(end, symbol, level)| {
-        let after = end + language.comment_end_len(*symbol, *level);
-        (at > *end && at < after).then_some(after)
-    });
-    let starts_a_comment = |at: usize| language.comment_symbols.iter()
-            .any(|symbol| line.as_bytes()[at..].starts_with(symbol.as_bytes())
-                    && stands_as_its_own_word(line.as_bytes(), at, symbol.len()));
-
-    for at in comment_indices.iter_mut() {
-        if let Some(after) = past_the_end_symbol_at(*at) {
-            *at = after;
-        }
-    }
-    comment_indices.retain(|at| *at < line.len() && starts_a_comment(*at));
-    comment_indices.dedup();
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, LazyLock};
@@ -2920,11 +2878,13 @@ mod tests {
         buffers.comments
     }
 
-    fn comment_delimiters_w_multiline(line: &str, language: &Language, com_end_indices: &[usize]) -> Vec<usize> {
-        let ends = com_end_indices.iter().map(|at| (*at, 0u8, 0u32)).collect::<Vec<_>>();
+    fn comment_delimiters_w_multiline(line: &str, language: &Language, com_end_indices: &[usize], open_comment: Option<u8>)
+    -> Vec<usize> {
+        let mut ends = com_end_indices.iter().map(|at| (*at, 0u8, 0u32)).collect::<Vec<_>>();
         let mut buffers = ScanBuffers::default();
         scan_line(line, Candidates::Unsearched, language, &mut buffers);
-        resolve_comment_and_multiline_end_overlap(line, language, &mut buffers.comments, &ends);
+        resolve_comment_symbols_sharing_bytes(line, language, open_comment.map(|symbol| (symbol, 1)), &mut buffers.comments,
+                &mut Vec::new(), &mut ends);
         buffers.comments
     }
 
@@ -4844,7 +4804,8 @@ mod tests {
         let language = Language::new("one-pair", ["x"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], []);
         let mut starts = start_indices.into_iter().map(|x| (x, 0u8, 0u32)).collect::<Vec<_>>();
         let mut ends = end_indices.into_iter().map(|x| (x, 0u8, 0u32)).collect::<Vec<_>>();
-        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut starts, &mut ends, is_comment_open, &language);
+        resolve_comment_symbols_sharing_bytes("", &language, is_comment_open.then_some((0, 1)), &mut Vec::new(),
+                &mut starts, &mut ends);
         (starts.into_iter().map(|(x, _, _)| x).collect(), ends.into_iter().map(|(x, _, _)| x).collect())
     }
 
@@ -4859,6 +4820,8 @@ mod tests {
 
         // /* */*
         assert_eq!((vec![0],vec![3]), resolved_double_counting(vec![0,4], vec![3], false));
+        // /* x /*/
+        assert_eq!((vec![0],vec![6]), resolved_double_counting(vec![0,5], vec![6], false));
 
         // */* /*/
         assert_eq!((vec![1],vec![5]), resolved_double_counting(vec![1,4], vec![0,5], false));
@@ -4872,12 +4835,9 @@ mod tests {
         assert_eq!((vec![0,7],vec![3]), resolved_double_counting(vec![0,2,7], vec![1,3,6,8], false));
         assert_eq!((vec![7],vec![1,3]), resolved_double_counting(vec![0,2,7], vec![1,3,6,8], true));
 
-        // '*/ */*' with a comment open from the line before, which is the case that decides the two
-        // conditions in the loop below 'resolve_collision'. They are not mirror images of each other,
-        // and the one that looks like a typo is the one that is right: the end symbol at 0 closes the
-        // comment, so the '*/' at 3 is a stray in code and the '/*' at 4 is a real opener. Reading the
-        // second condition as the mirror of the first discards the opener instead of the stray, and
-        // the whole rest of the file is then counted as code.
+        // '*/ */*' with a comment open from the line before. The end at 0 closes it, so the '*/' at 3
+        // is a stray in code and the '/*' at 4 a real opener. Discarding the opener counts the rest of
+        // the file as code
         assert_eq!((vec![4],vec![0]), resolved_double_counting(vec![4], vec![0,3], true));
 
         // /* */*/*//*
@@ -4906,6 +4866,37 @@ mod tests {
                 .with_nesting_comments(&[("/*", "*/")]);
         assert_eq!(TextInfo::none_all(false), bounds_multi(" dir/*>", &contracts, Some(0), None));
         assert_eq!(TextInfo::with_open_comment_at(1, 2), bounds_multi_deep(" dir/*/", &contracts, Some((1, 1)), None));
+    }
+
+    #[test]
+    fn a_closer_met_outside_a_block_leaves_the_line_comment_sharing_its_slash_whole() {
+        assert_eq!(TextInfo::from_slice("x *"), bounds_multi("x *// y /* z", &JAVA, None, None));
+        assert_eq!(TextInfo::new(Some("/ y ".to_owned()), false, Some((0, 1)), None),
+                bounds_multi("x *// y /* z", &JAVA, Some(0), None));
+    }
+
+    #[test]
+    fn every_stray_closer_before_an_opener_is_passed_over() {
+        assert_eq!(TextInfo::new(Some("a */ b */ c ".to_owned()), false, Some((0, 1)), None),
+                bounds_multi("a */ b */ c /* d", &JAVA, None, None));
+    }
+
+    #[test]
+    fn an_opener_behind_a_line_comment_symbol_deepens_a_nesting_block() {
+        let nesting = Language::new("nesting", ["x"], build_backslashed_quotes(), ["//"], &[], [])
+                .with_nesting_comments(&[("/*", "*/")]);
+        assert_eq!(TextInfo::with_open_comment_at(0, 2), bounds_multi_deep("see http://*.rs", &nesting, Some((0, 1)), None));
+        assert_eq!(TextInfo::from_slice("x"), bounds_multi_deep("//* */ */x", &nesting, Some((0, 1)), None));
+        assert_eq!(TextInfo::from_slice("x "), bounds_multi("x //* y", &nesting, None, None));
+    }
+
+    #[test]
+    fn a_nesting_comment_closes_one_level_at_each_closer_sharing_a_byte_with_an_opener() {
+        let nesting = Language::new("nesting", ["x"], build_backslashed_quotes(), ["//"], &[], [])
+                .with_nesting_comments(&[("/*", "*/")]);
+        assert_eq!(TextInfo::none_all(false), bounds_multi("/* one /* two /* three */*/*/", &nesting, None, None));
+        assert_eq!(TextInfo::none_all(false), bounds_multi_deep("*/*/*/", &nesting, Some((0, 3)), None));
+        assert_eq!(TextInfo::with_open_comment_at(0, 1), bounds_multi_deep("*/*/*/", &nesting, Some((0, 4)), None));
     }
 
     // Without the declaration the opener wins and the closer that shares its asterisk is dropped,
@@ -4940,7 +4931,7 @@ mod tests {
         let lua_like = Language::new("lua-like", ["x"], build_backslashed_quotes(), ["--"], &[("--[[", "]]")], []);
         // ]]--[[ with the block open from the line before: both symbols are real
         let (mut starts, mut ends) = (vec![(2usize, 0u8, 0u32)], vec![(0usize, 0u8, 0u32)]);
-        resolve_double_counting_of_adjacent_start_and_end_symbols(&mut starts, &mut ends, true, &lua_like);
+        resolve_comment_symbols_sharing_bytes("]]--[[", &lua_like, Some((0, 1)), &mut Vec::new(), &mut starts, &mut ends);
         assert_eq!((vec![(2, 0, 0)], vec![(0, 0, 0)]), (starts, ends));
 
         // and the whole shape read as a line: it closes and reopens, so it ends still open, and
@@ -4959,15 +4950,16 @@ mod tests {
     #[test]
     fn a_block_comment_end_behind_a_line_comment_is_not_a_delimiter() {
         let line = "Hello world!";
-        assert_eq!(Vec::<usize>::new(), comment_delimiters_w_multiline(line, &PHP, &[]));
+        assert_eq!(Vec::<usize>::new(), comment_delimiters_w_multiline(line, &PHP, &[], None));
         let line = "//Hello*/ world!";
-        assert_eq!(vec![0], comment_delimiters_w_multiline(line, &PHP, &[7]));
+        assert_eq!(vec![0], comment_delimiters_w_multiline(line, &PHP, &[7], None));
         let line = "///*Hello world!";
-        assert_eq!(vec![0], comment_delimiters_w_multiline(line, &PHP, &[]));
+        assert_eq!(vec![0], comment_delimiters_w_multiline(line, &PHP, &[], None));
         let line = "//*//Hello world!";
-        assert_eq!(vec![0], comment_delimiters_w_multiline(line, &PHP, &[2]));
+        assert_eq!(vec![0], comment_delimiters_w_multiline(line, &PHP, &[2], Some(0)));
         let line = "//*/#Hello world!";
-        assert_eq!(vec![0,4], comment_delimiters_w_multiline(line, &PHP, &[2]));
+        assert_eq!(vec![0,4], comment_delimiters_w_multiline(line, &PHP, &[2], Some(0)));
+        assert_eq!(vec![0,4], comment_delimiters_w_multiline(line, &PHP, &[2], None));
     }
     
     #[test]
@@ -5064,10 +5056,10 @@ mod tests {
         assert_eq!(TextInfo::from_slice("Hello world!"),bounds_multi(&line, &JAVA, None, None));
         let line = String::from("Hello*//**//**/ world!");
         assert_eq!(TextInfo::from_slice(" world!"),bounds_multi(&line, &JAVA, Some(0), None));
-        assert_eq!(TextInfo::from_slice("Hello*/ world!"),bounds_multi(&line, &JAVA, None, None));
+        assert_eq!(TextInfo::from_slice("Hello*"),bounds_multi(&line, &JAVA, None, None));
         let line = String::from("*//*Hello/**/ world!");
         assert_eq!(TextInfo::from_slice(" world!"),bounds_multi(&line, &JAVA, Some(0), None));
-        assert_eq!(TextInfo::from_slice("*/ world!"),bounds_multi(&line, &JAVA, None, None));
+        assert_eq!(TextInfo::from_slice("*"),bounds_multi(&line, &JAVA, None, None));
         let line = String::from("Hello world*/");
         assert_eq!(TextInfo::none_all(false), bounds_multi(&line, &JAVA, Some(0), None));
         let line = String::from("*/Hello world!/**/");
