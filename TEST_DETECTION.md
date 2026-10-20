@@ -238,8 +238,8 @@ at the root, says otherwise for that one folder. Everywhere else, `examples/`, `
 `make_test!(a, b, c);` being one line of code that only a compiler can expand. Tests written at
 build time and pulled in with `include!`. A module declared under `#[path = "..."]`, or under a
 `cfg_attr` that applies one, is not followed at all, since the file it names can sit anywhere, and
-neither is anything declared inside an inline module that stands under one; declare the files
-they can lead to with `--tests`.
+neither is anything declared inside an inline module that stands under one or opens its body with
+`#![path = "..."]`; declare the files they can lead to with `--tests`.
 
 ### D
 

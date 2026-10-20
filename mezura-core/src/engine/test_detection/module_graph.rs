@@ -261,7 +261,12 @@ impl<'a> ModuleDeclarations<'a> {
         let end = find_word_end(code, at);
         let Ok(name) = std::str::from_utf8(&code[at..end]) else { return false };
         (at, code) = skip_to_code(line, ranges, end);
-        match code.get(at) {
+        // Only comments may sit between the name and its brace or semicolon, which can be lines below
+        let next_at = match code.get(at) {
+            Some(_) => base + at,
+            None => attribute::skip_whitespace_and_comments(self.contents, base + end)
+        };
+        match self.contents.get(next_at) {
             Some(b';') => {
                 if !names_a_path && !self.is_under_a_path_attribute(base + first)
                         && !self.is_inside_a_module_under_a_path_attribute() {
@@ -272,7 +277,8 @@ impl<'a> ModuleDeclarations<'a> {
                 false
             },
             Some(b'{') => {
-                self.open.push(InlineModule { name: name.into(), opened_at: self.depth, names_a_path, looks_back_from: base + first });
+                self.open.push(InlineModule { name: name.into(), opened_at: self.depth, names_a_path, looks_back_from: base + first,
+                        body_from: next_at + 1 });
                 true
             },
             _ => false
@@ -301,8 +307,8 @@ impl<'a> ModuleDeclarations<'a> {
     // with a mod tests up to it
     fn is_inside_a_module_under_a_path_attribute(&mut self) -> bool {
         (0..self.open.len()).any(|index| {
-            let InlineModule { names_a_path, looks_back_from, .. } = self.open[index];
-            names_a_path || self.is_under_a_path_attribute(looks_back_from)
+            let InlineModule { names_a_path, looks_back_from, body_from, .. } = self.open[index];
+            names_a_path || self.is_under_a_path_attribute(looks_back_from) || opens_with_a_path_attribute(self.contents, body_from)
         })
     }
 
@@ -322,6 +328,7 @@ struct InlineModule {
     opened_at: u32,
     names_a_path: bool,
     looks_back_from: usize,
+    body_from: usize,
 }
 
 fn build_declared_file_candidates(declaring: &Path, declaration: &Declaration) -> Vec<PathBuf> {
@@ -635,11 +642,26 @@ fn find_attribute_bracket(bytes: &[u8], at: usize) -> Option<(usize, bool)> {
 
 // An inner attribute belongs to the module around it and names no declaration's file
 fn is_a_path_attribute(bytes: &[u8], open: usize, inner: bool) -> bool {
-    if inner { return false; }
+    !inner && is_named_path(bytes, open)
+}
+
+fn is_named_path(bytes: &[u8], open: usize) -> bool {
     let mut name_start = attribute::skip_whitespace_and_comments(bytes, open + 1);
     if bytes[name_start..].starts_with(RAW_IDENTIFIER) { name_start += RAW_IDENTIFIER.len(); }
     &bytes[name_start..find_word_end(bytes, name_start)] == PATH_ATTRIBUTE
             || attribute::is_applied_through_cfg_attr(&bytes[name_start..], PATH_ATTRIBUTE)
+}
+
+// Inner attributes come before anything else in a module's body, so only the leading ones are read
+fn opens_with_a_path_attribute(contents: &[u8], body_from: usize) -> bool {
+    let mut at = attribute::skip_whitespace_and_comments(contents, body_from);
+    while contents.get(at) == Some(&b'#') {
+        let Some((open, true)) = find_attribute_bracket(contents, at) else { return false };
+        if is_named_path(contents, open) { return true; }
+        let Some(close) = attribute::find_matching_bracket(contents, open, b']') else { return false };
+        at = attribute::skip_whitespace_and_comments(contents, close + 1);
+    }
+    false
 }
 
 fn find_string_start(contents: &[u8], quote: usize) -> usize {
@@ -951,6 +973,28 @@ mod tests {
                 build_declaration("after_an_empty_one", &[], false)], found);
         assert_eq!(vec![build_declaration("y", &["outer"], false)],
                 read(&[("#![path = \"d\"]", false), ("mod outer { mod y; }", false)]));
+    }
+
+    #[test]
+    fn nothing_declared_inside_an_inline_module_opening_with_an_inner_path_attribute_is_followed() {
+        let found = read(&[("#[cfg(test)]", true), ("mod checks {", true), ("    #![path = \"elsewhere\"]", true),
+                ("    mod util;", true), ("}", true),
+                ("mod noted {", false), ("    // a note before the attributes", false), ("    #![allow(dead_code)]", false),
+                ("    #![cfg_attr(test, path = \"d\")]", false), ("    mod inside;", false), ("}", false),
+                ("mod on_one_line { #![path = \"d\"] mod y; }", false),
+                ("mod allowed { #![allow(unused)] mod z; }", false), ("mod after;", false)]);
+        assert_eq!(vec![build_declaration("z", &["allowed"], false), build_declaration("after", &[], false)], found);
+    }
+
+    #[test]
+    fn a_module_whose_brace_or_semicolon_sits_on_a_later_line_is_read_there() {
+        let found = read_with_ranges(&[("#[cfg(test)]", None, true), ("mod checks", None, true), ("{", None, true),
+                ("    mod util;", None, true), ("}", None, true),
+                ("mod noted // a note", Some(&[(0, 10)]), false), ("// another", Some(&[]), false), ("{ mod inner; }", None, false),
+                ("#[cfg(test)]", None, true), ("mod split", None, true), (";", None, false),
+                ("mod dropped", None, false), ("let x = 1;", None, false), ("mod after;", None, false)]);
+        assert_eq!(vec![build_declaration("util", &["checks"], true), build_declaration("inner", &["noted"], false),
+                build_declaration("split", &[], true), build_declaration("after", &[], false)], found);
     }
 
     #[test]
