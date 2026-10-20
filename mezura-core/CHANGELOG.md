@@ -87,6 +87,8 @@ Fixes:
   `*/*/*/` closing three nested levels in Rust end the comment there, a `*//` in code starts a line
   comment, a `//*` inside a Rust comment opens one more level, and a `/*` after two stray `*/` in
   code opens its comment.
+- Dart, WGSL, Jai and Pascal declare their block comments as nesting, which all four are, Pascal
+  the way Free Pascal reads it.
 
 -----------------------------------------------------------------------------------------------------------
 

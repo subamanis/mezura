@@ -1170,10 +1170,10 @@ pl      Perl, Prolog
 
         // and the shipped files that need a second pair declare it; D's second pair is the nesting
         // one, which is the case that makes the distinction per pair
-        for name in ["Pascal.txt", "Delphi.txt"] {
-            let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
-            assert_eq!(2, language.multiline_comments.len(), "{name} no longer declares both of its pairs");
-        }
+        let delphi = parse_language_file(LANGUAGES_DIR.to_owned() + "Delphi.txt").unwrap();
+        assert_eq!(2, delphi.multiline_comments.len(), "Delphi.txt no longer declares both of its pairs");
+        let pascal = parse_language_file(LANGUAGES_DIR.to_owned() + "Pascal.txt").unwrap();
+        assert_eq!(2, pascal.nesting_comments.len(), "Pascal.txt no longer declares both of its pairs");
         let d = parse_language_file(LANGUAGES_DIR.to_owned() + "D.txt").unwrap();
         assert_eq!((1, 1), (d.multiline_comments.len(), d.nesting_comments.len()),
                 "D.txt no longer declares its plain pair beside its nesting one");

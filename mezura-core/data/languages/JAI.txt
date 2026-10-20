@@ -12,9 +12,9 @@ Escape character
 
 Comment symbols
 //
-Multi line comment start
+Self-nesting comment start
 /*
-Multi line comment end
+Self-nesting comment end
 */
 
 Keyword
