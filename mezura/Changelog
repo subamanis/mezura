@@ -33,8 +33,9 @@ Main changes:
       close with one symbol, '###' and '"', which a language file may now declare.
   -> A '<script' or '<style' tag whose '>' sits on a later line opens its block, so what it holds
       is counted as the language it is written in.
-  -> A shell heredoc, 'cat <<EOF' down to the line holding 'EOF', is read as the string it is, so a
-      quote inside one opens nothing.
+  -> A heredoc, the shell's 'cat <<EOF', Perl's and Ruby's '<<~EOF' and PHP's '<<<EOF', down to the
+      line holding 'EOF', is read as the string it is, so a quote inside one opens nothing and a
+      '#' inside one comments nothing.
   -> A C++ raw string carrying a delimiter, 'R"js(' down to ')js"', is read as the string it is, so
       a ')"' or a comment symbol inside one ends or opens nothing.
   -> Perl's documentation, from a line like '=head1' down to '=cut', is counted as comments, so an

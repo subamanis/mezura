@@ -22,9 +22,9 @@ pub struct Language {
     pub shebangs : Vec<String>,
     /// Which quotes open a string, and what escapes one.
     pub strings : StringRules,
-    /// The shell's `<<`, after which a word chosen on the spot opens a string that ends at the
-    /// first line holding that word alone.
-    pub heredoc_opener : Option<String>,
+    /// Whose heredoc the language has. After the opener a word chosen on the spot opens a string
+    /// that ends at the line holding that word.
+    pub heredoc : Option<HeredocRules>,
     /// The symbols that make the rest of the line a comment.
     pub comment_symbols : Vec<String>,
     /// Block comments, opener and closer, ending at the first closer. Both halves may be one
@@ -87,7 +87,7 @@ impl Language {
             filenames : Vec::new(),
             shebangs : Vec::new(),
             strings,
-            heredoc_opener : None,
+            heredoc : None,
             comment_symbols : owned_strings(comment_symbols),
             multiline_comments : multiline_comments.iter()
                     .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())).collect(),
@@ -178,11 +178,9 @@ impl Language {
         self
     }
 
-    /// Sets the symbol a heredoc opens with. An empty symbol leaves the language with none.
-    pub fn with_heredoc_opener(mut self, symbol: &str) -> Self {
-        if !symbol.is_empty() {
-            self.heredoc_opener = Some(symbol.to_owned());
-        }
+    /// Gives the language the heredoc of the named rules.
+    pub fn with_heredoc(mut self, rules: HeredocRules) -> Self {
+        self.heredoc = Some(rules);
         self
     }
 
@@ -249,9 +247,9 @@ impl Language {
                 None => {
                     let heredoc = symbol - symbols.len() - literals.len() - self.strings.get_multiline_strings().len()
                             - self.strings.get_leveled_pairs().len();
-                    let opener = self.heredoc_opener.as_deref().filter(|_| heredoc == 0)
+                    let rules = self.heredoc.filter(|_| heredoc == 0)
                             .expect("a string number that names no string of the language");
-                    (opener, "")
+                    (rules.get_opener(), "")
                 }
             }
         }
@@ -387,7 +385,7 @@ impl PartialEq for Language {
             && self.filenames == other.filenames
             && self.shebangs == other.shebangs
             && self.strings == other.strings
-            && self.heredoc_opener == other.heredoc_opener
+            && self.heredoc == other.heredoc
             && self.comment_symbols == other.comment_symbols
             && self.multiline_comments == other.multiline_comments
             && self.nesting_comments == other.nesting_comments
@@ -598,6 +596,44 @@ impl MultilineString {
     pub fn of(open: &str, close: &str) -> MultilineString {
         MultilineString { open: open.to_owned(), close: close.to_owned(), escapes: false, escapes_by_doubling: false,
                 delimited: false }
+    }
+}
+
+/// Whose rules a heredoc follows, which decide the word after its opener and the line that closes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeredocRules {
+    /// `<<EOF`, and `<<-EOF` closing behind tabs. One that never closes runs to the end of the file.
+    Shell,
+    /// `<<EOF` and its quoted forms, and `<<~EOF` closing behind any indent.
+    Perl,
+    /// `<<EOF` and its quoted forms, and `<<-EOF` and `<<~EOF` closing behind any indent.
+    Ruby,
+    /// `<<<EOT` ending its line, closing behind any indent with code allowed after the word.
+    Php,
+}
+
+impl HeredocRules {
+    /// The rules a language file names, `None` for a name that is none of them.
+    pub fn of(name: &str) -> Option<HeredocRules> {
+        match name {
+            "shell" => Some(HeredocRules::Shell),
+            "perl" => Some(HeredocRules::Perl),
+            "ruby" => Some(HeredocRules::Ruby),
+            "php" => Some(HeredocRules::Php),
+            _ => None
+        }
+    }
+
+    pub(crate) fn get_opener(self) -> &'static str {
+        match self {
+            HeredocRules::Php => "<<<",
+            _ => "<<"
+        }
+    }
+
+    // The shell forgives a heredoc the file never closes. The other three refuse to compile one.
+    pub(crate) fn needs_its_closing_line(self) -> bool {
+        self != HeredocRules::Shell
     }
 }
 

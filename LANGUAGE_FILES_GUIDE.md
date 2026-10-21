@@ -66,7 +66,7 @@ Three things to know before you start:
 | `Paired string closers` | Their closers, in the same order | `)" " "#*` |
 | `Paired strings escaped by doubling` *(opt)* | The openers of the pairs whose closer written twice is one quote of the text | `@"` |
 | `Paired strings with a delimiter` *(opt)* | The openers of the pairs that may carry a delimiter of the writer's choosing, which the closer repeats | `R"(` |
-| `Heredoc opener` *(opt)* | The symbol after which a word chosen on the spot opens a string that ends at the line holding that word alone | `<<` |
+| `Heredoc` *(opt)* | Whose heredoc the language has: `shell`, `perl`, `ruby` or `php` | `ruby` |
 | `Escape character` | Required by any language that declares a string. See below | `\` |
 | `Line continuation` *(opt)* | Joins a line to the next when it ends the line | `\` |
 | `Continues` | What the joining reaches: `strings`, `comments`, or both | `strings comments` |
@@ -134,12 +134,23 @@ or a backslash before the bracket, or no bracket within sixteen characters, open
 string, since the compiler takes none of the three as a raw string.
 
 A heredoc is a string whose closer is chosen where it is written: the shell's `cat <<EOF` runs to
-the first line holding `EOF` alone. Declare the symbol under `Heredoc opener`, after the paired
-strings. The word after it may be quoted or backslashed (`<<'EOF'`, `<<\EOF`), a `-` right after the
-symbol lets the closing line carry leading tabs, and a word has to start with a letter, an
-underscore, a quote or a backslash, so `$(( 1 << 2 ))` and the here string `<<<` open nothing. The
-rest of the opening line stays code, the lines under it are the string, and several heredocs opened
-on one line close one after the other, as the shell reads them.
+the first line holding `EOF` alone. Four languages write one, each by rules of its own, so a
+language file names the rules it follows under `Heredoc`, after the paired strings, and any other
+name makes the file faulty. In all four the rest of the opening line stays code, the lines under it
+are the string, the closing line may carry trailing whitespace, and several heredocs opened on one
+line close one after the other.
+
+| Rules | Opener | The word | The closing line |
+|---|---|---|---|
+| `shell` | `<<`, and `<<-` | Quoted or backslashed parts, `<<'EOF'` and `<<\EOF`, and spaces may stand before it. `$(( 1 << 2 ))` and the here string `<<<` open nothing | The word alone, behind tabs after `<<-` |
+| `perl` | `<<`, and `<<~` | Right after the opener, or behind a backslash. Only a quoted one, `<<"EOF"`, `<<'EOF'` or `` <<`EOF` ``, may stand behind spaces | The word alone, behind any indent after `<<~` |
+| `ruby` | `<<`, `<<-` and `<<~` | Right after the opener, bare or quoted, since behind a space `<<` appends | The word alone, behind any indent after `<<-` or `<<~` |
+| `php` | `<<<` | Bare, `"EOT"` or `'EOT'`, spaces allowed before it, and it ends its line | The word behind any indent, followed by anything but a letter, a digit or `_`. Code may follow it, a new heredoc included |
+
+Perl, Ruby and PHP refuse to compile a heredoc that never closes, so in those three an opener only
+counts where its closing line follows somewhere further down: `$x<<EOF` with no `EOF` line under it
+is Perl's shift, and `class <<self` is Ruby's. The shell takes a heredoc the file never closes to
+run to the end of the file.
 
 ## The escape character
 

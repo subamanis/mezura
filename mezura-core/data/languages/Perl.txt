@@ -15,6 +15,9 @@ String symbols
 Multi line string symbols
 " '
 
+Heredoc
+perl
+
 Escape character
 \
 

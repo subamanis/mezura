@@ -52,7 +52,7 @@ pub mod languages;
 pub mod render;
 pub mod warnings;
 
-pub use domain::{Bucket, CountingModel, Keyword, Language, LeveledPair, LineClass, LineClasses,
+pub use domain::{Bucket, CountingModel, HeredocRules, Keyword, Language, LeveledPair, LineClass, LineClasses,
         LineContinuation, MultilineString, NestedLanguage, Span, SpanKind, Stats, StringRules,
         TestFileName};
 pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, PathPatterns, ScopedByModule, Target,

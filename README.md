@@ -651,7 +651,7 @@ With that said, it is important to mention the following limitations:
 
 - Hard links count twice. Symbolic links and nested targets are dropped, but a hard link is indistinguishable from an ordinary file.
 
-- A heredoc is read in the shells. In Ruby, PHP and Perl it cannot be declared yet, so mezura keeps counting quotes inside one, and one apostrophe looks like a string opening that runs on until the next quote.
+- A heredoc is read in the shells, Perl, Ruby and PHP. A regular expression of Perl or Ruby and Ruby's ```%[...]``` and ```$'``` are read as code, so an apostrophe inside one opens a string, and a heredoc opener that string runs past is missed.
 
 - A comment opener inside a regex literal, like the ```/*``` in ```/a[/*]b/```, opens a comment. A regex inside a string is fine.
 

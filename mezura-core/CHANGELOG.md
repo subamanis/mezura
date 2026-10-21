@@ -48,9 +48,9 @@ New:
   CoffeeScript's `###`, and the next one met inside the block closes it. CoffeeScript and
   Smalltalk ship as languages. `comment-pair-never-closes` now reports only a self-nesting pair
   written that way.
-- `Language::heredoc_opener` and `Language::with_heredoc_opener`, read from `Heredoc opener`, the
-  symbol after which a word chosen on the spot opens a string that ends at the line holding that
-  word alone, the shell's `<<`.
+- `Language::heredoc` and `Language::with_heredoc`, read from `Heredoc`, naming the `HeredocRules`
+  a language's heredoc follows: the shell's, Perl's, Ruby's or PHP's. After the opener a word chosen
+  on the spot opens a string that ends at the line holding that word.
 - `MultilineString::delimited` and `StringRules::with_delimited_string_pairs`, read from `Paired
   strings with a delimiter`, for a pair whose writer may put a delimiter of up to sixteen
   characters inside both ends, C++'s `R"js(` closing only at `)js"`.

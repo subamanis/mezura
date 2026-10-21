@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::{Keyword, Language, LeveledPair, LineContinuation, NestedLanguage, StringRules, TestFileName};
+use crate::{HeredocRules, Keyword, Language, LeveledPair, LineContinuation, NestedLanguage, StringRules, TestFileName};
 use crate::engine::identity::ClaimKind;
 
 /// What the language conflicts file decides. It names who wins an extension or a file name that
@@ -101,7 +101,7 @@ const PAIRED_STRING_OPENERS    : &str = "Paired string openers";
 const PAIRED_STRING_CLOSERS    : &str = "Paired string closers";
 const PAIRED_STRINGS_ESCAPED_BY_DOUBLING : &str = "Paired strings escaped by doubling";
 const PAIRED_STRINGS_WITH_A_DELIMITER : &str = "Paired strings with a delimiter";
-const HEREDOC_OPENER           : &str = "Heredoc opener";
+const HEREDOC                  : &str = "Heredoc";
 const CHARACTER_LITERALS       : &str = "Character literal symbols";
 const ESCAPE_CHARACTER         : &str = "Escape character";
 const ESCAPES_NOTHING          : &str = "none";
@@ -412,12 +412,9 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines)?;
     }
 
-    // One symbol, since the word after it and the line that closes it follow the shell's rules
-    let mut heredoc_opener = None;
-    if header == HEREDOC_OPENER {
-        let symbols = split_line_on_whitespace(&read_value_line(lines)?);
-        let [symbol] = symbols.as_slice() else { return None };
-        heredoc_opener = Some(symbol.clone());
+    let mut heredoc = None;
+    if header == HEREDOC {
+        heredoc = Some(HeredocRules::of(read_value_line(lines)?.trim())?);
         header = read_next_header(lines)?;
     }
 
@@ -428,7 +425,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     let mut escape_character = None;
     let declares_a_string = !string_symbols.is_empty() || !char_literals.is_empty()
             || !multiline_strings.is_empty() || !raw_multiline_strings.is_empty()
-            || !string_pairs.is_empty() || !leveled_strings.is_empty() || heredoc_opener.is_some();
+            || !string_pairs.is_empty() || !leveled_strings.is_empty() || heredoc.is_some();
     if header == ESCAPE_CHARACTER {
         let value = read_value_line(lines)?;
         if value != ESCAPES_NOTHING {
@@ -462,6 +459,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
 
     // Declaring no string at all is allowed and is what HTML needs: its quotes delimit attributes
     // rather than strings, and the free text between its tags is full of apostrophes.
+    let heredoc_opener = heredoc.map(|rules| rules.get_opener().to_owned());
     let crossing_openers = multiline_strings.iter().chain(raw_multiline_strings.iter())
             .chain(string_pairs.iter().map(|(open, _)| open)).chain(heredoc_opener.iter())
             .collect::<Vec<&String>>();
@@ -664,7 +662,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     let mut language = Language::new(lang_name, extensions, strings, comment_symbols,
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>(), keywords);
-    language.heredoc_opener = heredoc_opener;
+    language.heredoc = heredoc;
     language.line_continuation = line_continuation;
     language.module_keyword = module_keyword;
 
@@ -1297,23 +1295,29 @@ pl      Perl, Prolog
     }
 
     #[test]
-    fn a_heredoc_opener_is_one_symbol_declared_after_the_strings_and_never_also_a_string_symbol() {
+    fn a_heredoc_names_its_rules_after_the_strings_and_its_opener_is_never_also_a_string_symbol() {
         let good = "Language\nShlike\n\nExtensions\nshl\n\nString symbols\n\n\
-                Multi line raw string symbols\n'\n\nHeredoc opener\n<<\n\nEscape character\n\\\n\nComment symbols\n#\n";
-        assert_eq!(Some("<<".to_owned()), parse_language(good).expect("the declaration must parse").heredoc_opener);
+                Multi line raw string symbols\n'\n\nHeredoc\nshell\n\nEscape character\n\\\n\nComment symbols\n#\n";
+        assert_eq!(Some(HeredocRules::Shell), parse_language(good).expect("the declaration must parse").heredoc);
+        assert_eq!(Some(HeredocRules::Php), parse_language(&good.replace("Heredoc\nshell", "Heredoc\nphp"))
+                .expect("the declaration must parse").heredoc);
 
-        for (refused, why) in [(good.replace("opener\n<<", "opener\n"), "an empty opener"),
-                (good.replace("opener\n<<", "opener\n<< <<-"), "two openers"),
-                (good.replace("opener\n<<", "opener\n'"), "an opener that is also a raw string symbol"),
+        for (refused, why) in [(good.replace("Heredoc\nshell", "Heredoc\n"), "an empty value"),
+                (good.replace("Heredoc\nshell", "Heredoc\nbash"), "the rules of no language"),
+                (good.replace("Heredoc\nshell", "Heredoc\nshell perl"), "two rule sets"),
+                (good.replace("raw string symbols\n'", "raw string symbols\n<<"), "an opener that is also a raw string symbol"),
                 (good.replace("Multi line raw string symbols\n'\n\n", "").replace("Escape character\n\\\n\n", ""),
-                        "an opener with no escape character")] {
+                        "a heredoc with no escape character")] {
             assert!(parse_language(&refused).is_none(), "{why} was accepted");
         }
-        let after_the_escape = good.replace("Heredoc opener\n<<\n\nEscape character\n\\", "Escape character\n\\\n\nHeredoc opener\n<<");
+        let after_the_escape = good.replace("Heredoc\nshell\n\nEscape character\n\\", "Escape character\n\\\n\nHeredoc\nshell");
         assert!(parse_language(&after_the_escape).is_none(), "the block was accepted after the escape character");
 
-        let shell = parse_language_file(LANGUAGES_DIR.to_owned() + "Shell.txt").unwrap();
-        assert_eq!(Some("<<".to_owned()), shell.heredoc_opener, "Shell.txt lost its heredoc opener");
+        for (name, rules) in [("Shell.txt", HeredocRules::Shell), ("Perl.txt", HeredocRules::Perl),
+                ("Ruby.txt", HeredocRules::Ruby), ("PHP.txt", HeredocRules::Php)] {
+            let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
+            assert_eq!(Some(rules), language.heredoc, "{name} lost its heredoc");
+        }
     }
 
     #[test]

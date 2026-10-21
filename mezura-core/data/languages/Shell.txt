@@ -15,8 +15,8 @@ Multi line string symbols
 Multi line raw string symbols
 '
 
-Heredoc opener
-<<
+Heredoc
+shell
 
 Escape character
 \

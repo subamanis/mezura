@@ -15,7 +15,7 @@ use std::time::Instant;
 
 use memchr::memmem;
 
-use crate::{EngineConfig, Language, LineClass, LineClasses, NestedLanguage, ScanSkip, Span, SpanKind, phase_timing};
+use crate::{EngineConfig, HeredocRules, Language, LineClass, LineClasses, NestedLanguage, ScanSkip, Span, SpanKind, phase_timing};
 use crate::domain::{CommentPair, FileStats, LineContinuation};
 use crate::engine::masks::MaskFinder;
 use crate::engine::masks::is_ascii;
@@ -363,9 +363,8 @@ pub(crate) struct ScanPlan {
     line_comment_ends_the_line: bool,
     // Every byte the chunks search, for the pass that splits the file into lines
     finder: MaskFinder,
-    // Searched over a line's code once the walk has found it, never by the chunks, and numbered
-    // after every crossing string
-    heredoc: Option<(memmem::Finder<'static>, u8)>,
+    // Searched once over the whole file, never by the chunks, and numbered after every crossing string
+    heredoc: Option<(memmem::Finder<'static>, u8, HeredocRules)>,
 }
 
 impl ScanPlan {
@@ -486,9 +485,9 @@ impl ScanPlan {
                 .collect::<Vec<u8>>();
         let finder = MaskFinder::of(&searched);
         let strings = &language.strings;
-        let heredoc = language.heredoc_opener.as_ref().map(|opener| (memmem::Finder::new(opener.as_bytes()).into_owned(),
+        let heredoc = language.heredoc.map(|rules| (memmem::Finder::new(rules.get_opener().as_bytes()).into_owned(),
                 (strings.get_symbols().len() + strings.get_char_literals().len()
-                        + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()) as u8));
+                        + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()) as u8, rules));
         ScanPlan { chunks, first, slots, symbols, sorted_kinds, line_comment_ends_the_line, finder, heredoc }
     }
 }
@@ -620,6 +619,8 @@ pub(crate) struct ScanBuffers {
     lead: usize,
     // The delimiter of the delimited string open when the line began, then of the last one it opened
     delimiter: Delimiter,
+    // Filled before the walk of a line and emptied after it, by the caller that holds the rest of the file
+    heredoc_openings: Vec<HeredocOpening>,
 }
 
 impl ScanBuffers {
@@ -1207,7 +1208,7 @@ impl<'a> Iterator for MaskedLines<'a> {
 struct WalkState {
     open_comment: Option<(u8, u32)>,
     open_str_symbol: Option<(u8, u32)>,
-    // Opened on one line, they close one after the other, as the shell reads them
+    // Opened on one line, they close one after the other
     heredocs: Vec<Heredoc>,
     // Read only while 'open_str_symbol' is a delimited string
     delimiter: Delimiter,
@@ -1223,17 +1224,44 @@ impl WalkState {
     }
 }
 
-// The closing line is the word alone, trailing whitespace aside, which bash does not forgive
+// The closing line is the word behind the indent its opener allowed and alone on the line. Trailing
+// whitespace is forgiven, which the shell, Perl and Ruby do not do. PHP lets code follow the word.
+#[derive(Debug)]
 struct Heredoc {
     word: Box<[u8]>,
-    strips_tabs: bool,
+    indent: Indent,
+    code_may_follow: bool,
 }
 
 impl Heredoc {
-    fn is_closed_by(&self, raw_line: &str) -> bool {
-        let line = if self.strips_tabs { raw_line.trim_start_matches('\t') } else { raw_line };
-        line.trim_ascii_end().as_bytes() == self.word.as_ref()
+    fn find_closing_word_end(&self, raw_line: &str) -> Option<usize> {
+        let bytes = raw_line.as_bytes();
+        let at = bytes.iter().take_while(|byte| match self.indent {
+            Indent::None => false,
+            Indent::Tabs => **byte == b'\t',
+            Indent::Any => **byte == b' ' || **byte == b'\t'
+        }).count();
+        let end = at + self.word.len();
+        if !bytes[at..].starts_with(&self.word) { return None; }
+        let closes = if self.code_may_follow { !bytes.get(end).is_some_and(|byte| is_identifier_byte(*byte)) }
+                else { bytes[end..].trim_ascii().is_empty() };
+        closes.then_some(end)
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Indent {
+    None,
+    Tabs,
+    Any,
+}
+
+// At offsets into the raw line
+#[derive(Debug)]
+struct HeredocOpening {
+    at: usize,
+    end: usize,
+    heredoc: Heredoc,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -1439,7 +1467,8 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     let mut buckets: Vec<SectionBucket> = Vec::new();
     let mut pending_tag = None;
     let plan = get_or_build_plan_of(language);
-    let heredoc_finder = plan.heredoc.as_ref().map(|(finder, _)| finder);
+    let mut openers = plan.heredoc.as_ref().map(|(finder, _, _)| finder.find_iter(contents.as_bytes()));
+    let mut next_opener = openers.as_mut().and_then(Iterator::next);
     let declares_line_bound_comments = language.declares_line_bound_comments();
     let mut lines = MaskedLines::of(contents, &plan.finder);
     let mut handed_back = None;
@@ -1454,16 +1483,24 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         let line_end = line_start + raw_line.len();
         let ranges_wanted = line_end > quiet_until;
         let plain = !has_candidates && shell.holds_nothing();
-        let (class, had_code) = if plain && !heredoc_finder.is_some_and(|finder| finder.find(raw_line.as_bytes()).is_some())
+        while next_opener.is_some_and(|at| at < line_start) { next_opener = openers.as_mut().and_then(Iterator::next); }
+        let holds_opener = next_opener.is_some_and(|at| at < line_end);
+        let (class, had_code) = if plain && !holds_opener
                 && !(declares_line_bound_comments && find_line_bound_opener(raw_line, language).is_some()) {
             walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted, scan,
                     &shell, &mut shell_stats, code_spans, log)
         } else {
             // The heredoc opener and the start of a line-start comment are looked for by the walk
             // alone, so a plain line holding one is walked
+            if holds_opener {
+                collect_heredoc_openings(raw_line, &contents[end_of_line(contents, line_start, raw_line)..], language,
+                        &mut scan.heredoc_openings);
+            }
             let candidates = if plain { Candidates::Unsearched } else { Candidates::At(lines.positions(), 0) };
-            walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted,
-                    candidates, scan, &mut shell, &mut shell_stats, code_spans, log)
+            let walked = walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted,
+                    candidates, scan, &mut shell, &mut shell_stats, code_spans, log);
+            if holds_opener { scan.heredoc_openings.clear(); }
+            walked
         };
         let whole_line = [(line_start, usize::MAX)];
         let mut test_spans: &[(usize, usize)] = &[];
@@ -1543,9 +1580,16 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                     break;
                 }
                 // A section is written in another language, whose symbols the masks never searched
+                let holds_opener = get_or_build_plan_of(inner).heredoc.as_ref()
+                        .is_some_and(|(finder, _, _)| finder.find(inner_raw.as_bytes()).is_some());
+                if holds_opener {
+                    let rest_from = end_of_line(contents, inner_start, inner_raw).min(closer_at);
+                    collect_heredoc_openings(inner_raw, &contents[rest_from..closer_at], inner, &mut scan.heredoc_openings);
+                }
                 walk_line::<EXPLAIN>(inner_raw, inner_start, inner, bucket.collecting_spans,
                         !inner.nested_languages.is_empty(), Candidates::Unsearched, scan, &mut inner_state,
                         &mut bucket.stats, &mut bucket.spans, log);
+                if holds_opener { scan.heredoc_openings.clear(); }
             }
             bucket.bytes += section_to - section_from;
         }
@@ -1697,13 +1741,17 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
     }
     let lead = raw_line.len() - from_start.len();
     scan.lead = lead;
-    let base = line_start + lead;
 
     // No symbol counts inside a heredoc, and the line holding its word is its closing quote
     if let Some(heredoc) = state.heredocs.first() {
-        if heredoc.is_closed_by(raw_line) {
+        if let Some(word_end) = heredoc.find_closing_word_end(raw_line) {
+            let code_may_follow = heredoc.code_may_follow;
             state.heredocs.remove(0);
             if state.heredocs.is_empty() { state.open_str_symbol = None; }
+            if code_may_follow && !raw_line[word_end..].trim_ascii().is_empty() {
+                return walk_code_after_closing_word::<EXPLAIN>(raw_line, line_start, (lead, word_end), language,
+                        collecting_spans, scan, state, file_stats, code_spans, log, carried);
+            }
         }
         file_stats.classes.bump(LineClass::StringContent);
         if EXPLAIN {
@@ -1752,6 +1800,34 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
         return (class, false);
     }
 
+    walk_line_symbols::<EXPLAIN>(line, lead, line_start, None, language, collecting_spans, candidates, scan, state,
+            file_stats, code_spans, log, carried)
+}
+
+// The rest is searched whole, since the masks may have found no symbol byte in a line that now holds
+// nothing open
+#[cold]
+#[inline(never)]
+fn walk_code_after_closing_word<const EXPLAIN: bool>(raw_line: &str, line_start: usize, word: (usize, usize),
+    language: &Language, collecting_spans: bool, scan: &mut ScanBuffers, state: &mut WalkState,
+    file_stats: &mut FileStats, code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog, carried: CarriedRecord)
+    -> (LineClass, bool)
+{
+    let after_word = raw_line[word.1..].trim_ascii_start();
+    let lead = raw_line.len() - after_word.len();
+    scan.lead = lead;
+    walk_line_symbols::<EXPLAIN>(after_word.trim_ascii_end(), lead, line_start, Some(word), language, collecting_spans,
+            Candidates::Unsearched, scan, state, file_stats, code_spans, log, carried)
+}
+
+// Forced in, so that the copy every line runs is compiled with no closing word to handle
+#[inline(always)]
+fn walk_line_symbols<const EXPLAIN: bool>(line: &str, lead: usize, line_start: usize, closing_word: Option<(usize, usize)>,
+    language: &Language, collecting_spans: bool, candidates: Candidates, scan: &mut ScanBuffers, state: &mut WalkState,
+    file_stats: &mut FileStats, code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog, carried: CarriedRecord)
+    -> (LineClass, bool)
+{
+    let base = line_start + lead;
     if state.open_str_symbol.is_some_and(|(symbol, _)| language.string_is_delimited(symbol)) {
         scan.delimiter = state.delimiter;
     }
@@ -1771,15 +1847,21 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
         state.delimiter = scan.delimiter;
     }
 
-    // The opener and its word are the string's opening quote, and its text begins on the next line
+    // The opener and its word are the string's opening quote, and its text begins on the next line.
+    // Only an opener the line left as code opens one.
     if line_info.has_code && state.open_comment.is_none() && state.open_str_symbol.is_none()
-            && let Some((finder, symbol)) = &get_or_build_plan_of(language).heredoc {
+            && !scan.heredoc_openings.is_empty() && let Some((finder, symbol, _)) = &get_or_build_plan_of(language).heredoc {
+        let width = finder.needle().len();
         let mut after = 0;
-        while let Some((at, end, heredoc)) = find_heredoc_opening(line, &scan.code_ranges, finder,
-                language.strings.get_escape(), after) {
+        for opening in std::mem::take(&mut scan.heredoc_openings) {
+            let Some(at) = opening.at.checked_sub(lead) else { continue };
+            let end = opening.end - lead;
+            if at < after || !scan.code_ranges.iter().any(|(from, to)| *from <= at && at + width <= *to) {
+                continue;
+            }
             cut_out_of_code(&mut scan.code_ranges, line, at, end);
             if EXPLAIN { mark_as_string(&mut line_spans, at, end); }
-            state.heredocs.push(heredoc);
+            state.heredocs.push(opening.heredoc);
             after = end;
         }
         if !state.heredocs.is_empty() {
@@ -1789,6 +1871,7 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
             opened_here.string = true;
         }
     }
+    if closing_word.is_some() { line_info.has_string_literal = true; }
 
     // Each line lands in exactly one class, read off what it says and where it sits. The counting
     // models are folds over the classes at presentation time, so nothing here decides a bucket.
@@ -1826,6 +1909,9 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
             span.from += lead;
             span.to += lead;
         }
+        if let Some((from, to)) = closing_word {
+            line_spans.insert(0, Span { from, to, kind: SpanKind::String });
+        }
         log.record(class, carried.with_its_end_marked(state, opened_here), language, line_spans);
     }
 
@@ -1843,38 +1929,113 @@ fn end_of_line(contents: &str, line_start: usize, raw_line: &str) -> usize {
     end
 }
 
-// A shift inside an arithmetic '((' that has not closed opens nothing. Only the opener has to be
-// code, since a quoted word was read by the walk as a string.
-fn find_heredoc_opening(line: &str, code_ranges: &[(usize, usize)], finder: &memmem::Finder,
-    escape: Option<u8>, after: usize) -> Option<(usize, usize, Heredoc)>
-{
-    let bytes = line.as_bytes();
-    for &(from, to) in code_ranges.iter().filter(|(_, to)| after < *to) {
-        let mut cursor = from.max(after);
-        while let Some(offset) = finder.find(&bytes[cursor..to]) {
-            let at = cursor + offset;
-            cursor = at + finder.needle().len();
-            if bytes.get(cursor) == Some(&b'<') {
-                while cursor < to && bytes[cursor] == b'<' { cursor += 1; }
-                continue;
-            }
-            let before = &bytes[..at];
-            if !is_not_escaped(at, bytes, escape)
-                    || memmem::find_iter(before, b"((").count() > memmem::find_iter(before, b"))").count() {
-                continue;
-            }
-            let strips_tabs = bytes.get(cursor) == Some(&b'-');
-            let mut word_at = cursor + usize::from(strips_tabs);
-            while bytes.get(word_at).is_some_and(|byte| *byte == b' ' || *byte == b'\t') { word_at += 1; }
-            if !bytes.get(word_at).is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'\'' | b'"' | b'\\')) {
-                continue;
-            }
-            if let Some((word, end)) = read_heredoc_word(bytes, word_at) {
-                return Some((at, end, Heredoc { word, strips_tabs }));
-            }
+// Whether an opener stands in code is the walk's to decide. A longer run of '<' is another operator,
+// the shell's here-string among them.
+fn collect_heredoc_openings(raw_line: &str, rest: &str, language: &Language, openings: &mut Vec<HeredocOpening>) {
+    let Some((finder, _, rules)) = &get_or_build_plan_of(language).heredoc else { return };
+    let bytes = raw_line.trim_ascii_end().as_bytes();
+    let escape = language.strings.get_escape();
+    for at in finder.find_iter(bytes) {
+        let cursor = at + finder.needle().len();
+        if bytes.get(cursor) == Some(&b'<') || at.checked_sub(1).is_some_and(|before| bytes[before] == b'<')
+                || !is_not_escaped(at, bytes, escape) {
+            continue;
+        }
+        let read = match rules {
+            HeredocRules::Shell => read_shell_heredoc(bytes, at, cursor),
+            HeredocRules::Perl => read_perl_heredoc(bytes, cursor),
+            HeredocRules::Ruby => read_ruby_heredoc(bytes, cursor),
+            HeredocRules::Php => read_php_heredoc(bytes, cursor)
+        };
+        let Some((end, heredoc)) = read else { continue };
+        if !rules.needs_its_closing_line() || has_closing_line(rest, &heredoc) {
+            openings.push(HeredocOpening { at, end, heredoc });
         }
     }
-    None
+}
+
+// A shift inside an arithmetic '((' that has not closed opens nothing
+fn read_shell_heredoc(bytes: &[u8], at: usize, cursor: usize) -> Option<(usize, Heredoc)> {
+    let before = &bytes[..at];
+    if memmem::find_iter(before, b"((").count() > memmem::find_iter(before, b"))").count() {
+        return None;
+    }
+    let strips_tabs = bytes.get(cursor) == Some(&b'-');
+    let mut word_at = cursor + usize::from(strips_tabs);
+    while bytes.get(word_at).is_some_and(|byte| *byte == b' ' || *byte == b'\t') { word_at += 1; }
+    if !bytes.get(word_at).is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'\'' | b'"' | b'\\')) {
+        return None;
+    }
+    let (word, end) = read_heredoc_word(bytes, word_at)?;
+    let indent = if strips_tabs { Indent::Tabs } else { Indent::None };
+    Some((end, Heredoc { word, indent, code_may_follow: false }))
+}
+
+// A bare word follows at once, or behind a backslash, and only a quoted one may stand behind spaces
+fn read_perl_heredoc(bytes: &[u8], cursor: usize) -> Option<(usize, Heredoc)> {
+    let indented = bytes.get(cursor) == Some(&b'~');
+    let after_tilde = cursor + usize::from(indented);
+    let word_at = after_tilde + bytes[after_tilde..].iter().take_while(|byte| **byte == b' ' || **byte == b'\t').count();
+    let spaced = word_at > after_tilde;
+    let (word, end) = match *bytes.get(word_at)? {
+        b'"' | b'\'' | b'`' => read_quoted_word(bytes, word_at)?,
+        b'\\' if !spaced => read_identifier(bytes, word_at + 1)?,
+        byte if !spaced && is_identifier_start(byte) => read_identifier(bytes, word_at)?,
+        _ => return None
+    };
+    let indent = if indented { Indent::Any } else { Indent::None };
+    Some((end, Heredoc { word, indent, code_may_follow: false }))
+}
+
+// Behind a space '<<' is the append operator
+fn read_ruby_heredoc(bytes: &[u8], cursor: usize) -> Option<(usize, Heredoc)> {
+    let indented = matches!(bytes.get(cursor), Some(b'-' | b'~'));
+    let word_at = cursor + usize::from(indented);
+    let (word, end) = match *bytes.get(word_at)? {
+        b'"' | b'\'' | b'`' => read_quoted_word(bytes, word_at)?,
+        byte if is_identifier_start(byte) => read_identifier(bytes, word_at)?,
+        _ => return None
+    };
+    let indent = if indented { Indent::Any } else { Indent::None };
+    Some((end, Heredoc { word, indent, code_may_follow: false }))
+}
+
+fn read_php_heredoc(bytes: &[u8], cursor: usize) -> Option<(usize, Heredoc)> {
+    let word_at = cursor + bytes[cursor..].iter().take_while(|byte| **byte == b' ' || **byte == b'\t').count();
+    let (word, end) = match *bytes.get(word_at)? {
+        b'"' | b'\'' => read_quoted_word(bytes, word_at)?,
+        byte if is_identifier_start(byte) => read_identifier(bytes, word_at)?,
+        _ => return None
+    };
+    (end == bytes.len()).then_some((end, Heredoc { word, indent: Indent::Any, code_may_follow: true }))
+}
+
+fn read_identifier(bytes: &[u8], from: usize) -> Option<(Box<[u8]>, usize)> {
+    let end = from + bytes[from..].iter().take_while(|byte| is_identifier_byte(**byte)).count();
+    (end > from && is_identifier_start(bytes[from])).then(|| (bytes[from..end].into(), end))
+}
+
+// None for a quote left open on the line, or one holding nothing
+fn read_quoted_word(bytes: &[u8], from: usize) -> Option<(Box<[u8]>, usize)> {
+    let closed_at = from + 1 + memchr::memchr(bytes[from], &bytes[from + 1..])?;
+    (closed_at > from + 1).then(|| (bytes[from + 1..closed_at].into(), closed_at + 1))
+}
+
+fn is_identifier_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_' || byte >= 0x80
+}
+
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
+}
+
+fn has_closing_line(rest: &str, heredoc: &Heredoc) -> bool {
+    let bytes = rest.as_bytes();
+    memmem::find_iter(bytes, &heredoc.word).any(|at| {
+        let line_start = memchr::memrchr(b'\n', &bytes[..at]).map_or(0, |newline| newline + 1);
+        let line_end = memchr::memchr(b'\n', &bytes[at..]).map_or(bytes.len(), |newline| at + newline);
+        heredoc.find_closing_word_end(rest[line_start..line_end].trim_end_matches('\r')).is_some()
+    })
 }
 
 // None for a quote left open on the line
@@ -4139,7 +4300,7 @@ mod tests {
 
     fn build_shell_with_heredocs() -> Language {
         Language::new("shell-like", ["sh"], StringRules::escaping_with(b'\\').with_multiline_strings(["\""])
-                .with_raw_multiline_strings(["'"]), ["#"], &[], []).with_heredoc_opener("<<")
+                .with_raw_multiline_strings(["'"]), ["#"], &[], []).with_heredoc(HeredocRules::Shell)
     }
 
     // Read the way explaining a file reads it, and held to the classes a counting run gives the same text
@@ -4262,6 +4423,90 @@ mod tests {
                 classify_lines("cat <<EOF\nEOF2\n# still text\nEOF \n# a comment\n", &shell));
         assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, StringContent, WordsInComment],
                 classify_lines("cat <<EOF\necho EOF\n  EOF\nEOF more\nEOF\n# a comment\n", &shell));
+    }
+
+    #[test]
+    fn perl_reads_every_form_of_its_heredoc_word_and_only_the_tilde_lets_the_closing_word_be_indented() {
+        use LineClass::{StringContent, WordsInCode, WordsInComment};
+        let perl = &LANGUAGE_MAP_REF["Perl"];
+        for opener in ["print <<EOF;", "print <<\"EOF\";", "print <<'EOF';", "print <<`EOF`;", "print <<\\EOF;",
+                "print << \"EOF\";", "print<<EOF;", "my @all = (<<EOF, 'x');"] {
+            assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, WordsInComment],
+                    classify_lines(&format!("{opener}\nit's text\n# not a comment\nEOF\n# a comment\n"), perl), "{opener}");
+        }
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, WordsInComment],
+                classify_lines("print <<~EOF;\n    it's text\n    EOF\n# a comment\n", perl));
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, WordsInComment],
+                classify_lines("print <<EOF;\nit's text\n    EOF\nEOF\n# a comment\n", perl));
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, StringContent, WordsInComment],
+                classify_lines("print <<A, <<\"B\";\nit's a\nA\nit's b\nB\n# a comment\n", perl));
+    }
+
+    #[test]
+    fn perl_reads_a_double_less_than_whose_word_never_closes_as_a_shift() {
+        use LineClass::{WordsInCode, WordsInComment};
+        let perl = &LANGUAGE_MAP_REF["Perl"];
+        for line in ["my $y = $x<<BITS;", "my $y = $x << 2;", "my $y = 1<<$n;", "print << EOF;"] {
+            assert_eq!(vec![WordsInCode, WordsInComment, WordsInCode],
+                    classify_lines(&format!("{line}\n# it's a comment\nprint 'x';\n"), perl), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_line_inside_a_perl_heredoc_that_looks_like_pod_is_text() {
+        use LineClass::{StringContent, WordsInCode};
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, WordsInCode],
+                classify_lines("print <<EOF;\n=head1 not documentation\nEOF\nprint \"after\";\n", &LANGUAGE_MAP_REF["Perl"]));
+    }
+
+    #[test]
+    fn ruby_reads_a_heredoc_only_with_its_word_right_behind_the_opener() {
+        use LineClass::{StringContent, WordsInCode, WordsInComment};
+        let ruby = &LANGUAGE_MAP_REF["Ruby"];
+        for (opener, closer) in [("query(<<~SQL).to_h", "  SQL"), ("text = <<-EOS.strip", "    EOS"), ("text = <<EOS", "EOS"),
+                ("text = <<~'EOS'", "EOS"), ("run(<<-\"EOS\", 1)", "  EOS")] {
+            assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, WordsInComment],
+                    classify_lines(&format!("{opener}\n  it's text\n  # not a comment\n{closer}\n# a comment\n"), ruby),
+                    "{opener}");
+        }
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, WordsInComment],
+                classify_lines("text = <<EOS\nit's text\n  EOS\nEOS\n# a comment\n", ruby));
+        assert_eq!(vec![WordsInCode, WordsInCode, WordsInComment],
+                classify_lines("buffer << 'EOS'\nEOS\n# a comment\n", ruby));
+    }
+
+    #[test]
+    fn ruby_reads_a_double_less_than_whose_word_never_closes_as_an_operator() {
+        use LineClass::{WordsInCode, WordsInComment};
+        assert_eq!(vec![WordsInCode, WordsInCode, WordsInComment, WordsInCode, WordsInCode],
+                classify_lines("class <<self\n  def name = 'x'\n  # it's a comment\n  end\nend\n", &LANGUAGE_MAP_REF["Ruby"]));
+    }
+
+    #[test]
+    fn php_reads_the_code_after_its_closing_word_and_a_heredoc_opened_there() {
+        use LineClass::{StringContent, WordsInCode, WordsInComment};
+        let php = &LANGUAGE_MAP_REF["PHP"];
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, StringContent, WordsInComment],
+                classify_lines("$all = [<<<A\n    it's a\n    A, <<<'B'\n  # not a comment\n  B];\n# a comment\n", php));
+        assert_eq!(vec![WordsInCode, StringContent, WordsInCode, WordsInComment],
+                classify_lines("$s = <<<EOT\nit's text\nEOT . strtolower($x);\n# a comment\n", php));
+
+        let (_, log) = parse_lines_explained("$s = <<<EOT\ntext\n  EOT . lower($x);\n", php, &empty_lookup(),
+                &EngineConfig::default(), TestsByPath::Nothing);
+        let spans = log.records()[2].spans.iter().map(|span| (span.from, span.to, span.kind)).collect::<Vec<_>>();
+        assert_eq!(vec![(2, 5, SpanKind::String), (6, 18, SpanKind::Code)], spans);
+    }
+
+    #[test]
+    fn php_closes_at_its_word_followed_by_no_identifier_byte_and_opens_only_on_a_word_ending_its_line() {
+        use LineClass::{StringContent, WordsInCode, WordsInComment};
+        let php = &LANGUAGE_MAP_REF["PHP"];
+        assert_eq!(vec![WordsInCode, StringContent, StringContent, StringContent, WordsInComment],
+                classify_lines("$s = <<<EOT\nit's text\nEOTX is text\n  EOT;\n# a comment\n", php));
+        for line in ["$s = <<<EOT echo 1;", "$s = <<<NEVER"] {
+            assert_eq!(vec![WordsInCode, WordsInComment, WordsInCode],
+                    classify_lines(&format!("{line}\n# it's a comment\nEOT;\n"), php), "{line}");
+        }
     }
 
     fn build_perl_with_pod() -> Language {
