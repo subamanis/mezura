@@ -75,8 +75,10 @@ Three things to know before you start:
 | `Multi line comment end` | Their closers, in the same order | `*/ }` |
 | `Self-nesting comment start` *(opt)* | Openers of blocks that nest inside themselves | `(*` |
 | `Self-nesting comment end` | Their closers, in the same order | `*)` |
-| `Line-start comment start` *(opt)* | Opens a block at a line beginning with it and a letter | `=` |
-| `Line-start comment end` | Closes it at a line beginning with it and no letter after it | `=cut` |
+| `Line-start comment start` *(opt)* | Openers of blocks whose ends count only at the very start of a line | `=` |
+| `Line-start comment end` | Their closers, in the same order | `=cut` |
+| `Whole-line comment start` *(opt)* | Openers of blocks whose ends count only as the whole of a line; they nest | `%{` |
+| `Whole-line comment end` | Their closers, in the same order | `%}` |
 | `Cancelled symbols` *(opt)* | Symbols that stop counting when one character sits in front of them | `<* *>` |
 | `Cancelled after` | The character that cancels each, in the same order | `[ <` |
 | `Nested language start` *(opt)* | Openers of sections written in another language | `<script <style` |
@@ -196,13 +198,20 @@ run, Lua's `]=*]`, closes only at the same count. That is the only place in the 
 characters do not stand for themselves, and it works only in the block comment and paired string
 blocks.
 
-Perl's documentation, POD, is a block whose two ends count only at the very start of a line,
-declared as one pair under `Line-start comment start` and `Line-start comment end`, after the other
-comment blocks. A line beginning with the start and a letter opens it, `=head1`, `=pod` or any other
-word, and every line down to one beginning with the end and no letter after it is comment, both of
-those lines whole, `=cut back to code` included. An indented `=head1` and a `= 5` are code, and
-`=cutting` does not close what `=cut` would. Inside the block nothing is read, so an apostrophe in
-the documentation opens no string.
+Perl's documentation, POD, and Ruby's `=begin` and `=end` are blocks whose two ends count only at
+the very start of a line, declared under `Line-start comment start` and `Line-start comment end`,
+after the other comment blocks. A symbol ending in a letter is a word there and has to end, so
+`=begin some_tag` opens Ruby's block and `=beginning` does not, and `=cut back to code` closes POD
+while `=cutting` and `=cut2` do not. Any other symbol has to be followed by a letter, so Perl's `=`
+opens at `=head1`, `=pod` or any other word and reads `= 5` as code. Every line from the opening one
+down to the closing one is comment, both of those whole, and the opening line never closes, which is
+how Perl reads a `=cut` met in code. An indented symbol is code outside the block and text inside
+it. Inside the block nothing is read, so an apostrophe in the documentation opens no string.
+
+MATLAB's `%{` and `%}` count only as the whole of a line, spaces and tabs around them aside, and are
+declared under `Whole-line comment start` and `Whole-line comment end`, after the line-start ones. A
+`%{ a note` is an ordinary `%` line comment, a `%} not yet` inside a block is text, and the blocks
+nest, a closer ending only the innermost one.
 
 ## When a symbol is part of something longer
 

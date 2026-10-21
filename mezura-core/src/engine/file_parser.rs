@@ -1212,14 +1212,14 @@ struct WalkState {
     // Read only while 'open_str_symbol' is a delimited string
     delimiter: Delimiter,
     continued_comment: bool,
-    in_line_start_comment: bool,
+    line_bound: Option<(u8, u32)>,
     opened_line: usize,
 }
 
 impl WalkState {
     fn holds_nothing(&self) -> bool {
         self.open_comment.is_none() && self.open_str_symbol.is_none() && !self.continued_comment
-                && !self.in_line_start_comment
+                && self.line_bound.is_none()
     }
 }
 
@@ -1262,7 +1262,7 @@ impl Delimiter {
 pub(crate) enum CarriedRecord {
     Nothing,
     Comment { symbol: u8, depth: u32, since_line: usize, ends: bool },
-    LineStartComment { since_line: usize, ends: bool },
+    LineBoundComment { pair: u8, depth: u32, since_line: usize, ends: bool },
     Str { symbol: u8, level: u32, since_line: usize, ends: bool },
     Continuation { since_line: usize },
 }
@@ -1273,8 +1273,8 @@ impl CarriedRecord {
             CarriedRecord::Str { symbol, level, since_line: state.opened_line, ends: false }
         } else if let Some((symbol, depth)) = state.open_comment {
             CarriedRecord::Comment { symbol, depth, since_line: state.opened_line, ends: false }
-        } else if state.in_line_start_comment {
-            CarriedRecord::LineStartComment { since_line: state.opened_line, ends: false }
+        } else if let Some((pair, depth)) = state.line_bound {
+            CarriedRecord::LineBoundComment { pair, depth, since_line: state.opened_line, ends: false }
         } else if state.continued_comment {
             CarriedRecord::Continuation { since_line: state.opened_line }
         } else {
@@ -1289,8 +1289,8 @@ impl CarriedRecord {
             CarriedRecord::Comment { symbol, depth, since_line, .. } => CarriedRecord::Comment {
                 symbol, depth, since_line,
                 ends: state.open_comment.is_none() || opened_here.comment },
-            CarriedRecord::LineStartComment { since_line, .. } => CarriedRecord::LineStartComment {
-                since_line, ends: !state.in_line_start_comment },
+            CarriedRecord::LineBoundComment { pair, depth, since_line, .. } => CarriedRecord::LineBoundComment {
+                pair, depth, since_line, ends: state.line_bound.is_none() },
             CarriedRecord::Str { symbol, level, since_line, .. } => CarriedRecord::Str {
                 symbol, level, since_line,
                 ends: state.open_str_symbol.is_none() || opened_here.string },
@@ -1440,7 +1440,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     let mut pending_tag = None;
     let plan = get_or_build_plan_of(language);
     let heredoc_finder = plan.heredoc.as_ref().map(|(finder, _)| finder);
-    let line_start_opener = language.line_start_comment.as_ref().map(|(start, _)| start.as_bytes());
+    let declares_line_bound_comments = language.declares_line_bound_comments();
     let mut lines = MaskedLines::of(contents, &plan.finder);
     let mut handed_back = None;
     loop {
@@ -1455,7 +1455,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         let ranges_wanted = line_end > quiet_until;
         let plain = !has_candidates && shell.holds_nothing();
         let (class, had_code) = if plain && !heredoc_finder.is_some_and(|finder| finder.find(raw_line.as_bytes()).is_some())
-                && !line_start_opener.is_some_and(|start| begins_a_line_start_comment(raw_line.as_bytes(), start)) {
+                && !(declares_line_bound_comments && find_line_bound_opener(raw_line, language).is_some()) {
             walk_plain_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted, scan,
                     &shell, &mut shell_stats, code_spans, log)
         } else {
@@ -1681,7 +1681,7 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
         let carried_by_a_continuation = state.continued_comment;
         state.continued_comment = false;
         let class = if state.open_str_symbol.is_some() { LineClass::BlankInString }
-                else if state.open_comment.is_some() || carried_by_a_continuation || state.in_line_start_comment {
+                else if state.open_comment.is_some() || carried_by_a_continuation || state.line_bound.is_some() {
                     LineClass::BlankInComment
                 }
                 else { LineClass::Blank };
@@ -1727,18 +1727,25 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
         return (class, false);
     }
 
-    // The line that opens the block never closes it. Perl takes a '=cut' met in code as the start of
+    // The line that opens a block never closes it. Perl takes a '=cut' met in code as the start of
     // a block that runs to the next one
-    if let Some((start, end)) = &language.line_start_comment
-            && (state.in_line_start_comment
-                || (state.holds_nothing() && begins_a_line_start_comment(raw_line.as_bytes(), start.as_bytes()))) {
-        let opened = !state.in_line_start_comment;
-        state.in_line_start_comment = opened || !ends_a_line_start_comment(raw_line.as_bytes(), end.as_bytes());
+    let line_bound_before = state.line_bound;
+    if let Some((pair, depth)) = state.line_bound {
+        let bound = language.get_line_bound_pair_of(pair);
+        if bound.is_closed_by(raw_line.as_bytes()) {
+            state.line_bound = (depth > 1).then_some((pair, depth - 1));
+        } else if bound.nests() && bound.is_opened_by(raw_line.as_bytes()) {
+            state.line_bound = Some((pair, depth.saturating_add(1)));
+        }
+    } else if state.holds_nothing() && let Some(pair) = find_line_bound_opener(raw_line, language) {
+        state.line_bound = Some((pair, 1));
+        if EXPLAIN { state.opened_line = log.get_current_line_number(); }
+    }
+    if line_bound_before.is_some() || state.line_bound.is_some() {
         let class = if has_word_byte(line.as_bytes()) { LineClass::WordsInComment }
                 else { LineClass::PunctuationInComment };
         file_stats.classes.bump(class);
         if EXPLAIN {
-            if opened { state.opened_line = log.get_current_line_number(); }
             log.record(class, carried.with_its_end_marked(state, OpenedHere::default()), language,
                     vec![Span { from: lead, to: lead + line.len(), kind: SpanKind::Comment }]);
         }
@@ -1895,14 +1902,8 @@ fn read_heredoc_word(bytes: &[u8], from: usize) -> Option<(Box<[u8]>, usize)> {
     (!word.is_empty()).then(|| (word.into_boxed_slice(), cursor))
 }
 
-// Perl opens at '=head1' and reads '= 5' as code. It closes at '=cut' and '=cut2', and '=cutting'
-// is a word of its own
-fn begins_a_line_start_comment(raw_line: &[u8], start: &[u8]) -> bool {
-    raw_line.starts_with(start) && raw_line.get(start.len()).is_some_and(u8::is_ascii_alphabetic)
-}
-
-fn ends_a_line_start_comment(raw_line: &[u8], end: &[u8]) -> bool {
-    raw_line.starts_with(end) && !raw_line.get(end.len()).is_some_and(u8::is_ascii_alphabetic)
+fn find_line_bound_opener(raw_line: &str, language: &Language) -> Option<u8> {
+    language.line_bound_pairs().position(|pair| pair.is_opened_by(raw_line.as_bytes())).map(|at| at as u8)
 }
 
 fn cut_out_of_code(code_ranges: &mut Vec<(usize, usize)>, line: &str, from: usize, to: usize) {
@@ -4265,7 +4266,17 @@ mod tests {
 
     fn build_perl_with_pod() -> Language {
         Language::new("perl-pod", ["pl"], StringRules::escaping_with(b'\\').with_multiline_strings(["\"", "'"]),
-                ["#"], &[], []).with_line_start_comment("=", "=cut")
+                ["#"], &[], []).with_line_start_comments(&[("=", "=cut")])
+    }
+
+    fn build_ruby_with_embedded_docs() -> Language {
+        Language::new("ruby-doc", ["rb"], StringRules::escaping_with(b'\\').with_multiline_strings(["\"", "'"]),
+                ["#"], &[], []).with_line_start_comments(&[("=begin", "=end")])
+    }
+
+    fn build_matlab_with_block_comments() -> Language {
+        Language::new("matlab-block", ["m"], StringRules::escaping_nothing().with_symbols(["\"", "'"]),
+                ["%"], &[], []).with_whole_line_comments(&[("%{", "%}")])
     }
 
     #[test]
@@ -4279,8 +4290,110 @@ mod tests {
     #[test]
     fn a_line_start_comment_opens_and_closes_only_at_the_start_of_a_line() {
         use LineClass::{WordsInCode, WordsInComment};
-        assert_eq!(vec![WordsInCode, WordsInCode, WordsInComment, WordsInComment, WordsInComment, WordsInComment, WordsInCode],
-                classify_lines("  =head1 indented\n= 5;\n=head1 NAME\n=cutting\nx\n=cut2\nprint 1;\n", &build_perl_with_pod()));
+        assert_eq!(vec![WordsInCode, WordsInCode, WordsInComment, WordsInComment, WordsInComment, WordsInComment, WordsInComment,
+                WordsInComment, WordsInComment, WordsInCode],
+                classify_lines("  =head1 indented\n= 5;\n=head1 NAME\n=cutting\n=cut2\nx\n=cut_x\ny\n=cut.\nprint 1;\n",
+                        &build_perl_with_pod()));
+    }
+
+    #[test]
+    fn a_line_start_comment_whose_start_is_a_word_opens_only_where_the_word_ends() {
+        use LineClass::{WordsInCode, WordsInComment};
+        assert_eq!(vec![WordsInCode, WordsInCode, WordsInCode, WordsInComment, WordsInComment, WordsInComment, WordsInCode,
+                WordsInCode, WordsInCode],
+                classify_lines("def since(from=beginning_of_day)\n  from\nend\n=begin some_tag\nnot run\n=end trailing\nputs 1\n\
+                        =beginning\n=begin2\n", &build_ruby_with_embedded_docs()));
+    }
+
+    #[test]
+    fn an_end_heading_a_longer_word_or_indented_does_not_close_a_line_start_comment() {
+        use LineClass::{WordsInCode, WordsInComment};
+        assert_eq!(vec![WordsInComment, WordsInComment, WordsInComment, WordsInComment, WordsInComment, WordsInComment, WordsInCode],
+                classify_lines("=begin\n=endx\n=end2\n=end_\n  =end\n=end\nx\n", &build_ruby_with_embedded_docs()));
+    }
+
+    #[test]
+    fn a_whole_line_comment_opens_and_closes_only_where_its_symbol_is_the_whole_line() {
+        use LineClass::{PunctuationInComment, WordsInCode, WordsInComment};
+        assert_eq!(vec![WordsInCode, WordsInComment, WordsInCode, PunctuationInComment, WordsInComment, WordsInComment,
+                WordsInComment, PunctuationInComment, WordsInCode],
+                classify_lines("x = 1;\n%{ a note\ny = 2;\n%{\nz = 3;\n%} not yet\nw = 4;\n%}\nv = 5;\n",
+                        &build_matlab_with_block_comments()));
+    }
+
+    #[test]
+    fn a_whole_line_comment_nests_and_takes_whitespace_around_its_symbol() {
+        use LineClass::{BlankInComment, PunctuationInComment, WordsInCode, WordsInComment};
+        assert_eq!(vec![PunctuationInComment, PunctuationInComment, WordsInComment, PunctuationInComment, BlankInComment,
+                WordsInComment, PunctuationInComment, WordsInCode],
+                classify_lines("  %{  \n    %{\n    a\n    %}\n\nb\n  %}\t\nc\n", &build_matlab_with_block_comments()));
+    }
+
+    #[test]
+    fn a_whole_line_closer_with_nothing_open_is_a_line_comment() {
+        use LineClass::{PunctuationInComment, WordsInCode};
+        assert_eq!(vec![PunctuationInComment, WordsInCode], classify_lines("%}\nx\n", &build_matlab_with_block_comments()));
+    }
+
+    #[test]
+    fn line_bound_comments_agree_with_a_reference_reading_of_each_language() {
+        let perl = |lines: &[&str]| -> Vec<bool> {
+            let mut open = false;
+            lines.iter().map(|line| {
+                let bytes = line.as_bytes();
+                if open {
+                    open = !(line.starts_with("=cut") && !bytes.get(4).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_'));
+                    return true;
+                }
+                open = bytes.first() == Some(&b'=') && bytes.get(1).is_some_and(u8::is_ascii_alphabetic);
+                open || line.starts_with('#')
+            }).collect()
+        };
+        let ruby = |lines: &[&str]| -> Vec<bool> {
+            let is_word = |line: &str, word: &str| line == word || line.starts_with(&format!("{word} "))
+                    || line.starts_with(&format!("{word}\t"));
+            let mut open = false;
+            lines.iter().map(|line| {
+                if open {
+                    open = !is_word(line, "=end");
+                    return true;
+                }
+                open = is_word(line, "=begin");
+                open || line.starts_with('#')
+            }).collect()
+        };
+        let matlab = |lines: &[&str]| -> Vec<bool> {
+            let mut depth = 0u32;
+            lines.iter().map(|line| {
+                let trimmed = line.trim();
+                let inside = depth > 0;
+                if trimmed == "%{" { depth += 1; }
+                else if trimmed == "%}" && depth > 0 { depth -= 1; }
+                inside || depth > 0 || trimmed.starts_with('%')
+            }).collect()
+        };
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        let mut check = |alphabet: &[&str], language: &Language, reference: &dyn Fn(&[&str]) -> Vec<bool>| {
+            for _ in 0..2000 {
+                let lines = (0..3 + next(12)).map(|_| alphabet[next(alphabet.len())]).collect::<Vec<_>>();
+                let contents = lines.join("\n") + "\n";
+                let read = classify_lines(&contents, language).into_iter().map(|class| matches!(class,
+                        LineClass::BlankInComment | LineClass::WordsInComment | LineClass::PunctuationInComment)).collect::<Vec<_>>();
+                assert_eq!(reference(&lines), read, "{} disagrees on {contents:?}", language.name);
+            }
+        };
+        check(&["=pod", "=head1 T", "=cut", "=cut text", "=cut2", "=cut_x", "=cut.", "=cutting", "  =head1", "= 5;", "print 1;",
+                "# c", ""], &build_perl_with_pod(), &perl);
+        check(&["=begin", "=begin tag", "=beginning", "=begin2", "=end", "=end tag", "=endx", "  =end", "x = 1", "# c", ""],
+                &build_ruby_with_embedded_docs(), &ruby);
+        check(&["%{", "  %{", "%{  ", "%{ x", "%}", "  %}", "%} x", "x = 1;", "% c", ""], &build_matlab_with_block_comments(),
+                &matlab);
     }
 
     #[test]
@@ -4298,13 +4411,31 @@ mod tests {
     }
 
     #[test]
+    fn ruby_reads_its_block_symbols_only_at_the_start_of_a_line_and_matlab_only_alone_on_one() {
+        use LineClass::{PunctuationInComment, WordsInCode, WordsInComment};
+        assert_eq!(vec![WordsInCode, WordsInCode, WordsInCode, WordsInComment, WordsInComment, WordsInComment, WordsInCode],
+                classify_lines("def since(from=beginning_of_day)\n  from\nend\n=begin some_tag\nnot run\n=end trailing\nputs 1\n",
+                        &LANGUAGE_MAP_REF["Ruby"]));
+        assert_eq!(vec![WordsInCode, WordsInComment, WordsInCode, PunctuationInComment, WordsInComment, PunctuationInComment,
+                WordsInCode], classify_lines("x = 1;\n%{ a note\ny = 2;\n%{\nz = 3;\n%}\nw = 4;\n", &LANGUAGE_MAP_REF["MATLAB"]));
+    }
+
+    #[test]
     fn explaining_a_line_start_comment_carries_it_from_its_start_to_its_end() {
         let (_, log) = parse_lines_explained("=pod\ntext\n\n=cut\n", &build_perl_with_pod(), &empty_lookup(),
                 &EngineConfig::default(), TestsByPath::Nothing);
         let carried = log.records().iter().map(|record| record.carried).collect::<Vec<_>>();
-        assert_eq!(vec![CarriedRecord::Nothing, CarriedRecord::LineStartComment { since_line: 1, ends: false },
-                CarriedRecord::LineStartComment { since_line: 1, ends: false },
-                CarriedRecord::LineStartComment { since_line: 1, ends: true }], carried);
+        let within = |ends| CarriedRecord::LineBoundComment { pair: 0, depth: 1, since_line: 1, ends };
+        assert_eq!(vec![CarriedRecord::Nothing, within(false), within(false), within(true)], carried);
+    }
+
+    #[test]
+    fn explaining_a_whole_line_comment_carries_its_depth() {
+        let (_, log) = parse_lines_explained("%{\n%{\nx\n%}\n%}\n", &build_matlab_with_block_comments(), &empty_lookup(),
+                &EngineConfig::default(), TestsByPath::Nothing);
+        let carried = log.records().iter().map(|record| record.carried).collect::<Vec<_>>();
+        let within = |depth, ends| CarriedRecord::LineBoundComment { pair: 0, depth, since_line: 1, ends };
+        assert_eq!(vec![CarriedRecord::Nothing, within(1, false), within(2, false), within(2, false), within(1, true)], carried);
     }
 
     // The languages a section can resolve to, keyed the way the real run keys them: definitions by

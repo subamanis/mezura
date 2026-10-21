@@ -289,10 +289,9 @@ fn spell_out_carried(carried: CarriedRecord, language: Option<&Language>) -> Car
                     .unwrap_or((String::new(), depth));
             Carried::Comment { opener, depth, since_line, ends_on_this_line: ends }
         }
-        CarriedRecord::LineStartComment { since_line, ends } => Carried::Comment {
-            opener: language.and_then(|x| x.line_start_comment.as_ref()).map(|(start, _)| start.clone())
-                    .unwrap_or_default(),
-            depth: 1, since_line, ends_on_this_line: ends
+        CarriedRecord::LineBoundComment { pair, depth, since_line, ends } => Carried::Comment {
+            opener: language.map(|x| x.get_line_bound_pair_of(pair).get_start().to_owned()).unwrap_or_default(),
+            depth, since_line, ends_on_this_line: ends
         }
     }
 }

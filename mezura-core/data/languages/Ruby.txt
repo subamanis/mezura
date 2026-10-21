@@ -20,9 +20,9 @@ Escape character
 
 Comment symbols
 #
-Multi line comment start
+Line-start comment start
 =begin
-Multi line comment end
+Line-start comment end
 =end
 
 Keyword

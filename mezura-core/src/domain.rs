@@ -36,10 +36,11 @@ pub struct Language {
     /// Lua's long brackets, `--[=*[` with `]=*]`. The run of `=` is counted at the opener and only
     /// an end carrying the same count closes, so a `]]` inside a `--[==[` block is text.
     pub leveled_comments : Vec<LeveledPair>,
-    /// Perl's POD, `=` with `=cut`. A line beginning with the start and a letter opens the block, so
-    /// `=head1` or any other word does. A line beginning with the end and no letter after it closes
-    /// the block and belongs to it. Neither counts when indented.
-    pub line_start_comment : Option<(String, String)>,
+    /// Perl's POD, `=` with `=cut`, and Ruby's `=begin` with `=end`, blocks whose ends count only at
+    /// the start of a line, and a symbol ending in a letter only where its word ends.
+    pub line_start_comments : Vec<(String, String)>,
+    /// MATLAB's `%{` with `%}`, blocks whose ends count only as the whole of a line. They nest.
+    pub whole_line_comments : Vec<(String, String)>,
     /// Symbols the character before them takes away, because there the two belong to a longer form
     /// of the language. C3 opens a documentation comment with `<*` and writes a vector of unknown
     /// length as `int[<*>]`, where `[<` is one token and neither half is a comment.
@@ -92,7 +93,8 @@ impl Language {
                     .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())).collect(),
             nesting_comments : Vec::new(),
             leveled_comments : Vec::new(),
-            line_start_comment : None,
+            line_start_comments : Vec::new(),
+            whole_line_comments : Vec::new(),
             cancelled_symbols : Vec::new(),
             line_continuation : None,
             nested_languages : Vec::new(),
@@ -197,12 +199,17 @@ impl Language {
         self
     }
 
-    /// Sets the comment block whose ends count only at the start of a line, Perl's `=` with `=cut`.
-    /// An empty start or end leaves the language with none.
-    pub fn with_line_start_comment(mut self, start: &str, end: &str) -> Self {
-        if !start.is_empty() && !end.is_empty() {
-            self.line_start_comment = Some((start.to_owned(), end.to_owned()));
-        }
+    /// Adds comment pairs whose ends count only at the start of a line.
+    pub fn with_line_start_comments(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
+        self.line_start_comments.extend(pairs.iter()
+                .map(|(start, end)| (start.as_ref().to_owned(), end.as_ref().to_owned())));
+        self
+    }
+
+    /// Adds comment pairs whose ends count only as the whole of a line.
+    pub fn with_whole_line_comments(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
+        self.whole_line_comments.extend(pairs.iter()
+                .map(|(start, end)| (start.as_ref().to_owned(), end.as_ref().to_owned())));
         self
     }
 
@@ -214,10 +221,10 @@ impl Language {
         self
     }
 
-    /// Whether it has a block comment of any kind, the line-start one included.
+    /// Whether it has a block comment of any kind, the ones bound to a line included.
     pub fn supports_multiline_comments(&self) -> bool {
         !self.multiline_comments.is_empty() || !self.nesting_comments.is_empty()
-                || !self.leveled_comments.is_empty() || self.line_start_comment.is_some()
+                || !self.leveled_comments.is_empty() || self.declares_line_bound_comments()
     }
 
     pub(crate) fn declares_identification(&self) -> bool {
@@ -329,6 +336,26 @@ impl Language {
         matches!(self.get_comment_pair_of(symbol), CommentPair::Plain { start, end } if start == end)
     }
 
+    pub(crate) fn declares_line_bound_comments(&self) -> bool {
+        !self.line_start_comments.is_empty() || !self.whole_line_comments.is_empty()
+    }
+
+    pub(crate) fn get_line_bound_pair_of(&self, pair: u8) -> LineBoundPair<'_> {
+        let pair = pair as usize;
+        match self.line_start_comments.get(pair) {
+            Some((start, end)) => LineBoundPair::LineStart { start, end },
+            None => {
+                let (start, end) = &self.whole_line_comments[pair - self.line_start_comments.len()];
+                LineBoundPair::WholeLine { start, end }
+            }
+        }
+    }
+
+    pub(crate) fn line_bound_pairs(&self) -> impl Iterator<Item = LineBoundPair<'_>> {
+        self.line_start_comments.iter().map(|(start, end)| LineBoundPair::LineStart { start, end })
+                .chain(self.whole_line_comments.iter().map(|(start, end)| LineBoundPair::WholeLine { start, end }))
+    }
+
     // The whole width of one occurrence, which for a leveled pair depends on how many '=' it
     // carried; a plain or nesting pair ignores the level
     pub(crate) fn comment_start_len(&self, symbol: u8, level: u32) -> usize {
@@ -365,7 +392,8 @@ impl PartialEq for Language {
             && self.multiline_comments == other.multiline_comments
             && self.nesting_comments == other.nesting_comments
             && self.leveled_comments == other.leveled_comments
-            && self.line_start_comment == other.line_start_comment
+            && self.line_start_comments == other.line_start_comments
+            && self.whole_line_comments == other.whole_line_comments
             && self.cancelled_symbols == other.cancelled_symbols
             && self.line_continuation == other.line_continuation
             && self.nested_languages == other.nested_languages
@@ -385,6 +413,37 @@ pub(crate) enum CommentPair<'a> {
     Plain { start: &'a str, end: &'a str },
     Nesting { start: &'a str, end: &'a str },
     Leveled(&'a LeveledPair)
+}
+
+pub(crate) enum LineBoundPair<'a> {
+    LineStart { start: &'a str, end: &'a str },
+    WholeLine { start: &'a str, end: &'a str },
+}
+
+impl<'a> LineBoundPair<'a> {
+    pub(crate) fn get_start(&self) -> &'a str {
+        match self {
+            LineBoundPair::LineStart { start, .. } | LineBoundPair::WholeLine { start, .. } => start
+        }
+    }
+
+    pub(crate) fn nests(&self) -> bool {
+        matches!(self, LineBoundPair::WholeLine { .. })
+    }
+
+    pub(crate) fn is_opened_by(&self, raw_line: &[u8]) -> bool {
+        match self {
+            LineBoundPair::LineStart { start, .. } => heads_the_line(raw_line, start.as_bytes()),
+            LineBoundPair::WholeLine { start, .. } => is_the_whole_line(raw_line, start.as_bytes())
+        }
+    }
+
+    pub(crate) fn is_closed_by(&self, raw_line: &[u8]) -> bool {
+        match self {
+            LineBoundPair::LineStart { end, .. } => heads_the_line(raw_line, end.as_bytes()),
+            LineBoundPair::WholeLine { end, .. } => is_the_whole_line(raw_line, end.as_bytes())
+        }
+    }
 }
 
 /// The symbols that open a string, and the one byte that cancels the symbol standing after it: the
@@ -1137,6 +1196,17 @@ fn combine_classes(one: &LineClasses, other: &LineClasses,
 
 fn create_keyword_slots(language: &Language) -> HashMap<String,usize> {
     language.keywords.iter().map(|keyword| (keyword.descriptive_name.clone(), 0)).collect()
+}
+
+fn heads_the_line(raw_line: &[u8], symbol: &[u8]) -> bool {
+    raw_line.starts_with(symbol) && match symbol.last().is_some_and(u8::is_ascii_alphabetic) {
+        true => !raw_line.get(symbol.len()).is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_'),
+        false => raw_line.get(symbol.len()).is_some_and(u8::is_ascii_alphabetic)
+    }
+}
+
+fn is_the_whole_line(raw_line: &[u8], symbol: &[u8]) -> bool {
+    raw_line.trim_ascii() == symbol
 }
 
 #[cfg(test)]

@@ -116,6 +116,8 @@ const SELF_NESTING_COMMENT_START : &str = "Self-nesting comment start";
 const SELF_NESTING_COMMENT_END   : &str = "Self-nesting comment end";
 const LINE_START_COMMENT_START : &str = "Line-start comment start";
 const LINE_START_COMMENT_END   : &str = "Line-start comment end";
+const WHOLE_LINE_COMMENT_START : &str = "Whole-line comment start";
+const WHOLE_LINE_COMMENT_END   : &str = "Whole-line comment end";
 const CANCELLED_SYMBOLS        : &str = "Cancelled symbols";
 const CANCELLED_AFTER          : &str = "Cancelled after";
 const NESTED_LANGUAGE_START    : &str = "Nested language start";
@@ -526,14 +528,23 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         return None;
     }
 
-    // One pair, since the start is a symbol and a word, and every word opens the same block
-    let mut line_start_comment = None;
+    let mut line_start_comments : Vec<(String, String)> = Vec::new();
     if header.as_deref() == Some(LINE_START_COMMENT_START) {
         let starts = split_line_on_whitespace(&read_value_line(lines)?);
-        if read_next_header(lines)?.as_str() != LINE_START_COMMENT_END {return None;}
+        if starts.is_empty() || read_next_header(lines)?.as_str() != LINE_START_COMMENT_END {return None;}
         let ends = split_line_on_whitespace(&read_value_line(lines)?);
-        let ([start], [end]) = (starts.as_slice(), ends.as_slice()) else { return None };
-        line_start_comment = Some((start.clone(), end.clone()));
+        if ends.len() != starts.len() {return None;}
+        line_start_comments = starts.into_iter().zip(ends).collect();
+        header = read_next_header(lines);
+    }
+    // A pair whose two ends are one symbol could not tell a nested opening from its closing
+    let mut whole_line_comments : Vec<(String, String)> = Vec::new();
+    if header.as_deref() == Some(WHOLE_LINE_COMMENT_START) {
+        let starts = split_line_on_whitespace(&read_value_line(lines)?);
+        if starts.is_empty() || read_next_header(lines)?.as_str() != WHOLE_LINE_COMMENT_END {return None;}
+        let ends = split_line_on_whitespace(&read_value_line(lines)?);
+        if ends.len() != starts.len() || starts.iter().zip(&ends).any(|(start, end)| start == end) {return None;}
+        whole_line_comments = starts.into_iter().zip(ends).collect();
         header = read_next_header(lines);
     }
 
@@ -654,13 +665,14 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>(), keywords);
     language.heredoc_opener = heredoc_opener;
-    language.line_start_comment = line_start_comment;
     language.line_continuation = line_continuation;
     language.module_keyword = module_keyword;
 
     Some(language
             .with_nesting_comments(&nesting_comments)
             .with_leveled_comments(&leveled_comments)
+            .with_line_start_comments(&line_start_comments)
+            .with_whole_line_comments(&whole_line_comments)
             .with_cancelled_symbols(&cancelled_symbols)
             .with_nested_languages(&nested_languages)
             .with_filenames(&filenames)
@@ -1332,18 +1344,27 @@ pl      Perl, Prolog
     }
 
     #[test]
-    fn a_line_start_comment_is_one_start_and_one_end_declared_after_the_block_comments() {
+    fn line_start_and_whole_line_comments_are_pairs_declared_after_the_block_comments() {
         let good = "Language\nPerlish\n\nExtensions\npx\n\nString symbols\n\"\n\nEscape character\n\\\n\nComment symbols\n#\n\n\
-                Line-start comment start\n=\nLine-start comment end\n=cut\n";
-        let pod = Some(("=".to_owned(), "=cut".to_owned()));
-        assert_eq!(pod, parse_language(good).expect("the declaration must parse").line_start_comment);
-        for (refused, why) in [(good.replace("start\n=\n", "start\n= =begin\n"), "two starts"),
-                (good.replace("end\n=cut\n", "end\n=cut =end\n"), "two ends"),
-                (good.replace("Line-start comment end\n=cut\n", ""), "a start with no end")] {
+                Line-start comment start\n= =begin\nLine-start comment end\n=cut =end\n\
+                Whole-line comment start\n%{\nWhole-line comment end\n%}\n";
+        let parsed = parse_language(good).expect("the declaration must parse");
+        let pair = |start: &str, end: &str| (start.to_owned(), end.to_owned());
+        assert_eq!(vec![pair("=", "=cut"), pair("=begin", "=end")], parsed.line_start_comments);
+        assert_eq!(vec![pair("%{", "%}")], parsed.whole_line_comments);
+        for (refused, why) in [(good.replace("end\n=cut =end\n", "end\n=cut\n"), "two starts and one end"),
+                (good.replace("Line-start comment end\n=cut =end\n", ""), "a start with no end"),
+                (good.replace("end\n%}\n", "end\n%{\n"), "a whole-line pair with one symbol at both ends"),
+                (good.replace("Line-start comment start\n= =begin\nLine-start comment end\n=cut =end\n", "")
+                        + "Line-start comment start\n=\nLine-start comment end\n=cut\n", "the two blocks in the other order")] {
             assert!(parse_language(&refused).is_none(), "{why} was accepted");
         }
-        let perl = parse_language_file(LANGUAGES_DIR.to_owned() + "Perl.txt").unwrap();
-        assert_eq!(pod, perl.line_start_comment, "Perl.txt lost its POD");
+        let shipped = |name: &str| parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
+        assert_eq!(vec![pair("=", "=cut")], shipped("Perl.txt").line_start_comments, "Perl.txt lost its POD");
+        let ruby = shipped("Ruby.txt");
+        assert_eq!((vec![pair("=begin", "=end")], 0), (ruby.line_start_comments, ruby.multiline_comments.len()));
+        let matlab = shipped("MATLAB.txt");
+        assert_eq!((vec![pair("%{", "%}")], 0), (matlab.whole_line_comments, matlab.nesting_comments.len()));
     }
 
     #[test]

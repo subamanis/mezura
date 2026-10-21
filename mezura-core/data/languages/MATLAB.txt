@@ -15,9 +15,9 @@ none
 
 Comment symbols
 %
-Self-nesting comment start
+Whole-line comment start
 %{
-Self-nesting comment end
+Whole-line comment end
 %}
 
 Keyword
