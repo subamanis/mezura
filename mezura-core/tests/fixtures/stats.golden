@@ -1,4 +1,4 @@
-files=89 lines=1214 code=653 comments=281
+files=89 lines=1226 code=665 comments=281
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -201,16 +201,16 @@ Odin
   words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   enums=1 structs=1 unions=1
 PHP
-  files=1 lines=9 code=3 comments=4
-  words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
+  files=1 lines=13 code=7 comments=4
+  words_in_code=4 string_content=3 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1
 Pascal
   files=1 lines=16 code=9 comments=6
   words_in_code=9 string_content=0 comment_words_beside_code=0 words_in_comment=6 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1 records=1
 Perl
-  files=1 lines=17 code=6 comments=5
-  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=1 punctuation_in_comment=0 blank=3 blank_in_comment=2 blank_in_string=0
+  files=1 lines=21 code=10 comments=5
+  words_in_code=7 string_content=3 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=1 punctuation_in_comment=0 blank=3 blank_in_comment=2 blank_in_string=0
   packages=1
 PowerShell
   files=1 lines=17 code=10 comments=3
@@ -235,8 +235,8 @@ R
   files=1 lines=6 code=3 comments=2
   words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
 Ruby
-  files=1 lines=11 code=6 comments=4
-  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
+  files=1 lines=15 code=10 comments=4
+  words_in_code=7 string_content=3 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   classes=1 modules=1
 Rust
   files=1 lines=29 code=16 comments=4
