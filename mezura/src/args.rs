@@ -11,7 +11,7 @@ use crate::config_manager::ExplainedLines;
 // whoever names no module needs a path with a space in it to go on working.
 pub fn parse_targets(s: &str) -> Result<Vec<(Option<String>, String)>, String> {
     let separated = split_targets(s, char::is_whitespace);
-    let declares_a_module = separated.iter().flat_map(|token| token.split(','))
+    let declares_a_module = separated.iter().flat_map(|token| split_at_commas_outside_braces(token))
             .any(|piece| split_off_module_name(piece.trim()).is_some());
 
     if declares_a_module {
@@ -39,7 +39,7 @@ pub fn parse_languages_to_vec(s: &str) -> Vec<String> {
 }
 
 pub fn parse_paths_to_vec(s: &str) -> Vec<String> {
-    s.split(',').filter_map(clean_path).collect::<Vec<_>>()
+    split_at_commas_outside_braces(s).filter_map(clean_path).collect::<Vec<_>>()
 }
 
 // 'm=matlab,.pl=perl,Makefile=make', and 'ios/m=objective-c' for a rule that holds inside one
@@ -200,7 +200,7 @@ fn parse_target_tokens(tokens: Vec<String>) -> Result<Vec<(Option<String>, Strin
     let mut targets = Vec::new();
     for token in tokens {
         let mut module: Option<String> = None;
-        for piece in token.split(',') {
+        for piece in split_at_commas_outside_braces(&token) {
             let piece = piece.trim();
             if piece.is_empty() {
                 continue;
@@ -276,6 +276,20 @@ fn clean_path(piece: &str) -> Option<String> {
     get_trimmed_if_not_empty(cleansed.strip_prefix('"').unwrap_or(cleansed).strip_suffix('"').unwrap_or(cleansed))
 }
 
+// The comma of a glob's '{a,b}' belongs to the glob
+fn split_at_commas_outside_braces(s: &str) -> impl Iterator<Item = &str> {
+    let mut depth = 0u32;
+    s.split(move |character: char| {
+        match character {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ',' => return depth == 0,
+            _ => ()
+        }
+        false
+    })
+}
+
 fn remove_dot_prefix(str: &str) -> &str {
     str.strip_prefix('.').unwrap_or(str)
 }
@@ -324,6 +338,9 @@ mod tests {
     pub fn a_list_of_paths_is_split_on_commas_with_its_backslashes_turned_round() {
         assert_eq!(vec!["a/a".to_owned(),"b/b".to_owned()], parse_paths_to_vec("a/a,b/b"));
         assert_eq!(vec!["a".to_owned(),"b/b".to_owned()], parse_paths_to_vec(" a  ,  b/b "));
+        assert_eq!(vec!["*.{spec,test}.js".to_owned(), "src/{a,b}/".to_owned(), "c".to_owned()],
+                parse_paths_to_vec("*.{spec,test}.js, src/{a,b}/,c"), "the comma of a glob's braces split the list");
+        assert_eq!(vec!["a{b,c".to_owned()], parse_paths_to_vec("a{b,c"), "a brace left open takes the rest as one pattern");
 
         if cfg!(windows) {
             assert_eq!(vec!["a/a".to_owned(),"b/b".to_owned()], parse_paths_to_vec("a\\a,b\\b"));
@@ -344,6 +361,7 @@ mod tests {
         assert_eq!(vec![plain("C:/Users/John Smith/proj")], targets("C:/Users/John Smith/proj"));
         assert_eq!(vec![plain("a/a"), plain("b/b")], targets("a/a, b/b"));
         assert_eq!(vec![plain("./src ./tests")], targets("./src ./tests"));
+        assert_eq!(vec![plain("./py/{src,tests}"), named("web", "./{ui,api}")], targets("./py/{src,tests}, web=./{ui,api}"));
 
         assert_eq!(vec![named("frontend", "./web"), named("backend", "./api")],
                 targets("frontend=./web backend=./api"));
