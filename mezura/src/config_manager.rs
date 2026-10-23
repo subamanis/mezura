@@ -871,8 +871,8 @@ impl ConfigurationBuilder {
         // before this compiles again.
         let ConfigurationBuilder { targets, exclude_patterns, test_patterns, languages_of_interest, excluded_languages,
             forced_languages, counting, should_search_in_dotted, count_minified, count_generated,
-            count_not_code, no_gitignore, no_ignore_files, no_heuristics, no_shebang,
-            threads: _, should_show_faulty_files: _, should_show_skipped_files: _, hidden: _,
+            count_not_code, no_gitignore, no_ignore_files, no_heuristics, no_shebang, hidden,
+            threads: _, should_show_faulty_files: _, should_show_skipped_files: _,
             theme_name: _, compare_level: _,
             bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _, layout: _,
             sort_by: _, top_n: _, by_file: _, tests_breakdown: _, config_styles: _,
@@ -881,6 +881,11 @@ impl ConfigurationBuilder {
             theme_name_to_save: _, local_dir: _, output: _, explain: _, diff_against: _,
             styles: _, theme_styles: _, typed_explicitly: _ } = &mut self;
 
+        // The two names of 'hide' that stop a counting, the rest of the list is the look
+        if let Some(hidden) = hidden {
+            hidden.keywords = false;
+            hidden.tests = false;
+        }
         *targets = None;
         *exclude_patterns = None;
         *test_patterns = None;
@@ -2343,7 +2348,7 @@ mod tests {
             donor.add_missing_fields(create_config_builder_from_args(
                     "./ --exclude a --tests spec --languages rust --exclude-languages java --force-language m=matlab \
                     --threads 1 1 --counting region --search-in-dotted --count-minified --count-generated \
-                    --count-not-code --show-faulty-files --show-skipped --hide bar --no-gitignore --no-ignore-files --no-heuristics --no-shebang \
+                    --count-not-code --show-faulty-files --show-skipped --hide bar,tests,keywords --no-gitignore --no-ignore-files --no-heuristics --no-shebang \
                     --compare 3 --bar-thickness fat \
                     --progress-bar hash --number-separator dot --decimal-separator comma --layout table \
                     --sort name --top 3 --by-file 8 --tests-breakdown split").unwrap());
@@ -2386,7 +2391,10 @@ mod tests {
                 (kept.bar_thickness, kept.progress_bar, kept.number_separator, kept.decimal_separator, kept.theme_name));
         assert_eq!((Some(Threads::from((1, 1))), Some(true), Some(3)),
                 (kept.threads, kept.should_show_faulty_files, kept.compare_level));
-        assert!(kept.hidden.is_some_and(|x| x.bar) && kept.config_styles.is_some());
+        let hidden = kept.hidden.unwrap();
+        assert!(hidden.bar && !hidden.tests && !hidden.keywords, "'hide tests' and 'hide keywords' stop a counting, \
+                so a personal default may not carry them into a project: {hidden:?}");
+        assert!(kept.config_styles.is_some());
     }
 
     // A project of its own, under the temporary directory, which is the only place a test is
