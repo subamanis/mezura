@@ -38,6 +38,7 @@ mod theme;
 mod theme_files;
 mod warning_collector;
 
+use std::io::IsTerminal;
 use std::process::ExitCode;
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
@@ -107,12 +108,21 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    crate::theme::set_active(config.view.theme.clone());
+    let without_color = crate::theme::keeps_attributes_without_color(std::env::var_os("NO_COLOR").is_some(),
+            std::env::var("CLICOLOR_FORCE").ok().as_deref(), std::env::var("CLICOLOR").ok().as_deref(),
+            std::io::stdout().is_terminal());
+    // The only call that sets the theme, since every later one is ignored
+    crate::theme::set_active(if !without_color {config.view.theme.clone()}
+            else if config.view.theme == crate::theme::Theme::default() {crate::theme::Theme::build_uncolored()}
+            else {config.view.theme.remove_colors()});
+    if without_color {
+        control::set_override(true);
+    }
     crate::number_formatter::set_number_separator(config.view.number_separator);
     crate::number_formatter::set_decimal_separator(config.view.decimal_separator);
     // A terminal that names itself dumb (an Emacs shell buffer, some CI shells) is a tty with no
-    // cursor addressing, so nothing moving can be drawn on it; the 'dumb-emacs-ansi' form does
-    // understand colors and keeps them, the bare 'dumb' cannot show those either. The removals guard
+    // cursor addressing, so nothing moving can be drawn on it. The 'dumb-emacs-ansi' form does
+    // understand colors and keeps them, and the bare 'dumb' cannot show those either. The removals guard
     // built at the top of main reads the answer from where the setter leaves it, since there was no
     // configuration to ask when it was made.
     let terminal_kind = std::env::var("TERM").unwrap_or_default();
@@ -419,9 +429,9 @@ fn read_conflict_rules() -> ConflictRules {
     let (rules, faulty_lines) = mezura_core::language_file::parse_conflict_rules_file(
             &(crate::paths::PERSISTENT_APP_PATHS.data_dir.clone() + LANGUAGE_CONFLICTS_FILE_NAME));
     if !faulty_lines.is_empty() {
-        eprintln!("\n{}", crate::message_printer::wrap_message(
+        eprintln!("\n{}", crate::theme::get_active().warning.paint(&crate::message_printer::wrap_message(
                 &format!("Lines that could not be read in '{LANGUAGE_CONFLICTS_FILE_NAME}', and were skipped:\n{}",
-                faulty_lines.iter().map(|(_, line)| line.as_str()).collect::<Vec<_>>().join("\n"))).yellow());
+                faulty_lines.iter().map(|(_, line)| line.as_str()).collect::<Vec<_>>().join("\n")))));
         for (block, line) in &faulty_lines {
             let consequence = match block {
                 mezura_core::language_file::ConflictBlock::ContestedExtensions

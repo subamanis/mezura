@@ -97,3 +97,6 @@ history-modified-field = default
 progress-bar-fill = 2240b5..bd13ac
 progress-bar-empty = default
 progress-bar-figures = default dim
+
+explain-code = cyan
+explain-string = green

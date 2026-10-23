@@ -28,14 +28,18 @@ Main changes:
   -> Themes gained the 'tests-*' and 'production-*' families, one for each of the two rows.
   -> The default look paints its text in the terminal's own text color and its red, green, yellow
       and cyan, with one mid grey for the percentages, so it reads on a light terminal as well as
-      on a dark one. The look of earlier
-      versions is the new 'Mezura-classic' theme, apart from the '--explain' colors, which every
-      theme shares. A theme of your own takes the new look for every token it does not name.
+      on a dark one. The look of earlier versions is the new 'Mezura-classic' theme, apart from the
+      faint colors of '--explain'. A theme of your own takes the new look for every token it does
+      not name.
   -> Catppuccin, Dracula, Forest, Gruvbox, Meadow and Ocean each have a '-light' version made for a
       light terminal, and the theme editor draws a light background in a light terminal's colors.
   -> The '-minimal' themes are withdrawn. A bundled theme you edited stays in your themes folder
       as your own when a version stops shipping it.
   -> A configuration naming a theme that is not there warns and runs with the default look.
+  -> New 'Uncolored' theme, with no color at all and bold, italic and dim for the rest. A theme
+      that gives the languages of the overview no color prints no overview.
+  -> 'NO_COLOR' takes the colors out and keeps bold, italic and dim, and with the default look the
+      report takes the look of 'Uncolored'. 'CLICOLOR=0' prints plain text.
   -> '.t' files are counted as Perl.
   -> Rust's raw strings past one hash, 'r##"..."##', and Lua's long bracket strings past the plain
       form, '[==[ ]==]', are read as the strings they are, so a quote inside one opens nothing.

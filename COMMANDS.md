@@ -658,10 +658,11 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     configuration file, so a theme can be handed to someone else without carrying your paths
     or your settings with it.
 
-    A token the theme does not name keeps the style mezura ships for it. A style that does not
-    parse is reported and skipped, and the rest of the theme still applies. A name that matches no
-    file is an error on the command line, where it was just typed, and a warning in a
-    configuration, where the run goes on with the default look.
+    A token the theme does not name keeps the style mezura ships for it, and a theme that gives no
+    language of the overview a color prints no overview. A style that does not parse is reported
+    and skipped, and the rest of the theme still applies. A name that matches no file is an error
+    on the command line, where it was just typed, and a warning in a configuration, where the run
+    goes on with the default look.
 ```
 
 ### <a id="cmd-style" name="cmd-style"></a>--style

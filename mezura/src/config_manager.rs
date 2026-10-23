@@ -651,60 +651,62 @@ pub enum ArgParsingError {
 
 impl Formatted for ArgParsingError {
     fn format(&self) -> ColoredString {
+        // Through the theme, since NO_COLOR keeps the attributes of a run and drops every color
+        let paint = |text: &str| crate::theme::get_active().error.paint(text);
         match self {
-            Self::UnparsableWorkingDir => wrap_message("The current working directory could not be read, so there is no target to count. Write the path out: mezura ./some/path").red(),
-            Self::InvalidPath(p) => wrap_message(&format!("'{p}' does not exist as a directory or file.")).red(),
+            Self::UnparsableWorkingDir => paint(&wrap_message("The current working directory could not be read, so there is no target to count. Write the path out: mezura ./some/path")),
+            Self::InvalidPath(p) => paint(&wrap_message(&format!("'{p}' does not exist as a directory or file."))),
             Self::InvalidTargetInConfig(inner,name) => {
-                let attribution = wrap_message(&format!("That target was named in config '{name}'.")).red();
+                let attribution = paint(&wrap_message(&format!("That target was named in config '{name}'.")));
                 ColoredString::from(format!("{}\n{attribution}", inner.format()).as_str())
             },
-            Self::DoublePath => wrap_message("Targets already provided as first argument, but --targets command also found.").red(),
-            Self::RepeatedCommand(c) => wrap_message(&format!("'--{c}' appears more than once in the \
+            Self::DoublePath => paint(&wrap_message("Targets already provided as first argument, but --targets command also found.")),
+            Self::RepeatedCommand(c) => paint(&wrap_message(&format!("'--{c}' appears more than once in the \
                     command line. Give it once; a command that takes several values takes them together, like '--hide \
-                    overview,keywords'.")).red(),
+                    overview,keywords'."))),
             Self::UnrecognisedCommand(p) => {
                 let tail = suggestions::format_suggestion(p, &message_printer::get_command_names())
                         .unwrap_or_else(|| format!("Run '--{HELP}' to see every command."));
-                let error = format!("--{p} is not recognised as a command.").red();
+                let error = paint(&format!("--{p} is not recognised as a command."));
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
             Self::IncorrectCommandArgs(command, given) if given.is_empty() =>
-                    wrap_message(&format!("'--{command}' needs a value.")).red(),
+                    paint(&wrap_message(&format!("'--{command}' needs a value."))),
             Self::IncorrectCommandArgs(command, given) =>
-                    wrap_message(&format!("'--{command}' cannot take '{given}'.")).red(),
-            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::NotUtf8) => wrap_message(&format!("Configuration '{name}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8.")).red(),
-            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::Io(error)) => wrap_message(&format!("Configuration '{name}' could not be read past line {line}, so none of it was used: {error}")).red(),
-            Self::UnexpectedCommandArgs(p) => wrap_message(&format!("Command '--{p}' does not expect any arguments.")).red(),
+                    paint(&wrap_message(&format!("'--{command}' cannot take '{given}'."))),
+            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::NotUtf8) => paint(&wrap_message(&format!("Configuration '{name}' stops being readable at line {line}, so none of it was used: the file is not saved as UTF-8."))),
+            Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::Io(error)) => paint(&wrap_message(&format!("Configuration '{name}' could not be read past line {line}, so none of it was used: {error}"))),
+            Self::UnexpectedCommandArgs(p) => paint(&wrap_message(&format!("Command '--{p}' does not expect any arguments."))),
             Self::NonExistantConfig(p) => {
                 let names = super::config_files::read_names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.config_dir);
                 let tail = suggestions::format_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
                         .unwrap_or_else(|| format!("Run '--{SHOW_CONFIGS}' to see the ones you have."));
-                let error = format!("Configuration '{p}' does not exist.").red();
+                let error = paint(&format!("Configuration '{p}' does not exist."));
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
             Self::NonExistantTheme(p) => {
                 let names = super::config_files::read_names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.themes_dir);
                 let tail = suggestions::format_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
                         .unwrap_or_else(|| format!("Run '--{SHOW_THEMES}' to see the ones you have."));
-                let error = format!("Theme '{p}' was not found, or could not be read.").red();
+                let error = paint(&format!("Theme '{p}' was not found, or could not be read."));
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
-            Self::InvalidStyle(p) => wrap_message(p).red(),
+            Self::InvalidStyle(p) => paint(&wrap_message(p)),
             Self::InvalidHideTarget(p) => {
                 let names = Hidden::get_names();
                 let tail = suggestions::format_suggestion(p, &names)
                         .unwrap_or_else(|| format!("The options are: {}.", names.join(", ")));
-                let error = format!("'{p}' is not something that can be hidden.").red();
+                let error = paint(&format!("'{p}' is not something that can be hidden."));
                 ColoredString::from(wrap_message(&format!("{error}\n\n{tail}")).to_string().as_str())
             },
-            Self::InvalidValueInConfig(cmd,conf) => wrap_message(&format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument.")).red(),
-            Self::InvalidGlobPattern(p) => wrap_message(&format!("'{p}' is not a valid glob pattern.")).red(),
-            Self::NoGlobMatches(p) => wrap_message(&format!("The pattern '{p}' did not match any existing directory or file.")).red(),
-            Self::AllGlobMatchesIgnored(p) => wrap_message(&format!("Everything that the pattern '{p}' matched is skipped, because a .gitignore file ignores it, because it is a dotted path, or because it is a link.\nUse the '--no-gitignore' or '--search-in-dotted' commands to include it, or provide the paths explicitly.")).red(),
-            Self::MalformedTarget(p) => wrap_message(&format!("'{p}' names a module with no path after it.\nA target is written as '<module>=<path>', and its paths are separated by commas: 'tests=./api/tests,./web/tests'.")).red(),
-            Self::ContestedTarget(path, first, second) => wrap_message(&format!("'{path}' is declared both as '{first}' and as '{second}'.\nEvery file belongs to exactly one module, and there is no more specific of the two to decide it.")).red(),
-            Self::MeaninglessWithExplain(command) => wrap_message(&format!("'--{EXPLAIN}' explains one file line by line and '--{command}' belongs to a report over a whole scan, so the two cannot be asked for together.")).red(),
-            Self::ContradictoryCommands(one, other) => wrap_message(&format!("'--{one}' and '--{other}' ask for opposite things, so they cannot be given together.")).red()
+            Self::InvalidValueInConfig(cmd,conf) => paint(&wrap_message(&format!("Invalid value for the command '--{cmd}', in config '{conf}'.\nFix the value in the config file, or override it by providing a valid '--{cmd}' argument."))),
+            Self::InvalidGlobPattern(p) => paint(&wrap_message(&format!("'{p}' is not a valid glob pattern."))),
+            Self::NoGlobMatches(p) => paint(&wrap_message(&format!("The pattern '{p}' did not match any existing directory or file."))),
+            Self::AllGlobMatchesIgnored(p) => paint(&wrap_message(&format!("Everything that the pattern '{p}' matched is skipped, because a .gitignore file ignores it, because it is a dotted path, or because it is a link.\nUse the '--no-gitignore' or '--search-in-dotted' commands to include it, or provide the paths explicitly."))),
+            Self::MalformedTarget(p) => paint(&wrap_message(&format!("'{p}' names a module with no path after it.\nA target is written as '<module>=<path>', and its paths are separated by commas: 'tests=./api/tests,./web/tests'."))),
+            Self::ContestedTarget(path, first, second) => paint(&wrap_message(&format!("'{path}' is declared both as '{first}' and as '{second}'.\nEvery file belongs to exactly one module, and there is no more specific of the two to decide it."))),
+            Self::MeaninglessWithExplain(command) => paint(&wrap_message(&format!("'--{EXPLAIN}' explains one file line by line and '--{command}' belongs to a report over a whole scan, so the two cannot be asked for together."))),
+            Self::ContradictoryCommands(one, other) => paint(&wrap_message(&format!("'--{one}' and '--{other}' ask for opposite things, so they cannot be given together.")))
         }
     }
 }

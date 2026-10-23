@@ -1,0 +1,39 @@
+language-1 = default
+language-2 = default
+language-3 = default
+language-4 = default
+language-others = default dim
+
+success = default bold
+warning = default
+error = default bold
+
+details-language-name = default bold
+percent = default italic
+
+nested-name = default
+nested-percent = default italic
+
+production-percent = default italic
+
+tests-name = default italic
+tests-percent = default italic
+tests-files = default italic
+tests-lines = default italic
+tests-code = default italic
+tests-comments = default italic
+tests-extra = default italic
+tests-size = default italic
+tests-size-unit = default italic
+
+file-percent = default italic
+
+change-up = default
+change-down = default
+history-modified = default
+
+progress-bar-fill = default
+progress-bar-empty = default dim
+
+explain-code = default
+explain-string = default underline

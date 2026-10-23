@@ -32,6 +32,14 @@ pub fn set_italics_hidden(hidden: bool) {
     ITALICS_HIDDEN.store(hidden, Ordering::Relaxed);
 }
 
+// NO_COLOR asks for no color and says nothing of bold or italic, which the color crate drops with
+// it. Read in the crate's own order, so CLICOLOR_FORCE still wins and CLICOLOR=0 still turns off all.
+pub fn keeps_attributes_without_color(no_color: bool, clicolor_force: Option<&str>, clicolor: Option<&str>,
+        stdout_is_terminal: bool) -> bool {
+    let forced = clicolor_force.is_some_and(|value| value != "0");
+    no_color && !forced && clicolor != Some("0") && stdout_is_terminal
+}
+
 // How a style gets its color: one color for everything it paints, or, where a run of cells is
 // painted one at a time, a sweep across them. A gradient holds the channels themselves and never a
 // named color, because interpolation needs them and 'cyan' is whatever the terminal maps it to.
@@ -242,6 +250,15 @@ macro_rules! theme_tokens {
                 &[$($name,)+]
             }
 
+            pub fn remove_colors(&self) -> Theme {
+                let mut theme = self.clone();
+                $(
+                    theme.$field.fill = Fill::Terminal;
+                    theme.$field.background = None;
+                )+
+                theme
+            }
+
             #[cfg(test)]
             pub fn find_all_tokens(&self) -> Vec<(&'static str, String)> {
                 vec![$(($name, self.$field.to_config_string())),+]
@@ -397,6 +414,14 @@ theme_tokens! {
 impl Theme {
     pub fn get_language_slots(&self) -> [&Style; 5] {
         [&self.language_1, &self.language_2, &self.language_3, &self.language_4, &self.language_others]
+    }
+
+    pub fn has_colored_language_slots(&self) -> bool {
+        self.get_language_slots().iter().any(|slot| slot.get_color().is_some())
+    }
+
+    pub fn build_uncolored() -> Theme {
+        resolve(&parse_theme_file(include_str!("../data/themes/Uncolored.txt")).0, &[], &[])
     }
 
     pub fn set_token(&mut self, token: &str, value: &str) -> Result<(), ThemeParseError> {
@@ -816,6 +841,26 @@ mod tests {
         assert!(painted.style().contains(colored::Styles::Bold));
 
         assert_eq!(Some(Color::Red), style.paint("Rust").fgcolor());
+    }
+
+    #[test]
+    fn no_color_keeps_the_attributes_only_where_the_color_crate_would_drop_everything() {
+        assert!(keeps_attributes_without_color(true, None, None, true));
+        assert!(keeps_attributes_without_color(true, Some("0"), Some("1"), true));
+        assert!(!keeps_attributes_without_color(false, None, None, true));
+        assert!(!keeps_attributes_without_color(true, Some("1"), None, true), "CLICOLOR_FORCE keeps every color");
+        assert!(!keeps_attributes_without_color(true, None, Some("0"), true), "CLICOLOR=0 turns everything off");
+        assert!(!keeps_attributes_without_color(true, None, None, false), "a pipe gets plain text");
+    }
+
+    #[test]
+    fn a_theme_with_its_colors_removed_keeps_its_attributes() {
+        let stripped = Theme::default().remove_colors();
+        assert_eq!(Style::plain().bold(), stripped.lines_number);
+        assert_eq!(Style::plain(), stripped.details_language_name);
+        assert_eq!(Style::plain().dim(), stripped.language_others);
+        assert_eq!(Style::plain(), stripped.progress_bar_fill);
+        assert!(!stripped.has_colored_language_slots());
     }
 
     #[test]

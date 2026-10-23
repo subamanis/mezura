@@ -75,7 +75,7 @@ Things it does that most counters do not:
   line, for checking a count that looks wrong. See `--explain` in [COMMANDS.md](https://github.com/subamanis/mezura/blob/HEAD/COMMANDS.md).
 - **Very customizable output.** You have a lot of control about how mezura counts, and also about how 
   it presents the results to you. You don't like the layout? You find it very busy with many sections? You don't want the animations? You can change everything. See [Commands](#commands).
-- **Themes.** Everything printed can be styled and colored: 98 tokens, 14 bundled themes, and an [interactive web editor](https://subamanis.github.io/mezura/theme-editor/) to experiment. See [Themes](#themes).
+- **Themes.** Everything printed can be styled and colored: 98 tokens, 15 bundled themes, and an [interactive web editor](https://subamanis.github.io/mezura/theme-editor/) to experiment. See [Themes](#themes).
 - **Output for programs.** One JSON document with `--output json`, and an MCP server so a coding
   assistant can run mezura itself. See [Taking the result elsewhere](#taking-the-result-elsewhere).
 - **Data driven.** All the files, languages and the settings mezura uses are extracted to your machine, where they can be inspected, changed, or extended very easily. See [The data directory](#the-data-directory).  
@@ -591,13 +591,15 @@ Everything the program prints can be styled: 98 tokens, each taking a text color
 
 A **theme** is a plain .txt file of ```token = value``` lines, in the "themes" folder of your [data directory](#the-data-directory). It carries only how the output looks, never what is measured, so it can be shared as it is. Apply one with ```--theme <name>```, list the ones you have with ```--show-themes```, and write the current look into a new one with ```--save-theme <name>```.
 
-14 themes are bundled. **Mezura** is the default look, and it paints its text in the colors of your terminal's own scheme, so it reads well on any terminal, light or dark. The others are prettier and made for one kind of terminal: Catppuccin, Dracula, Forest, Gruvbox, Meadow and Ocean for a dark background, each with a ```-light``` version for a light one, and **Mezura-classic**, the look of earlier versions, for a dark one. See them all with ```--show-themes``` or in the [theme editor](https://subamanis.github.io/mezura/theme-editor/), and pick the one that suits your terminal. Edit them, or add your own by dropping a file there.
+15 themes are bundled. **Mezura** is the default look, and it paints its text in the colors of your terminal's own scheme, so it reads well on any terminal, light or dark. The others are prettier and made for one kind of terminal: Catppuccin, Dracula, Forest, Gruvbox, Meadow and Ocean for a dark background, each with a ```-light``` version for a light one, and **Mezura-classic**, the look of earlier versions, for a dark one. **Uncolored** has no color at all and keeps the report readable with bold, italic and dim alone. See them all with ```--show-themes``` or in the [theme editor](https://subamanis.github.io/mezura/theme-editor/), and pick the one that suits your terminal. Edit them, or add your own by dropping a file there.
 
 ```--show-themes``` previews each of them on the same figures, which is where these three come from:
 
 <img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/theme-showcase.png" width="900">
 
-The four languages of the overview and the folded 'others' entry are five ordinary tokens, ```language-1``` to ```language-4``` and ```language-others```, so a theme sets them the same way it sets everything else.
+The four languages of the overview and the folded 'others' entry are five ordinary tokens, ```language-1``` to ```language-4``` and ```language-others```, so a theme sets them the same way it sets everything else. A theme that gives none of them a color prints no overview, since its bar would be one shade from end to end.
+
+The usual environment variables for color are followed. ```NO_COLOR```, set to anything, takes the colors out of the report and keeps its bold, italic and dim, and under the default look the report takes the look of **Uncolored**. ```CLICOLOR=0``` or a pipe prints plain text with no styling at all, and ```CLICOLOR_FORCE=1``` keeps every color even in a pipe.
 
 To make authoring one easier, there is an interactive editor: one run of mezura with a picker for every token that draws it, its color, its background and its attributes, contrast readings beside them, and a button that hands back the lines of a theme file.
 

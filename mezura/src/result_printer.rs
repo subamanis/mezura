@@ -166,7 +166,7 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
                     &columns, block_width, should_print_keywords);
         }
         // The overview stays global however the details were grouped
-        if !config.view.hidden.overview {
+        if !config.view.hidden.overview && theme.has_colored_language_slots() {
             print_visual_overview(&global_names, &shown.per_language, &shown.total, config);
         }
     }

@@ -520,10 +520,11 @@ pub const THEME_HELP  :  &str =
     configuration file, so a theme can be handed to someone else without carrying your paths
     or your settings with it.
 
-    A token the theme does not name keeps the style mezura ships for it. A style that does not
-    parse is reported and skipped, and the rest of the theme still applies. A name that matches no
-    file is an error on the command line, where it was just typed, and a warning in a
-    configuration, where the run goes on with the default look.
+    A token the theme does not name keeps the style mezura ships for it, and a theme that gives no
+    language of the overview a color prints no overview. A style that does not parse is reported
+    and skipped, and the rest of the theme still applies. A name that matches no file is an error
+    on the command line, where it was just typed, and a warning in a configuration, where the run
+    goes on with the default look.
 
 ";
 pub const SAVE_THEME_HELP  :  &str =
@@ -1590,6 +1591,9 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout, counti
             msg.push_str(&format!("{INDENT}{row}\n"));
         }
 
+        if !theme.has_colored_language_slots() {
+            continue;
+        }
         msg.push_str(&format!("\n{INDENT}{}.\n", theme.heading.paint("Overview")));
         msg.push_str(&format!("{INDENT}{}   ", theme.overview_label.paint("Lines:")));
         let slots = theme.get_language_slots();

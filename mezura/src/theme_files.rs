@@ -147,10 +147,30 @@ mod tests {
         }
     }
 
-    // The '--explain' colours say what a line was read as and are meant to be the same wherever
-    // somebody meets them, and the two history ones are left alone beside them.
+    // The '--explain' styles that carry no colour say what a line was read as and are meant to be the
+    // same wherever somebody meets them, and the two history ones are left alone beside them.
     fn is_left_alone_by_every_theme(token: &str) -> bool {
-        token.starts_with("explain-") || token == "history-age" || token == "history-label"
+        matches!(token, "explain-heading" | "explain-comment" | "explain-comments" | "explain-extra"
+                | "explain-detail" | "history-age" | "history-label")
+    }
+
+    #[test]
+    fn the_uncolored_theme_paints_nothing_in_a_color_and_has_no_overview_to_draw() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("data").join("themes").join("Uncolored.txt");
+        let (styles, errors) = crate::theme::parse_theme_file(&std::fs::read_to_string(&path).unwrap());
+        assert!(errors.is_empty(), "Uncolored.txt does not parse cleanly: {errors:?}");
+
+        let theme = crate::theme::resolve(&styles, &[], &[]);
+        let colored = theme.find_all_tokens().into_iter().filter(|(_, value)| {
+            let style = crate::theme::Style::parse(value).unwrap();
+            style.fill != crate::theme::Fill::Terminal || style.background.is_some()
+        }).map(|(token, value)| format!("{token} = {value}")).collect::<Vec<_>>();
+        assert!(colored.is_empty(), "Uncolored.txt leaves these tokens to a colored default. Name \
+                each one in it with attributes alone:\n{}", colored.join("\n"));
+
+        assert!(!theme.has_colored_language_slots());
+        assert!(crate::theme::Theme::default().has_colored_language_slots());
     }
 
     // 'Mezura.txt' is the way back to the stock look, since '--theme' takes only the name of a file
