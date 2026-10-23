@@ -55,9 +55,14 @@ jobs:
 
       # The conformance gate. linejudge holds the cases and mezura's declared rules, and the
       # record under .linejudge says what this build must keep answering, so a parser change that
-      # moves an answer regenerates that file in the same commit with 'linejudge record'.
-      - name: Install linejudge
-        run: cargo install linejudge@0.1.0
+      # moves an answer regenerates that file in the same commit with 'linejudge record'. The
+      # version installed is the one the record was measured with, so re-recording moves CI with it.
+      - name: Install the linejudge the record names
+        shell: bash
+        run: |
+          version=$(sed -n 's/^measured-with = "linejudge \(.*\)"$/\1/p' .linejudge/recorded/mezura.toml)
+          if [ -z "$version" ]; then echo "the record names no linejudge version"; exit 1; fi
+          cargo install linejudge@"$version"
 
       - name: Check against the conformance corpus
         shell: bash
