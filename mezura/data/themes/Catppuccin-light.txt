@@ -1,0 +1,86 @@
+language-1 = d2003b
+language-2 = 9b3901
+language-3 = 255d19
+language-4 = 7a22ed
+language-others = 8b3624
+
+version = 7a22ed
+heading = 7a22ed reverse bold
+sort-marker = 72480f
+arrow = 73778d
+bar-frame = 637c83
+summary = 4c4f69
+footer = 73778d italic
+note = 73778d italic
+success = 255d19
+warning = 72480f
+error = d20f39
+
+details-language-header = 02597b italic
+details-language-name = 7a22ed bold
+details-module = 1638fc bold
+details-total = 02597b reverse
+
+files-label = 02597b italic
+lines-label = 02597b italic
+code-label = 02597b italic
+comments-label = 02597b italic
+extra-label = 02597b italic
+total-size-label = 637c83 italic
+size-unit = 637c83
+keyword-label = 1638fc
+keyword-number = 4c4f69
+percent = 73778d
+separator-header = 878da1
+separator-total = 878da1
+
+nested-name = 5f6275 bold
+nested-branch = 7c8196
+nested-percent = 7c8196
+nested-files = 696c80
+nested-lines = 555f88
+nested-code = 696c80
+nested-comments = 696c80
+nested-extra = 696c80
+nested-size = 696c80
+nested-size-unit = 637c83
+
+production-branch = 7c8196
+production-percent = 73778d
+production-size-unit = 637c83
+
+tests-name = 885378 bold
+tests-branch = 7c8196
+tests-percent = 927c8c
+tests-files = 8c607f
+tests-lines = 874f78
+tests-code = 8c607f
+tests-comments = 8c607f
+tests-extra = 8c607f
+tests-size = 8c607f
+tests-size-unit = 637c83
+
+file-name = 69718e
+file-branch = 7c8196
+file-percent = 7c8196
+file-files = 73778d
+file-lines = 636a8a
+file-code = 73778d
+file-comments = 73778d
+file-extra = 73778d
+file-size = 73778d
+file-size-unit = 637c83
+
+overview-label = 02597b
+overview-percent = 4c4f69
+
+change-up = 255d19
+change-down = d20f39
+change-same = 4c4f69
+history-entry = 7a22ed bold
+history-modified = 72480f
+history-modified-field = 02597b
+
+progress-bar-fill = 7a22ed..02597b
+progress-bar-empty = bec3d0
+progress-bar-figures = 73778d

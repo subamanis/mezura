@@ -6,7 +6,7 @@
 <title>mezura themes</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  :root { --term-bg: #0c0c0c; --card-bg: #242424; --card-border: #3a3a3a; }
+  :root { --term-bg: #0c0c0c; --term-fg: #c8c8c8; --card-bg: #242424; --card-border: #3a3a3a; }
   body { background: #0d0d0d; color: #c8c8c8; font-family: 'Cascadia Code', 'Consolas', monospace; padding: 1rem; }
   h1 { font-size: 1.5rem; font-weight: 600; color: #eee; margin-bottom: 0.4rem; }
   .hint { color: #777; font-size: 0.86rem; margin-bottom: 1.4rem; max-width: 92ch; line-height: 1.55; }
@@ -31,7 +31,7 @@
   #add-chip { border-style: dashed; color: #555; font-size: 1.05rem; padding: 0.45rem 0.85rem; }
   #add-chip:hover { color: #999; }
 
-  #run { background: var(--term-bg); border-radius: 6px; padding: 1.1rem 1.3rem; font-size: 0.84rem; line-height: 1.6; overflow-x: auto; white-space: pre; margin-bottom: 1.3rem; color: #c8c8c8; }
+  #run { background: var(--term-bg); border-radius: 6px; padding: 1.1rem 1.3rem; font-size: 0.84rem; line-height: 1.6; overflow-x: auto; white-space: pre; margin-bottom: 1.3rem; color: var(--term-fg); }
   #run .gap { height: 1em; }
   #run .tok { cursor: pointer; }
   #run .tok.lit { outline: 1px solid #6a6a6a; outline-offset: 1px; border-radius: 2px; }
@@ -95,7 +95,7 @@
 </head>
 <body>
 <h1>mezura themes</h1>
-<p class="hint">One run of mezura, painted with the theme you pick, and some of the tokens you can change. A named color is drawn here as the Campbell scheme draws it, so a terminal with its own scheme will differ.</p>
+<p class="hint">One run of mezura, painted with the theme you pick, and some of the tokens you can change. A named color is drawn here as Windows Terminal draws it, with the Campbell scheme on a dark background and One Half Light on a light one, so a terminal with its own scheme will differ.</p>
 <p class="hint" id="where"></p>
 <div id="bg-control">
   <label for="bg-color">terminal bg</label>
@@ -129,13 +129,22 @@ function ofLanguages(one, two, three, four, others) {
            "language-4": four, "language-others": others };
 }
 
-const NAMED_COLORS = {
+const DARK_NAMED_COLORS = {
   "black": "#0C0C0C", "red": "#C50F1F", "green": "#13A10E", "yellow": "#C19C00",
   "blue": "#0037DA", "magenta": "#881798", "cyan": "#3A96DD", "white": "#CCCCCC",
   "bright-black": "#767676", "bright-red": "#E74856", "bright-green": "#16C60C",
   "bright-yellow": "#F9F1A5", "bright-blue": "#3B78FF", "bright-magenta": "#B4009E",
   "bright-cyan": "#61D6D6", "bright-white": "#F2F2F2"
 };
+const LIGHT_NAMED_COLORS = {
+  "black": "#383A42", "red": "#E45649", "green": "#50A14F", "yellow": "#C18301",
+  "blue": "#0184BC", "magenta": "#A626A4", "cyan": "#0997B3", "white": "#FAFAFA",
+  "bright-black": "#4F525D", "bright-red": "#DF6C75", "bright-green": "#98C379",
+  "bright-yellow": "#E4C07A", "bright-blue": "#61AFEF", "bright-magenta": "#C577DD",
+  "bright-cyan": "#56B5C1", "bright-white": "#FFFFFF"
+};
+const DARK_BG = "#0c0c0c", DARK_FG = "#c8c8c8";
+const LIGHT_BG = "#fafafa", LIGHT_FG = "#383a42";
 
 // One real run of 'mezura' over a web project with '--tests "*.spec.ts,test/" --tests-breakdown split --exclude "*.sql"',
 // with the token that paints each stretch beside it. Regenerate it from a real run and leave the
@@ -177,59 +186,59 @@ const SAMPLE = [
 // first, then a background if there is one, then the attributes.
 const GROUPS = [
   ["The header row", [
-    ["details-language-header", "b5a98a italic"],
-    ["files-label",             "b5a98a italic"],
-    ["lines-label",             "b5a98a italic"],
-    ["code-label",              "b5a98a italic"],
-    ["comments-label",          "b5a98a italic"],
-    ["extra-label",             "b5a98a italic"],
-    ["total-size-label",        "b5a98a italic"],
-    ["sort-marker",             "b5a98a"]
+    ["details-language-header", "default italic"],
+    ["files-label",             "default italic"],
+    ["lines-label",             "default italic"],
+    ["code-label",              "default italic"],
+    ["comments-label",          "default italic"],
+    ["extra-label",             "default italic"],
+    ["total-size-label",        "default italic"],
+    ["sort-marker",             "default"]
   ]],
   ["The rows", [
     ["details-language-name",   "cyan"],
-    ["details-total",           "bright-magenta"],
+    ["details-total",           "default bold"],
     ["files-number",            "default"],
-    ["lines-number",            "white bold"],
+    ["lines-number",            "default bold"],
     ["code-number",             "default"],
     ["comments-number",         "default"],
     ["extra-number",            "default"],
     ["total-size-number",       "default"],
-    ["percent",                 "969696"],
-    ["size-unit",               "7d7769"]
+    ["percent",                 "7f7f7f"],
+    ["size-unit",               "default dim"]
   ]],
   ["The production row", [
     ["production-name",         "default"],
-    ["production-branch",       "aaaaaa"],
+    ["production-branch",       "default dim"],
     ["production-files",        "default"],
-    ["production-lines",        "white bold"],
+    ["production-lines",        "default bold"],
     ["production-code",         "default"],
     ["production-comments",     "default"],
     ["production-extra",        "default"],
     ["production-size",         "default"],
-    ["production-percent",      "969696"],
-    ["production-size-unit",    "7d7769"]
+    ["production-percent",      "7f7f7f"],
+    ["production-size-unit",    "default dim"]
   ]],
   ["The tests row", [
-    ["tests-name",              "ae98b8"],
-    ["tests-branch",            "aaaaaa"],
-    ["tests-files",             "ae98b8"],
-    ["tests-lines",             "a088ad"],
-    ["tests-code",              "ae98b8"],
-    ["tests-comments",          "ae98b8"],
-    ["tests-extra",             "ae98b8"],
-    ["tests-size",              "ae98b8"],
-    ["tests-percent",           "74697a"],
-    ["tests-size-unit",         "7d7769"]
+    ["tests-name",              "green"],
+    ["tests-branch",            "default dim"],
+    ["tests-files",             "green"],
+    ["tests-lines",             "green"],
+    ["tests-code",              "green"],
+    ["tests-comments",          "green"],
+    ["tests-extra",             "green"],
+    ["tests-size",              "green"],
+    ["tests-percent",           "7f7f7f"],
+    ["tests-size-unit",         "green"]
   ]],
   ["The frame", [
     ["heading",                 "default bold underline"],
-    ["separator-header",        "aaaaaa"],
-    ["separator-total",         "aaaaaa"]
+    ["separator-header",        "default dim"],
+    ["separator-total",         "default dim"]
   ]],
   ["The keywords", [
     ["keyword-label",           "default dim"],
-    ["keyword-number",          "969696"]
+    ["keyword-number",          "default"]
   ]],
   ["The overview", [
     ["overview-label",          "default"],
@@ -238,10 +247,10 @@ const GROUPS = [
   ]],
   ["The languages", [
     ["language-1",              "cyan"],
-    ["language-2",              "bright-magenta"],
-    ["language-3",              "bright-yellow"],
-    ["language-4",              "6ad9bd"],
-    ["language-others",         "d7c9f0"]
+    ["language-2",              "yellow"],
+    ["language-3",              "green"],
+    ["language-4",              "red"],
+    ["language-others",         "default dim"]
   ]]
 ];
 
@@ -255,17 +264,19 @@ const LANGUAGE_SLOTS = ["language-1", "language-2", "language-3", "language-4", 
 // The overview keeps three languages and folds the rest into 'others', drawing a fourth only when
 // the run has exactly four, so one run never shows both. The sample is the shape that folds.
 const NO_PREVIEW = { "language-4": "shown in place of 'others' when a run has exactly four languages" };
-// What the color input shows for a token left to the terminal, which has no color of its own
-const TERM_FG = "#c8c8c8";
 
 let themes = [];
 let selected = 0;
 let customCount = 0;
-let termBg = "#0c0c0c";
+let termBg = DARK_BG;
+let backgroundBeforeLight = DARK_BG;
+// What the color input shows for a token left to the terminal, which has no color of its own
+let termFg = DARK_FG;
+let namedColors = DARK_NAMED_COLORS;
 
 function tokenToHex(token) {
   const t = token.trim().toLowerCase().replace(/_/g, "-");
-  if (NAMED_COLORS[t]) return NAMED_COLORS[t];
+  if (namedColors[t]) return namedColors[t];
   const hex = t.replace(/^#/, "");
   if (/^[0-9a-f]{6}$/.test(hex)) return "#" + hex;
   return null;
@@ -273,7 +284,7 @@ function tokenToHex(token) {
 
 function normalizeToken(token) {
   const t = token.trim().toLowerCase().replace(/_/g, "-");
-  if (NAMED_COLORS[t]) return t;
+  if (namedColors[t]) return t;
   return t.replace(/^#/, "");
 }
 
@@ -294,7 +305,7 @@ function styleOf(parts) {
 
 function hexOf(style) {
   const color = partsOf(style).color;
-  return color === "default" ? TERM_FG : tokenToHex(color);
+  return color === "default" ? termFg : tokenToHex(color);
 }
 
 function hslToHex(h, s, l) {
@@ -356,11 +367,22 @@ function shift(hex, amount) {
   return "#" + c(rgb[0]) + c(rgb[1]) + c(rgb[2]);
 }
 
+// A light background is drawn with a light scheme's colors and dark text, the way a terminal set to
+// one would draw it. The card around the run stays dark then, since its controls are drawn for one.
 function applyTermBg(hex) {
   termBg = hex;
+  const isLight = relLuminance(hexToRgb(hex)) > 0.4;
+  const changedScheme = isLight !== (namedColors === LIGHT_NAMED_COLORS);
+  namedColors = isLight ? LIGHT_NAMED_COLORS : DARK_NAMED_COLORS;
+  termFg = isLight ? LIGHT_FG : DARK_FG;
   document.documentElement.style.setProperty("--term-bg", hex);
-  document.documentElement.style.setProperty("--card-bg", shift(hex, 24));
-  document.documentElement.style.setProperty("--card-border", shift(hex, 46));
+  document.documentElement.style.setProperty("--term-fg", termFg);
+  document.documentElement.style.setProperty("--card-bg", isLight ? "#242424" : shift(hex, 24));
+  document.documentElement.style.setProperty("--card-border", isLight ? "#3a3a3a" : shift(hex, 46));
+  if (changedScheme) {
+    renderAll();
+    return;
+  }
   renderMetrics();
   // Every ratio taken against this background moves with it, and so does the empty swatch of every
   // token that names none, which stands for whatever the terminal is
@@ -397,7 +419,7 @@ function cssOf(style) {
   // either of them. The half that was never named is the terminal's own: its background where no
   // background was given, which is what the text is painted in once they change places.
   if (parts.attrs.includes("reverse")) {
-    const wasPaint = paint || TERM_FG;
+    const wasPaint = paint || termFg;
     const wasBehind = behind || termBg;
     paint = wasBehind;
     behind = wasPaint;
@@ -702,7 +724,13 @@ function renderStrip() {
     chip.addEventListener("click", event => {
       if (event.target.dataset.drop !== undefined) return;
       selected = +chip.dataset.pick;
-      renderAll();
+      const wanted = findBackgroundFor(current().name);
+      if (wanted) {
+        if (wanted === LIGHT_BG) backgroundBeforeLight = termBg;
+        showTermBg(wanted);
+      } else {
+        renderAll();
+      }
     });
   });
   document.querySelectorAll("button[data-drop]").forEach(btn => {
@@ -724,6 +752,22 @@ function renderStrip() {
     selected = themes.length - 1;
     renderAll();
   });
+}
+
+// Leaving a '-light' theme goes back to the background it was opened from, and only from the light
+// one this set, so a background somebody typed is kept
+function findBackgroundFor(name) {
+  const wantsLight = name.toLowerCase().endsWith("-light");
+  if (wantsLight && namedColors !== LIGHT_NAMED_COLORS) return LIGHT_BG;
+  if (!wantsLight && termBg === LIGHT_BG) return backgroundBeforeLight;
+  return null;
+}
+
+function showTermBg(hex) {
+  document.getElementById("bg-color").value = hex;
+  document.getElementById("bg-text").value = hex.replace("#", "");
+  document.getElementById("bg-text").classList.remove("invalid");
+  applyTermBg(hex);
 }
 
 // The strip carries the language colors of every theme, so an edit to any of them redraws it too

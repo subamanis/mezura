@@ -26,6 +26,16 @@ Main changes:
       'total.tests', and a comparison carries the same as 'from', 'to' and 'change'.
       '--explain --output json' marks a line with 'in_test' and names the rule under 'test_file'.
   -> Themes gained the 'tests-*' and 'production-*' families, one for each of the two rows.
+  -> The default look paints its text in the terminal's own text color and its red, green, yellow
+      and cyan, with one mid grey for the percentages, so it reads on a light terminal as well as
+      on a dark one. The look of earlier
+      versions is the new 'Mezura-classic' theme, apart from the '--explain' colors, which every
+      theme shares. A theme of your own takes the new look for every token it does not name.
+  -> Catppuccin, Dracula, Forest, Gruvbox, Meadow and Ocean each have a '-light' version made for a
+      light terminal, and the theme editor draws a light background in a light terminal's colors.
+  -> The '-minimal' themes are withdrawn. A bundled theme you edited stays in your themes folder
+      as your own when a version stops shipping it.
+  -> A configuration naming a theme that is not there warns and runs with the default look.
   -> '.t' files are counted as Perl.
   -> Rust's raw strings past one hash, 'r##"..."##', and Lua's long bracket strings past the plain
       form, '[==[ ]==]', are read as the strings they are, so a quote inside one opens nothing.
@@ -42,6 +52,8 @@ Main changes:
       apostrophe inside it no longer opens a string.
 
 Bugfixes:
+  -> The lines figure is bold in the terminal's own text color under every bundled theme, so it
+      shows on a light terminal.
   -> Where block comments nest, an opener sharing a byte with a closer, '/*/*/' in Rust, is read
       the way the compiler reads it, so the comment no longer closes on that line.
   -> Comment symbols sharing bytes are read by the rules of the file's language: '/* x /*/' in C

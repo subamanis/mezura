@@ -14,7 +14,6 @@ use mezura_core::{PathPatterns, PatternError};
 use super::config_manager::{self, ConfigurationBuilder};
 use super::config_manager::{MAX_COMPARE_LEVEL, MIN_COMPARE_LEVEL};
 use super::message_printer::{Formatted, wrap_message};
-use super::theme_files;
 use crate::paths::{DEFAULT_CONFIG_NAME, PERSISTENT_APP_PATHS};
 
 #[derive(Debug)]
@@ -154,8 +153,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 config_manager::THEME => read_parsed_value(&mut builder.theme_name, &mut reader, &mut buf,
                         config_manager::THEME, &mut issues, |x| {
                             let name = x.trim();
-                            (!name.is_empty() && theme_files::load_theme(name, &PERSISTENT_APP_PATHS.themes_dir).is_some())
-                                    .then(|| name.to_owned())
+                            (!name.is_empty()).then(|| name.to_owned())
                         }),
                 config_manager::SORT => read_parsed_value(&mut builder.sort_by, &mut reader, &mut buf,
                         config_manager::SORT, &mut issues, config_manager::SortCriterion::parse),

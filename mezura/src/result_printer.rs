@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Local};
-use colored::{Color, ColoredString, Colorize};
+use colored::ColoredString;
 use mezura_core::{CountingModel, RunResult, Stats, TestCode, UNNAMED_MODULE_NAME, render};
 
 use super::config_manager::{self, ByFile, Configuration, Layout, SortCriterion, TestsBreakdown};
@@ -2008,9 +2008,9 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
 }
 
 // The joints are as much text as the cells, so the width is the columns plus every joint
-fn span_across(theme: &Theme, text: &str, inner_widths: &[usize], pad: usize, border: Color) -> String {
+fn span_across(theme: &Theme, text: &str, inner_widths: &[usize], pad: usize, border: &Style) -> String {
     let width = inner_widths.iter().sum::<usize>() + (inner_widths.len() - 1) * (2 * pad + 1);
-    let bar = "\u{2502}".color(border).to_string();
+    let bar = border.paint("\u{2502}").to_string();
     let padding = " ".repeat(pad);
     format!("{bar}{padding}{}{}{padding}{bar}", theme.note.paint(text),
             " ".repeat(width.saturating_sub(calculate_widest_visible_line(text))))
@@ -2055,29 +2055,29 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, usize, V
         })).collect::<Vec<_>>();
 
     // Not theme tokens, since they would mean nothing in the other layouts.
-    const BORDER_OUTER : Color = Color::TrueColor { r: 160, g: 160, b: 160 };
-    const BORDER_INNER : Color = Color::TrueColor { r: 65, g: 65, b: 65 };
+    let border_outer = Style::plain();
+    let border_inner = Style::plain().dim();
 
     // The two ends always belong to the outer frame. A crossing takes the shade of its own line when
     // that line is solid, and the interior shade when it is dashed, so that it never cuts the
     // vertical it sits on with a brighter bead.
-    let frame = |left: &str, joint: &str, right: &str, fill: &str, shade: Color, dashed: bool| {
-        let painted_joint = joint.color(if dashed {BORDER_INNER} else {shade}).to_string();
-        let runs = inner_widths.iter().map(|width| fill.repeat(width + 2 * PAD).color(shade).to_string())
+    let frame = |left: &str, joint: &str, right: &str, fill: &str, shade: &Style, dashed: bool| {
+        let painted_joint = (if dashed {&border_inner} else {shade}).paint(joint).to_string();
+        let runs = inner_widths.iter().map(|width| shade.paint(&fill.repeat(width + 2 * PAD)).to_string())
                 .collect::<Vec<_>>();
-        format!("{}{}{}", left.color(BORDER_OUTER), runs.join(&painted_joint), right.color(BORDER_OUTER))
+        format!("{}{}{}", border_outer.paint(left), runs.join(&painted_joint), border_outer.paint(right))
     };
 
     // The header and the total sit between two solid lines, so their verticals are solid too. Only
     // the language rows, the ones the dashed lines separate, get the dim ones.
     let content_row = |cells: Vec<String>, bright: bool| {
         let padding = " ".repeat(PAD);
-        let bar = "│".color(BORDER_OUTER).to_string();
-        let inner_bar = "│".color(if bright {BORDER_OUTER} else {BORDER_INNER}).to_string();
+        let bar = border_outer.paint("│").to_string();
+        let inner_bar = (if bright {&border_outer} else {&border_inner}).paint("│").to_string();
         format!("{bar}{padding}{}{padding}{bar}", cells.join(&format!("{padding}{inner_bar}{padding}")))
     };
 
-    let mut lines = vec![frame("┌", "┬", "┐", "─", BORDER_OUTER, false)];
+    let mut lines = vec![frame("┌", "┬", "┐", "─", &border_outer, false)];
 
     // The titles are centred: their columns are often much wider than the word in them.
     let gap = inner_widths[0].saturating_sub(calculate_widest_visible_line(name_title));
@@ -2102,16 +2102,16 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, usize, V
         // the vertical changes brightness in the middle of itself and reads as a rendering fault.
         let after_module = position > 0 && kinds[position - 1] == RowKind::Module;
         let separator = if position == 0 || !is_body || after_module {
-            frame("├", "┼", "┤", "─", BORDER_OUTER, false)
+            frame("├", "┼", "┤", "─", &border_outer, false)
         } else {
-            frame("├", "┼", "┤", "╌", BORDER_INNER, true)
+            frame("├", "┼", "┤", "╌", &border_inner, true)
         };
         lines.push(separator);
 
         // Cut into cells it would be one long name and five empty boxes, and the name column would
         // have to be as wide as a sentence.
         if kind == RowKind::Note {
-            lines.push(span_across(theme, name, &inner_widths, PAD, BORDER_OUTER));
+            lines.push(span_across(theme, name, &inner_widths, PAD, &border_outer));
             continue;
         }
 
@@ -2154,7 +2154,7 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, usize, V
         lines.push(content_row(painted, !is_body));
     }
 
-    lines.push(frame("└", "┴", "┘", "─", BORDER_OUTER, false));
+    lines.push(frame("└", "┴", "┘", "─", &border_outer, false));
     lines
 }
 
@@ -2712,11 +2712,7 @@ fn add_verticals_str(line: &mut String, files_verticals: &[usize], styles: &[Sty
     line.push_str("   ");
     line.push_str(&theme.bar_frame.paint("[").to_string());
     for (i,verticals) in files_verticals.iter().enumerate() {
-        let cell = match styles[i].get_color() {
-            Some(color) => character.color(color).to_string(),
-            None => character.to_owned()
-        };
-        line.push_str(&cell.repeat(*verticals));
+        line.push_str(&styles[i].paint_cell(character).to_string().repeat(*verticals));
     }
     line.push_str(&theme.bar_frame.paint("]").to_string());
 }

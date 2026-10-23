@@ -75,7 +75,7 @@ Things it does that most counters do not:
   line, for checking a count that looks wrong. See `--explain` in [COMMANDS.md](https://github.com/subamanis/mezura/blob/HEAD/COMMANDS.md).
 - **Very customizable output.** You have a lot of control about how mezura counts, and also about how 
   it presents the results to you. You don't like the layout? You find it very busy with many sections? You don't want the animations? You can change everything. See [Commands](#commands).
-- **Themes.** Everything printed can be styled and colored: 78 tokens, 13 bundled themes, and an [interactive web editor](https://subamanis.github.io/mezura/theme-editor/) to experiment. See [Themes](#themes).
+- **Themes.** Everything printed can be styled and colored: 98 tokens, 14 bundled themes, and an [interactive web editor](https://subamanis.github.io/mezura/theme-editor/) to experiment. See [Themes](#themes).
 - **Output for programs.** One JSON document with `--output json`, and an MCP server so a coding
   assistant can run mezura itself. See [Taking the result elsewhere](#taking-the-result-elsewhere).
 - **Data driven.** All the files, languages and the settings mezura uses are extracted to your machine, where they can be inspected, changed, or extended very easily. See [The data directory](#the-data-directory).  
@@ -578,19 +578,20 @@ you without you having to do anything. One that you changed yourself is replaced
 language file that has fallen behind counts wrongly, but your copy is kept under
 `data/replaced/<version>/<date and time>/` and the program names it, so you can carry your changes
 over. Each update or `--restore` writes its own folder there, so two of them never mix and the
-newest is the one at the bottom. A language file of your own is never touched, and neither are your
-themes or your default configuration: those are written when they are absent and left alone
-afterwards. A `language_conflicts.txt` you have not edited is brought whole to each new version;
+newest is the one at the bottom. A language file or a theme of your own is never touched, and
+neither is your default configuration, which is written when it is absent and left alone
+afterwards. A shipped theme you edited stays yours through every update, also when a version stops
+shipping it, and only `--restore` puts it back to what ships, with your copy saved under `replaced`. A `language_conflicts.txt` you have not edited is brought whole to each new version;
 an edited one is merged, with your lines kept and your file as it stood saved under `replaced`.
 
 
 ## Themes
 
-Everything the program prints can be styled: 78 tokens, each taking a text color, a background color, and any of bold, italic, underline, dim and reverse. Colors are hex values or one of the 16 standard terminal color names, which follow the color scheme of your terminal. You can set just the background and leave the text to the terminal, or the other way round. The live progress bar can also take a gradient between two colors, or a rainbow. Run ```--help --style``` for the full list of tokens.
+Everything the program prints can be styled: 98 tokens, each taking a text color, a background color, and any of bold, italic, underline, dim and reverse. Colors are hex values or one of the 16 standard terminal color names, which follow the color scheme of your terminal. You can set just the background and leave the text to the terminal, or the other way round. The live progress bar can also take a gradient between two colors, or a rainbow. Run ```--help --style``` for the full list of tokens.
 
 A **theme** is a plain .txt file of ```token = value``` lines, in the "themes" folder of your [data directory](#the-data-directory). It carries only how the output looks, never what is measured, so it can be shared as it is. Apply one with ```--theme <name>```, list the ones you have with ```--show-themes```, and write the current look into a new one with ```--save-theme <name>```.
 
-13 themes are bundled. **Mezura** is the default look. Catppuccin, Dracula, Forest, Gruvbox, Meadow and Ocean come in two versions each: the plain name dresses the whole report, headings, labels, sub-rows and all, while the ```-minimal``` one changes the colors and little else. Edit them, or add your own by dropping a file there.
+14 themes are bundled. **Mezura** is the default look, and it paints its text in the colors of your terminal's own scheme, so it reads well on any terminal, light or dark. The others are prettier and made for one kind of terminal: Catppuccin, Dracula, Forest, Gruvbox, Meadow and Ocean for a dark background, each with a ```-light``` version for a light one, and **Mezura-classic**, the look of earlier versions, for a dark one. See them all with ```--show-themes``` or in the [theme editor](https://subamanis.github.io/mezura/theme-editor/), and pick the one that suits your terminal. Edit them, or add your own by dropping a file there.
 
 ```--show-themes``` previews each of them on the same figures, which is where these three come from:
 

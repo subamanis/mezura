@@ -10,21 +10,7 @@ use unicode_width::UnicodeWidthChar;
 // A sweep is a color per cell, so it says something only where a run of cells is painted one at a
 // time, which today is the live progress bar alone.
 const SWEEPABLE_TOKENS : [&str; 2] = ["progress-bar-fill", "progress-bar-empty"];
-const LABEL_GOLD: Color = Color::TrueColor { r: 181, g: 169, b: 138 };
-const SIZE_GOLD: Color = Color::TrueColor { r: 125, g: 119, b: 105 };
-// A step below the terminal's foreground, not a step above black. 'bright-black' and the 'dim'
-// attribute both land far darker than this on most schemes.
-const FAINT: Color = Color::TrueColor { r: 170, g: 170, b: 170 };
-const FAINTER: Color = Color::TrueColor { r: 150, g: 150, b: 150 };
-// Teal for the rows hanging under a language, mauve for its tests and grey for a file, so that the
-// rows under one language are told apart by color as well as by shape
-const SUB_ROW_TEAL: Color = Color::TrueColor { r: 93, g: 135, b: 134 };
-const SUB_ROW_TEAL_BRIGHT: Color = Color::TrueColor { r: 112, g: 153, b: 152 };
-const SUB_ROW_TEAL_FAINT: Color = Color::TrueColor { r: 85, g: 102, b: 102 };
-const TEST_ROW_MAUVE: Color = Color::TrueColor { r: 174, g: 152, b: 184 };
-const TEST_ROW_MAUVE_BRIGHT: Color = Color::TrueColor { r: 160, g: 136, b: 173 };
-const TEST_ROW_MAUVE_FAINT: Color = Color::TrueColor { r: 116, g: 105, b: 122 };
-const FILE_ROW_GREY: Color = Color::TrueColor { r: 122, g: 122, b: 122 };
+const PERCENT_GREY: Color = Color::TrueColor { r: 127, g: 127, b: 127 };
 const BAR_SWEEP_BLUE: (u8, u8, u8) = (34, 64, 181);
 const BAR_SWEEP_MAGENTA: (u8, u8, u8) = (189, 19, 172);
 
@@ -109,6 +95,16 @@ impl Style {
 
     pub fn paint_with_color(&self, text: &str, color: Color) -> ColoredString {
         self.apply_attributes(ColoredString::from(text).color(color))
+    }
+
+    // A cell of a bar takes the color and the dimming alone, since bold or underline on a block
+    // character is not something a terminal shows usefully
+    pub fn paint_cell(&self, cell: &str) -> ColoredString {
+        let painted = match self.get_color() {
+            Some(color) => ColoredString::from(cell).color(color),
+            None => ColoredString::from(cell)
+        };
+        if self.dim { painted.dimmed() } else { painted }
     }
 
     // The one color a style paints everything with. A sweep has none, since it answers per cell,
@@ -266,113 +262,118 @@ macro_rules! theme_tokens {
 // Every counted quantity owns both of its tokens, the number and the word next to it, so that a
 // theme can pick out one of them without touching the rest. The token is named after the word that
 // appears on screen, so 'files' and 'comments' are plural and 'code' and 'extra' are not.
+//
+// The defaults have to read on a light terminal and a dark one. So they paint text in the terminal's
+// own text color, in red, green, yellow and cyan, the four that every common scheme keeps readable
+// on its own background, and in one grey for the percentages. Bold goes on the text color alone, since many terminals draw a bold color in
+// its bright twin, and the bright twins vanish on a light background.
 theme_tokens! {
     version           => "version",           Style::plain();
     heading           => "heading",           Style::plain().underline().bold();
-    separator_total   => "separator-total",   Style::of(FAINT);
-    separator_header  => "separator-header",  Style::of(FAINT);
+    separator_total   => "separator-total",   Style::plain().dim();
+    separator_header  => "separator-header",  Style::plain().dim();
     // The color of the headers it sits in, painted on its own so that their italics do not slant a
     // glyph that is not a word
-    sort_marker       => "sort-marker",       Style::of(LABEL_GOLD);
-    arrow             => "arrow",             Style::of(FAINT);
+    sort_marker       => "sort-marker",       Style::plain();
+    arrow             => "arrow",             Style::plain().dim();
     bar_frame         => "bar-frame",         Style::plain();
-    percent           => "percent",           Style::of(FAINTER);
+    percent           => "percent",           Style::of(PERCENT_GREY);
 
     files_number      => "files-number",      Style::plain();
-    files_label       => "files-label",       Style::of(LABEL_GOLD).italic();
-    lines_number      => "lines-number",      Style::of(Color::White).bold();
-    lines_label       => "lines-label",       Style::of(LABEL_GOLD).italic();
+    files_label       => "files-label",       Style::plain().italic();
+    lines_number      => "lines-number",      Style::plain().bold();
+    lines_label       => "lines-label",       Style::plain().italic();
     code_number       => "code-number",       Style::plain();
-    code_label        => "code-label",        Style::of(LABEL_GOLD).italic();
+    code_label        => "code-label",        Style::plain().italic();
     comments_number   => "comments-number",   Style::plain();
-    comments_label    => "comments-label",    Style::of(LABEL_GOLD).italic();
+    comments_label    => "comments-label",    Style::plain().italic();
     extra_number      => "extra-number",      Style::plain();
-    extra_label       => "extra-label",       Style::of(LABEL_GOLD).italic();
+    extra_label       => "extra-label",       Style::plain().italic();
     total_size_number => "total-size-number", Style::plain();
-    total_size_label  => "total-size-label",  Style::of(LABEL_GOLD).italic();
-    size_unit         => "size-unit",         Style::of(SIZE_GOLD);
-    keyword_number    => "keyword-number",    Style::of(FAINTER);
+    total_size_label  => "total-size-label",  Style::plain().italic();
+    size_unit         => "size-unit",         Style::plain().dim();
+    keyword_number    => "keyword-number",    Style::plain();
     keyword_label     => "keyword-label",     Style::plain().dim();
 
-    details_language_header => "details-language-header", Style::of(LABEL_GOLD).italic();
+    details_language_header => "details-language-header", Style::plain().italic();
     details_language_name   => "details-language-name",   Style::of(Color::Cyan);
     // The name of a module, wherever one is printed: the row that opens its section in the details,
     // its heading in the keywords, and its line in the history section
-    details_module    => "details-module",    Style::of(LABEL_GOLD).bold();
-    details_total     => "details-total",     Style::of(Color::BrightMagenta);
+    details_module    => "details-module",    Style::plain().bold();
+    details_total     => "details-total",     Style::plain().bold();
 
     // The rows hanging under a language, one token per column so that a theme can treat them as
-    // their own band of the table. They are set apart by color and not by dimming: a column of dim
-    // numbers is unreadable down its length, which is how they are meant to be read.
-    nested_name       => "nested-name",       Style::of(SUB_ROW_TEAL);
-    nested_branch     => "nested-branch",     Style::of(FAINT);
-    nested_percent    => "nested-percent",    Style::of(SUB_ROW_TEAL_FAINT);
-    nested_files      => "nested-files",      Style::of(SUB_ROW_TEAL);
-    nested_lines      => "nested-lines",      Style::of(SUB_ROW_TEAL_BRIGHT);
-    nested_code       => "nested-code",       Style::of(SUB_ROW_TEAL);
-    nested_comments   => "nested-comments",   Style::of(SUB_ROW_TEAL);
-    nested_extra      => "nested-extra",      Style::of(SUB_ROW_TEAL);
-    nested_size       => "nested-size",       Style::of(SUB_ROW_TEAL);
-    nested_size_unit  => "nested-size-unit",  Style::of(SIZE_GOLD);
+    // their own band of the table. Their name carries the color and their numbers stay plain, since
+    // a column of dim numbers is unreadable down its length, which is how they are meant to be read.
+    nested_name       => "nested-name",       Style::of(Color::Cyan);
+    nested_branch     => "nested-branch",     Style::plain().dim();
+    nested_percent    => "nested-percent",    Style::of(PERCENT_GREY);
+    nested_files      => "nested-files",      Style::plain();
+    nested_lines      => "nested-lines",      Style::plain().bold();
+    nested_code       => "nested-code",       Style::plain();
+    nested_comments   => "nested-comments",   Style::plain();
+    nested_extra      => "nested-extra",      Style::plain();
+    nested_size       => "nested-size",       Style::plain();
+    nested_size_unit  => "nested-size-unit",  Style::plain().dim();
 
     production_name      => "production-name",      Style::plain();
-    production_branch    => "production-branch",    Style::of(FAINT);
-    production_percent   => "production-percent",   Style::of(FAINTER);
+    production_branch    => "production-branch",    Style::plain().dim();
+    production_percent   => "production-percent",   Style::of(PERCENT_GREY);
     production_files     => "production-files",     Style::plain();
-    production_lines     => "production-lines",     Style::of(Color::White).bold();
+    production_lines     => "production-lines",     Style::plain().bold();
     production_code      => "production-code",      Style::plain();
     production_comments  => "production-comments",  Style::plain();
     production_extra     => "production-extra",     Style::plain();
     production_size      => "production-size",      Style::plain();
-    production_size_unit => "production-size-unit", Style::of(SIZE_GOLD);
+    production_size_unit => "production-size-unit", Style::plain().dim();
 
-    tests_name        => "tests-name",        Style::of(TEST_ROW_MAUVE);
-    tests_branch      => "tests-branch",      Style::of(FAINT);
-    tests_percent     => "tests-percent",     Style::of(TEST_ROW_MAUVE_FAINT);
-    tests_files       => "tests-files",       Style::of(TEST_ROW_MAUVE);
-    tests_lines       => "tests-lines",       Style::of(TEST_ROW_MAUVE_BRIGHT);
-    tests_code        => "tests-code",        Style::of(TEST_ROW_MAUVE);
-    tests_comments    => "tests-comments",    Style::of(TEST_ROW_MAUVE);
-    tests_extra       => "tests-extra",       Style::of(TEST_ROW_MAUVE);
-    tests_size        => "tests-size",        Style::of(TEST_ROW_MAUVE);
-    tests_size_unit   => "tests-size-unit",   Style::of(SIZE_GOLD);
+    tests_name        => "tests-name",        Style::of(Color::Green);
+    tests_branch      => "tests-branch",      Style::plain().dim();
+    tests_percent     => "tests-percent",     Style::of(PERCENT_GREY);
+    tests_files       => "tests-files",       Style::of(Color::Green);
+    tests_lines       => "tests-lines",       Style::of(Color::Green);
+    tests_code        => "tests-code",        Style::of(Color::Green);
+    tests_comments    => "tests-comments",    Style::of(Color::Green);
+    tests_extra       => "tests-extra",       Style::of(Color::Green);
+    tests_size        => "tests-size",        Style::of(Color::Green);
+    tests_size_unit   => "tests-size-unit",   Style::of(Color::Green);
 
     // The same set again for the files of a '--by-file' run. They hang under a language beside the
     // sections and are a different question asked of it, so a theme can tell the two apart.
-    file_name         => "file-name",         Style::of(FILE_ROW_GREY);
-    file_branch       => "file-branch",       Style::of(FAINT);
-    file_percent      => "file-percent",      Style::of(FAINTER);
+    file_name         => "file-name",         Style::plain();
+    file_branch       => "file-branch",       Style::plain().dim();
+    file_percent      => "file-percent",      Style::of(PERCENT_GREY);
     file_files        => "file-files",        Style::plain();
-    file_lines        => "file-lines",        Style::of(Color::White).bold();
+    file_lines        => "file-lines",        Style::plain().bold();
     file_code         => "file-code",         Style::plain();
     file_comments     => "file-comments",     Style::plain();
     file_extra        => "file-extra",        Style::plain();
     file_size         => "file-size",         Style::plain();
-    file_size_unit    => "file-size-unit",    Style::of(SIZE_GOLD);
+    file_size_unit    => "file-size-unit",    Style::plain().dim();
 
     overview_label    => "overview-label",    Style::plain();
     overview_percent  => "overview-percent",  Style::plain();
 
     language_1        => "language-1",        Style::of(Color::Cyan);
-    language_2        => "language-2",        Style::of(Color::BrightMagenta);
-    language_3        => "language-3",        Style::of(Color::BrightYellow);
-    language_4        => "language-4",        Style::of(Color::TrueColor { r: 106, g: 217, b: 189 });
-    language_others   => "language-others",   Style::of(Color::TrueColor { r: 215, g: 201, b: 240 });
+    language_2        => "language-2",        Style::of(Color::Yellow);
+    language_3        => "language-3",        Style::of(Color::Green);
+    language_4        => "language-4",        Style::of(Color::Red);
+    language_others   => "language-others",   Style::plain().dim();
 
     // A figure that moved, wherever one is shown: the history section and a '--diff' comparison
-    change_up       => "change-up",         Style::of(Color::TrueColor { r: 201, g: 255, b: 189 });
-    change_down     => "change-down",       Style::of(Color::TrueColor { r: 219, g: 129, b: 129 });
-    change_same     => "change-same",       Style::of(Color::TrueColor { r: 255, g: 255, b: 255 });
+    change_up       => "change-up",         Style::of(Color::Green);
+    change_down     => "change-down",       Style::of(Color::Red);
+    change_same     => "change-same",       Style::plain();
     history_entry    => "history-entry",     Style::plain().bold();
     history_age      => "history-age",       Style::plain().dim().italic();
-    history_label    => "history-label",     Style::of(FAINT);
+    history_label    => "history-label",     Style::plain().dim();
     history_modified => "history-modified",  Style::of(Color::Yellow);
     history_modified_field => "history-modified-field", Style::plain();
 
-    // The live lines, which only a terminal ever sees. The track is a step above a dark terminal's
-    // own background and no more, and 'default' turns it off, leaving those cells blank.
+    // The live lines, which only a terminal ever sees. 'default' on the track leaves its cells blank,
+    // and a color draws them.
     progress_bar_fill    => "progress-bar-fill",    Style { fill: Fill::Gradient(vec![BAR_SWEEP_BLUE, BAR_SWEEP_MAGENTA]), ..Style::default() };
-    progress_bar_empty   => "progress-bar-empty",   Style::of(Color::TrueColor { r: 34, g: 34, b: 34 });
+    progress_bar_empty   => "progress-bar-empty",   Style::plain();
     progress_bar_figures => "progress-bar-figures", Style::plain().dim();
 
     summary           => "summary",           Style::plain();
@@ -381,21 +382,19 @@ theme_tokens! {
     // is the secondary text of a verdict row.
     explain_heading   => "explain-heading",   Style::plain().bold();
     explain_string    => "explain-string",    Style::of(Color::Green);
-    explain_comment   => "explain-comment",   Style::of(Color::BrightBlack).italic();
+    explain_comment   => "explain-comment",   Style::plain().dim().italic();
     explain_code      => "explain-code",      Style::of(Color::Cyan);
-    explain_comments  => "explain-comments",  Style::of(Color::BrightBlack).italic();
-    explain_extra     => "explain-extra",     Style::of(LABEL_GOLD).italic();
-    explain_detail    => "explain-detail",    Style::of(Color::BrightBlack);
+    explain_comments  => "explain-comments",  Style::plain().dim().italic();
+    explain_extra     => "explain-extra",     Style::plain().italic();
+    explain_detail    => "explain-detail",    Style::plain().dim();
     note              => "note",              Style::plain().dim().italic();
-    success           => "success",           Style::of(Color::BrightGreen);
+    success           => "success",           Style::of(Color::Green);
     warning           => "warning",           Style::of(Color::Yellow);
     error             => "error",             Style::of(Color::Red);
     footer            => "footer",            Style::plain().dim();
 }
 
 impl Theme {
-    // The overview paints a language by the slot it occupies. The bar cells take the color alone,
-    // since bold or underline on a block character is not something a terminal shows usefully.
     pub fn get_language_slots(&self) -> [&Style; 5] {
         [&self.language_1, &self.language_2, &self.language_3, &self.language_4, &self.language_others]
     }
@@ -825,11 +824,11 @@ mod tests {
         assert!(theme.find_non_default_tokens().is_empty());
 
         theme.set_token("code-number", "bright-black").unwrap();
-        theme.set_token("percent", "dim").unwrap();
+        theme.set_token("percent", "italic").unwrap();
         let non_defaults = theme.find_non_default_tokens();
         assert_eq!(2, non_defaults.len());
         assert!(non_defaults.contains(&("code-number", "bright-black".to_owned())));
-        assert!(non_defaults.contains(&("percent", "default dim".to_owned())));
+        assert!(non_defaults.contains(&("percent", "default italic".to_owned())));
     }
 
     #[test]

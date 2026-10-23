@@ -6,7 +6,7 @@
 <title>mezura themes</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  :root { --term-bg: #0c0c0c; --card-bg: #242424; --card-border: #3a3a3a; }
+  :root { --term-bg: #0c0c0c; --term-fg: #c8c8c8; --card-bg: #242424; --card-border: #3a3a3a; }
   body { background: #0d0d0d; color: #c8c8c8; font-family: 'Cascadia Code', 'Consolas', monospace; padding: 1rem; }
   h1 { font-size: 1.5rem; font-weight: 600; color: #eee; margin-bottom: 0.4rem; }
   .hint { color: #777; font-size: 0.86rem; margin-bottom: 1.4rem; max-width: 92ch; line-height: 1.55; }
@@ -31,7 +31,7 @@
   #add-chip { border-style: dashed; color: #555; font-size: 1.05rem; padding: 0.45rem 0.85rem; }
   #add-chip:hover { color: #999; }
 
-  #run { background: var(--term-bg); border-radius: 6px; padding: 1.1rem 1.3rem; font-size: 0.84rem; line-height: 1.6; overflow-x: auto; white-space: pre; margin-bottom: 1.3rem; color: #c8c8c8; }
+  #run { background: var(--term-bg); border-radius: 6px; padding: 1.1rem 1.3rem; font-size: 0.84rem; line-height: 1.6; overflow-x: auto; white-space: pre; margin-bottom: 1.3rem; color: var(--term-fg); }
   #run .gap { height: 1em; }
   #run .tok { cursor: pointer; }
   #run .tok.lit { outline: 1px solid #6a6a6a; outline-offset: 1px; border-radius: 2px; }
@@ -95,7 +95,7 @@
 </head>
 <body>
 <h1>mezura themes</h1>
-<p class="hint">One run of mezura, painted with the theme you pick, and some of the tokens you can change. A named color is drawn here as the Campbell scheme draws it, so a terminal with its own scheme will differ.</p>
+<p class="hint">One run of mezura, painted with the theme you pick, and some of the tokens you can change. A named color is drawn here as Windows Terminal draws it, with the Campbell scheme on a dark background and One Half Light on a light one, so a terminal with its own scheme will differ.</p>
 <p class="hint" id="where"></p>
 <div id="bg-control">
   <label for="bg-color">terminal bg</label>
@@ -122,20 +122,29 @@ let THEMES_DIR = null;
 // The fallback for a page opened straight from 'docs/', where no data directory was read.
 // Publishing fills it with the themes mezura ships; this line is what the template alone opens with.
 let SHIPPED_THEMES = [{ name: "Mezura", styles: {} }];
-SHIPPED_THEMES = [{name:"Catppuccin",styles:{"version":"cba6f7","heading":"cba6f7 bold reverse","separator-total":"585b70","separator-header":"585b70","sort-marker":"f9e2af","arrow":"7f849c","bar-frame":"6f8a92","percent":"7f849c","files-label":"89dceb italic","lines-label":"89dceb italic","code-label":"89dceb italic","comments-label":"89dceb italic","extra-label":"89dceb italic","total-size-label":"6f8a92 italic","size-unit":"6f8a92","keyword-number":"cdd6f4","keyword-label":"b4befe","details-language-header":"89dceb italic","details-language-name":"cba6f7 bold","details-module":"b4befe bold","details-total":"89dceb reverse","nested-name":"a6adc8 bold","nested-branch":"6c7086","nested-percent":"6c7086","nested-files":"9399b2","nested-lines":"acb2cb","nested-code":"9399b2","nested-comments":"9399b2","nested-extra":"9399b2","nested-size":"9399b2","nested-size-unit":"6f8a92","production-branch":"6c7086","production-percent":"7f849c","production-size-unit":"6f8a92","tests-name":"c6a1bb bold","tests-branch":"6c7086","tests-percent":"7f6a79","tests-files":"b18ea7","tests-lines":"cba6c1","tests-code":"b18ea7","tests-comments":"b18ea7","tests-extra":"b18ea7","tests-size":"b18ea7","tests-size-unit":"6f8a92","file-name":"8a90a8","file-branch":"6c7086","file-percent":"6c7086","file-files":"7f849c","file-lines":"989db5","file-code":"7f849c","file-comments":"7f849c","file-extra":"7f849c","file-size":"7f849c","file-size-unit":"6f8a92","overview-label":"89dceb","overview-percent":"cdd6f4","language-1":"ff759c","language-2":"fab387","language-3":"a6e3a1","language-4":"cba6f7","language-others":"f5e0dc","change-up":"a6e3a1","change-down":"f38ba8","change-same":"cdd6f4","history-entry":"cba6f7 bold","history-modified":"f9e2af","history-modified-field":"89dceb","progress-bar-fill":"cba6f7..89dceb","progress-bar-empty":"313244","progress-bar-figures":"7f849c","summary":"cdd6f4","note":"7f849c italic","success":"a6e3a1","warning":"f9e2af","error":"f38ba8","footer":"7f849c italic"}},{name:"Catppuccin-minimal",styles:{"version":"cba6f7","heading":"white bold underline","sort-marker":"cba6f7","details-language-name":"cba6f7 bold","details-total":"89dceb bold","nested-name":"a6adc8 bold","nested-branch":"6c7086","nested-percent":"6c7086","nested-files":"9399b2","nested-lines":"acb2cb","nested-code":"9399b2","nested-comments":"9399b2","nested-extra":"9399b2","nested-size":"9399b2","nested-size-unit":"6f8a92","production-branch":"6c7086","tests-name":"c6a1bb bold","tests-branch":"6c7086","tests-percent":"7f6a79","tests-files":"b18ea7","tests-lines":"cba6c1","tests-code":"b18ea7","tests-comments":"b18ea7","tests-extra":"b18ea7","tests-size":"b18ea7","tests-size-unit":"6f8a92","language-1":"ff759c","language-2":"fab387","language-3":"a6e3a1","language-4":"cba6f7","language-others":"f5e0dc"}},{name:"Dracula",styles:{"version":"ff79c6","heading":"ff79c6 bold reverse","separator-total":"44475a","separator-header":"44475a","sort-marker":"f1fa8c","arrow":"6272a4","bar-frame":"6d9da8","percent":"6272a4","files-label":"7de7ff italic","lines-label":"7de7ff italic","code-label":"7de7ff italic","comments-label":"7de7ff italic","extra-label":"7de7ff italic","total-size-label":"6d9da8 italic","size-unit":"6d9da8","keyword-number":"f8f8f2","keyword-label":"a779d9","details-language-header":"7de7ff italic","details-language-name":"ff79c6 bold","details-module":"a779d9 bold","details-total":"7de7ff reverse","nested-name":"a9b3d0 bold","nested-branch":"6272a4","nested-percent":"6272a4","nested-files":"8e97b5","nested-lines":"a7b0ce","nested-code":"8e97b5","nested-comments":"8e97b5","nested-extra":"8e97b5","nested-size":"8e97b5","nested-size-unit":"6d9da8","production-branch":"6272a4","production-percent":"6272a4","production-size-unit":"6d9da8","tests-name":"cfa6bb bold","tests-branch":"6272a4","tests-percent":"846d78","tests-files":"b28b9f","tests-lines":"cca3b8","tests-code":"b28b9f","tests-comments":"b28b9f","tests-extra":"b28b9f","tests-size":"b28b9f","tests-size-unit":"6d9da8","file-name":"8892b0","file-branch":"6272a4","file-percent":"6272a4","file-files":"7a83a0","file-lines":"939cb9","file-code":"7a83a0","file-comments":"7a83a0","file-extra":"7a83a0","file-size":"7a83a0","file-size-unit":"6d9da8","overview-label":"7de7ff","overview-percent":"f8f8f2","language-1":"ff79c6","language-2":"8be9fd","language-3":"50fa7b","language-4":"bd93f9","language-others":"ffb86c","change-up":"50fa7b","change-down":"ff5555","change-same":"f8f8f2","history-entry":"ff79c6 bold","history-modified":"f1fa8c","history-modified-field":"7de7ff","progress-bar-fill":"ff79c6..8be9fd","progress-bar-empty":"44475a","progress-bar-figures":"6272a4","summary":"f8f8f2","note":"6272a4 italic","success":"7de7ff","warning":"f1fa8c","error":"ff5555","footer":"6272a4 italic"}},{name:"Dracula-minimal",styles:{"version":"ff79c6","heading":"white bold underline","sort-marker":"ff79c6","details-language-name":"ff79c6 bold","details-total":"7de7ff bold","nested-name":"a9b3d0 bold","nested-branch":"6272a4","nested-percent":"6272a4","nested-files":"8e97b5","nested-lines":"a7b0ce","nested-code":"8e97b5","nested-comments":"8e97b5","nested-extra":"8e97b5","nested-size":"8e97b5","nested-size-unit":"6d9da8","production-branch":"6272a4","tests-name":"cfa6bb bold","tests-branch":"6272a4","tests-percent":"846d78","tests-files":"b28b9f","tests-lines":"cca3b8","tests-code":"b28b9f","tests-comments":"b28b9f","tests-extra":"b28b9f","tests-size":"b28b9f","tests-size-unit":"6d9da8","language-1":"ff79c6","language-2":"8be9fd","language-3":"50fa7b","language-4":"bd93f9","language-others":"ffb86c"}},{name:"Forest",styles:{"version":"ce983b","heading":"ce983b bold reverse","separator-total":"4e5947","separator-header":"4e5947","sort-marker":"e0b24f","arrow":"8b9480","bar-frame":"7d8a6a","percent":"8b9480","files-label":"a8c47e italic","lines-label":"a8c47e italic","code-label":"a8c47e italic","comments-label":"a8c47e italic","extra-label":"a8c47e italic","total-size-label":"7d8a6a italic","size-unit":"7d8a6a","keyword-number":"d8dcc4","keyword-label":"d26a79","details-language-header":"a8c47e italic","details-language-name":"ce983b bold","details-module":"d26a79 bold","details-total":"a8c47e reverse","nested-name":"b3bda0 bold","nested-branch":"76806c","nested-percent":"76806c","nested-files":"98a487","nested-lines":"b1bda0","nested-code":"98a487","nested-comments":"98a487","nested-extra":"98a487","nested-size":"98a487","nested-size-unit":"7d8a6a","production-branch":"76806c","production-percent":"8b9480","production-size-unit":"7d8a6a","tests-name":"d9aaaf bold","tests-branch":"76806c","tests-percent":"8e7477","tests-files":"be9195","tests-lines":"d8aaae","tests-code":"be9195","tests-comments":"be9195","tests-extra":"be9195","tests-size":"be9195","tests-size-unit":"7d8a6a","file-name":"9aa48c","file-branch":"76806c","file-percent":"76806c","file-files":"879178","file-lines":"a0aa91","file-code":"879178","file-comments":"879178","file-extra":"879178","file-size":"879178","file-size-unit":"7d8a6a","overview-label":"a8c47e","overview-percent":"d8dcc4","language-1":"ce983b","language-2":"90ba36","language-3":"d26a79","language-4":"46915f","language-others":"c8ccad","change-up":"86c06a","change-down":"d26a79","change-same":"d8dcc4","history-entry":"ce983b bold","history-modified":"e0b24f","history-modified-field":"a8c47e","progress-bar-fill":"ce983b..46915f","progress-bar-empty":"2c3a2e","progress-bar-figures":"8b9480","summary":"d8dcc4","note":"8b9480 italic","success":"86c06a","warning":"e0b24f","error":"d26a79","footer":"8b9480 italic"}},{name:"Forest-minimal",styles:{"version":"ce983b","heading":"white bold underline","sort-marker":"ce983b","details-language-name":"ce983b bold","details-total":"a8c47e bold","nested-name":"b3bda0 bold","nested-branch":"76806c","nested-percent":"76806c","nested-files":"98a487","nested-lines":"b1bda0","nested-code":"98a487","nested-comments":"98a487","nested-extra":"98a487","nested-size":"98a487","nested-size-unit":"7d8a6a","production-branch":"76806c","tests-name":"d9aaaf bold","tests-branch":"76806c","tests-percent":"8e7477","tests-files":"be9195","tests-lines":"d8aaae","tests-code":"be9195","tests-comments":"be9195","tests-extra":"be9195","tests-size":"be9195","tests-size-unit":"7d8a6a","language-1":"ce983b","language-2":"90ba36","language-3":"d26a79","language-4":"46915f","language-others":"c8ccad"}},{name:"Gruvbox",styles:{"version":"fabd2f bold","heading":"fabd2f bold reverse","separator-total":"ca4d3f","separator-header":"ca4d3f","sort-marker":"fe8019","arrow":"a89984","bar-frame":"928374","percent":"a89984","files-label":"8ec07c italic","lines-label":"8ec07c italic","code-label":"8ec07c italic","comments-label":"8ec07c italic","extra-label":"8ec07c italic","total-size-label":"928374 italic","size-unit":"928374","keyword-number":"ebdbb2","keyword-label":"ca4d3f","details-language-header":"8ec07c italic","details-language-name":"fabd2f bold","details-module":"d3869b bold","details-total":"8ec07c reverse","nested-name":"bdae93 bold","nested-branch":"7c6f64","nested-percent":"7c6f64","nested-files":"a89984","nested-lines":"c1b29d","nested-code":"a89984","nested-comments":"a89984","nested-extra":"a89984","nested-size":"a89984","nested-size-unit":"928374","production-branch":"7c6f64","production-percent":"a89984","production-size-unit":"928374","tests-name":"cfa2ad bold","tests-branch":"7c6f64","tests-percent":"836a70","tests-files":"b98e98","tests-lines":"d4a6b1","tests-code":"b98e98","tests-comments":"b98e98","tests-extra":"b98e98","tests-size":"b98e98","tests-size-unit":"928374","file-name":"a89984","file-branch":"7c6f64","file-percent":"7c6f64","file-files":"928374","file-lines":"ab9c8d","file-code":"928374","file-comments":"928374","file-extra":"928374","file-size":"928374","file-size-unit":"928374","overview-label":"8ec07c","overview-percent":"ebdbb2","language-1":"fb4934","language-2":"fba52d","language-3":"86ba26","language-4":"8bacb6","language-others":"d5c4a1","change-up":"b8bb26","change-down":"fb4934","change-same":"ebdbb2","history-entry":"fabd2f bold","history-modified":"fe8019","history-modified-field":"8ec07c","progress-bar-fill":"fb4934..fabd2f","progress-bar-empty":"3c3836","progress-bar-figures":"a89984","summary":"ebdbb2","note":"a89984 italic","success":"b8bb26","warning":"fabd2f","error":"fb4934","footer":"a89984 italic"}},{name:"Gruvbox-minimal",styles:{"version":"fabd2f bold","heading":"white bold underline","sort-marker":"fabd2f","details-language-name":"fabd2f bold","details-total":"8ec07c bold","nested-name":"bdae93 bold","nested-branch":"7c6f64","nested-percent":"7c6f64","nested-files":"a89984","nested-lines":"c1b29d","nested-code":"a89984","nested-comments":"a89984","nested-extra":"a89984","nested-size":"a89984","nested-size-unit":"928374","production-branch":"7c6f64","tests-name":"cfa2ad bold","tests-branch":"7c6f64","tests-percent":"836a70","tests-files":"b98e98","tests-lines":"d4a6b1","tests-code":"b98e98","tests-comments":"b98e98","tests-extra":"b98e98","tests-size":"b98e98","tests-size-unit":"928374","language-1":"fb4934","language-2":"fba52d","language-3":"86ba26","language-4":"8bacb6","language-others":"d5c4a1"}},{name:"Meadow",styles:{"version":"d8f26b","heading":"d8f26b bold reverse","separator-total":"4a5a4c","separator-header":"4a5a4c","sort-marker":"ffd84d","arrow":"93a898","bar-frame":"6f9392","percent":"93a898","files-label":"8fd8d6 italic","lines-label":"8fd8d6 italic","code-label":"8fd8d6 italic","comments-label":"8fd8d6 italic","extra-label":"8fd8d6 italic","total-size-label":"6f9392 italic","size-unit":"6f9392","keyword-number":"e8f2df","keyword-label":"ffe5a3","details-language-header":"8fd8d6 italic","details-language-name":"d8f26b bold","details-module":"ffe5a3 bold","details-total":"8fd8d6 reverse","nested-name":"b6c9ae bold","nested-branch":"7d8e80","nested-percent":"7d8e80","nested-files":"9db096","nested-lines":"b6c9af","nested-code":"9db096","nested-comments":"9db096","nested-extra":"9db096","nested-size":"9db096","nested-size-unit":"6f9392","production-branch":"7d8e80","production-percent":"93a898","production-size-unit":"6f9392","tests-name":"cec29a bold","tests-branch":"7d8e80","tests-percent":"908973","tests-files":"b5a982","tests-lines":"cec29a","tests-code":"b5a982","tests-comments":"b5a982","tests-extra":"b5a982","tests-size":"b5a982","tests-size-unit":"6f9392","file-name":"a3b59c","file-branch":"7d8e80","file-percent":"7d8e80","file-files":"8c9c86","file-lines":"a5b59f","file-code":"8c9c86","file-comments":"8c9c86","file-extra":"8c9c86","file-size":"8c9c86","file-size-unit":"6f9392","overview-label":"8fd8d6","overview-percent":"e8f2df","language-1":"yellow","language-2":"82e3e2","language-3":"99ff00","language-4":"ffe5a3","language-others":"ffe5a3","change-up":"99ff00","change-down":"ff7a6b","change-same":"e8f2df","history-entry":"d8f26b bold","history-modified":"ffd84d","history-modified-field":"8fd8d6","progress-bar-fill":"99ff00..82e3e2","progress-bar-empty":"21301f","progress-bar-figures":"93a898","summary":"e8f2df","note":"93a898 italic","success":"99ff00","warning":"ffd84d","error":"ff7a6b","footer":"93a898 italic"}},{name:"Meadow-minimal",styles:{"version":"d8f26b","heading":"white bold underline","sort-marker":"d8f26b","details-language-name":"d8f26b bold","details-total":"8fd8d6 bold","nested-name":"b6c9ae bold","nested-branch":"7d8e80","nested-percent":"7d8e80","nested-files":"9db096","nested-lines":"b6c9af","nested-code":"9db096","nested-comments":"9db096","nested-extra":"9db096","nested-size":"9db096","nested-size-unit":"6f9392","production-branch":"7d8e80","tests-name":"cec29a bold","tests-branch":"7d8e80","tests-percent":"908973","tests-files":"b5a982","tests-lines":"cec29a","tests-code":"b5a982","tests-comments":"b5a982","tests-extra":"b5a982","tests-size":"b5a982","tests-size-unit":"6f9392","language-1":"yellow","language-2":"82e3e2","language-3":"99ff00","language-4":"ffe5a3","language-others":"ffe5a3"}},{name:"Mezura",styles:{}},{name:"Ocean",styles:{"version":"22d3ee","heading":"22d3ee bold reverse","separator-total":"334155","separator-header":"334155","sort-marker":"fbbf24","arrow":"74899c","bar-frame":"5b7688","percent":"74899c","files-label":"7dd3fc 232643 italic","lines-label":"7dd3fc 232643 italic","code-label":"7dd3fc 232643 italic","comments-label":"7dd3fc 232643 italic","extra-label":"7dd3fc 232643 italic","total-size-label":"5b7688 232643 italic","size-unit":"5b7688","keyword-number":"e2e8f0","keyword-label":"818cf8","details-language-header":"7dd3fc 232643 italic","details-language-name":"22d3ee bold","details-module":"818cf8 bold","details-total":"7dd3fc reverse","nested-name":"a3b4c6 bold","nested-branch":"64798c","nested-percent":"64798c","nested-files":"8b9db0","nested-lines":"a4b6c9","nested-code":"8b9db0","nested-comments":"8b9db0","nested-extra":"8b9db0","nested-size":"8b9db0","nested-size-unit":"5b7688","production-branch":"64798c","production-percent":"74899c","production-size-unit":"5b7688","tests-name":"91beaa bold","tests-branch":"64798c","tests-percent":"647d72","tests-files":"7aa694","tests-lines":"93bfac","tests-code":"7aa694","tests-comments":"7aa694","tests-extra":"7aa694","tests-size":"7aa694","tests-size-unit":"5b7688","file-name":"92a3b5","file-branch":"64798c","file-percent":"64798c","file-files":"7d8fa1","file-lines":"96a8ba","file-code":"7d8fa1","file-comments":"7d8fa1","file-extra":"7d8fa1","file-size":"7d8fa1","file-size-unit":"5b7688","overview-label":"7dd3fc 232643","overview-percent":"e2e8f0","language-1":"22d3ee","language-2":"6094fb","language-3":"63caa4","language-4":"94a3b8","language-others":"cbd5e1","change-up":"63caa4","change-down":"f87171","change-same":"e2e8f0","history-entry":"22d3ee bold","history-modified":"fbbf24","history-modified-field":"7dd3fc","progress-bar-fill":"22d3ee..6094fb","progress-bar-empty":"1e293b","progress-bar-figures":"74899c","summary":"e2e8f0","note":"74899c italic","success":"63caa4","warning":"fbbf24","error":"f87171","footer":"74899c italic"}},{name:"Ocean-minimal",styles:{"version":"22d3ee","heading":"white bold underline","sort-marker":"22d3ee","details-language-name":"22d3ee bold","details-total":"7dd3fc bold","nested-name":"a3b4c6 bold","nested-branch":"64798c","nested-percent":"64798c","nested-files":"8b9db0","nested-lines":"a4b6c9","nested-code":"8b9db0","nested-comments":"8b9db0","nested-extra":"8b9db0","nested-size":"8b9db0","nested-size-unit":"5b7688","production-branch":"64798c","tests-name":"91beaa bold","tests-branch":"64798c","tests-percent":"647d72","tests-files":"7aa694","tests-lines":"93bfac","tests-code":"7aa694","tests-comments":"7aa694","tests-extra":"7aa694","tests-size":"7aa694","tests-size-unit":"5b7688","language-1":"22d3ee","language-2":"6094fb","language-3":"63caa4","language-4":"94a3b8","language-others":"cbd5e1"}}];
+SHIPPED_THEMES = [{name:"Mezura",styles:{}},{name:"Mezura-classic",styles:{"separator-total":"aaaaaa","separator-header":"aaaaaa","sort-marker":"b5a98a","arrow":"aaaaaa","percent":"969696","files-label":"b5a98a italic","lines-label":"b5a98a italic","code-label":"b5a98a italic","comments-label":"b5a98a italic","extra-label":"b5a98a italic","total-size-label":"b5a98a italic","size-unit":"7d7769","keyword-number":"969696","details-language-header":"b5a98a italic","details-module":"b5a98a bold","details-total":"bright-magenta","nested-name":"5d8786","nested-branch":"aaaaaa","nested-percent":"556666","nested-files":"5d8786","nested-lines":"709998","nested-code":"5d8786","nested-comments":"5d8786","nested-extra":"5d8786","nested-size":"5d8786","nested-size-unit":"7d7769","production-branch":"aaaaaa","production-percent":"969696","production-size-unit":"7d7769","tests-name":"ae98b8","tests-branch":"aaaaaa","tests-percent":"74697a","tests-files":"ae98b8","tests-lines":"a088ad","tests-code":"ae98b8","tests-comments":"ae98b8","tests-extra":"ae98b8","tests-size":"ae98b8","tests-size-unit":"7d7769","file-name":"7a7a7a","file-branch":"aaaaaa","file-percent":"969696","file-size-unit":"7d7769","language-2":"bright-magenta","language-3":"bright-yellow","language-4":"6ad9bd","language-others":"d7c9f0","change-up":"c9ffbd","change-down":"db8181","change-same":"ffffff","progress-bar-empty":"222222","success":"bright-green"}},{name:"Catppuccin",styles:{"version":"cba6f7","heading":"cba6f7 bold reverse","separator-total":"585b70","separator-header":"585b70","sort-marker":"f9e2af","arrow":"7f849c","bar-frame":"6f8a92","percent":"7f849c","files-label":"89dceb italic","lines-label":"89dceb italic","code-label":"89dceb italic","comments-label":"89dceb italic","extra-label":"89dceb italic","total-size-label":"6f8a92 italic","size-unit":"6f8a92","keyword-number":"cdd6f4","keyword-label":"b4befe","details-language-header":"89dceb italic","details-language-name":"cba6f7 bold","details-module":"b4befe bold","details-total":"89dceb reverse","nested-name":"a6adc8 bold","nested-branch":"6c7086","nested-percent":"6c7086","nested-files":"9399b2","nested-lines":"acb2cb","nested-code":"9399b2","nested-comments":"9399b2","nested-extra":"9399b2","nested-size":"9399b2","nested-size-unit":"6f8a92","production-branch":"6c7086","production-percent":"7f849c","production-size-unit":"6f8a92","tests-name":"c6a1bb bold","tests-branch":"6c7086","tests-percent":"7f6a79","tests-files":"b18ea7","tests-lines":"cba6c1","tests-code":"b18ea7","tests-comments":"b18ea7","tests-extra":"b18ea7","tests-size":"b18ea7","tests-size-unit":"6f8a92","file-name":"8a90a8","file-branch":"6c7086","file-percent":"6c7086","file-files":"7f849c","file-lines":"989db5","file-code":"7f849c","file-comments":"7f849c","file-extra":"7f849c","file-size":"7f849c","file-size-unit":"6f8a92","overview-label":"89dceb","overview-percent":"cdd6f4","language-1":"ff759c","language-2":"fab387","language-3":"a6e3a1","language-4":"cba6f7","language-others":"f5e0dc","change-up":"a6e3a1","change-down":"f38ba8","change-same":"cdd6f4","history-entry":"cba6f7 bold","history-modified":"f9e2af","history-modified-field":"89dceb","progress-bar-fill":"cba6f7..89dceb","progress-bar-empty":"313244","progress-bar-figures":"7f849c","summary":"cdd6f4","note":"7f849c italic","success":"a6e3a1","warning":"f9e2af","error":"f38ba8","footer":"7f849c italic"}},{name:"Catppuccin-light",styles:{"version":"7a22ed","heading":"7a22ed bold reverse","separator-total":"878da1","separator-header":"878da1","sort-marker":"72480f","arrow":"73778d","bar-frame":"637c83","percent":"73778d","files-label":"02597b italic","lines-label":"02597b italic","code-label":"02597b italic","comments-label":"02597b italic","extra-label":"02597b italic","total-size-label":"637c83 italic","size-unit":"637c83","keyword-number":"4c4f69","keyword-label":"1638fc","details-language-header":"02597b italic","details-language-name":"7a22ed bold","details-module":"1638fc bold","details-total":"02597b reverse","nested-name":"5f6275 bold","nested-branch":"7c8196","nested-percent":"7c8196","nested-files":"696c80","nested-lines":"555f88","nested-code":"696c80","nested-comments":"696c80","nested-extra":"696c80","nested-size":"696c80","nested-size-unit":"637c83","production-branch":"7c8196","production-percent":"73778d","production-size-unit":"637c83","tests-name":"885378 bold","tests-branch":"7c8196","tests-percent":"927c8c","tests-files":"8c607f","tests-lines":"874f78","tests-code":"8c607f","tests-comments":"8c607f","tests-extra":"8c607f","tests-size":"8c607f","tests-size-unit":"637c83","file-name":"69718e","file-branch":"7c8196","file-percent":"7c8196","file-files":"73778d","file-lines":"636a8a","file-code":"73778d","file-comments":"73778d","file-extra":"73778d","file-size":"73778d","file-size-unit":"637c83","overview-label":"02597b","overview-percent":"4c4f69","language-1":"d2003b","language-2":"9b3901","language-3":"255d19","language-4":"7a22ed","language-others":"8b3624","change-up":"255d19","change-down":"d20f39","change-same":"4c4f69","history-entry":"7a22ed bold","history-modified":"72480f","history-modified-field":"02597b","progress-bar-fill":"7a22ed..02597b","progress-bar-empty":"bec3d0","progress-bar-figures":"73778d","summary":"4c4f69","note":"73778d italic","success":"255d19","warning":"72480f","error":"d20f39","footer":"73778d italic"}},{name:"Dracula",styles:{"version":"ff79c6","heading":"ff79c6 bold reverse","separator-total":"44475a","separator-header":"44475a","sort-marker":"f1fa8c","arrow":"6272a4","bar-frame":"6d9da8","percent":"6272a4","files-label":"7de7ff italic","lines-label":"7de7ff italic","code-label":"7de7ff italic","comments-label":"7de7ff italic","extra-label":"7de7ff italic","total-size-label":"6d9da8 italic","size-unit":"6d9da8","keyword-number":"f8f8f2","keyword-label":"a779d9","details-language-header":"7de7ff italic","details-language-name":"ff79c6 bold","details-module":"a779d9 bold","details-total":"7de7ff reverse","nested-name":"a9b3d0 bold","nested-branch":"6272a4","nested-percent":"6272a4","nested-files":"8e97b5","nested-lines":"a7b0ce","nested-code":"8e97b5","nested-comments":"8e97b5","nested-extra":"8e97b5","nested-size":"8e97b5","nested-size-unit":"6d9da8","production-branch":"6272a4","production-percent":"6272a4","production-size-unit":"6d9da8","tests-name":"cfa6bb bold","tests-branch":"6272a4","tests-percent":"846d78","tests-files":"b28b9f","tests-lines":"cca3b8","tests-code":"b28b9f","tests-comments":"b28b9f","tests-extra":"b28b9f","tests-size":"b28b9f","tests-size-unit":"6d9da8","file-name":"8892b0","file-branch":"6272a4","file-percent":"6272a4","file-files":"7a83a0","file-lines":"939cb9","file-code":"7a83a0","file-comments":"7a83a0","file-extra":"7a83a0","file-size":"7a83a0","file-size-unit":"6d9da8","overview-label":"7de7ff","overview-percent":"f8f8f2","language-1":"ff79c6","language-2":"8be9fd","language-3":"50fa7b","language-4":"bd93f9","language-others":"ffb86c","change-up":"50fa7b","change-down":"ff5555","change-same":"f8f8f2","history-entry":"ff79c6 bold","history-modified":"f1fa8c","history-modified-field":"7de7ff","progress-bar-fill":"ff79c6..8be9fd","progress-bar-empty":"44475a","progress-bar-figures":"6272a4","summary":"f8f8f2","note":"6272a4 italic","success":"7de7ff","warning":"f1fa8c","error":"ff5555","footer":"6272a4 italic"}},{name:"Dracula-light",styles:{"version":"a3144d","heading":"a3144d bold reverse","separator-total":"a4a4c1","separator-header":"a4a4c1","sort-marker":"60500f","arrow":"6c664b","bar-frame":"4c767f","percent":"6c664b","files-label":"00596d italic","lines-label":"00596d italic","code-label":"00596d italic","comments-label":"00596d italic","extra-label":"00596d italic","total-size-label":"4c767f italic","size-unit":"4c767f","keyword-number":"1f1f1f","keyword-label":"9057cf","details-language-header":"00596d italic","details-language-name":"a3144d bold","details-module":"9057cf bold","details-total":"00596d reverse","nested-name":"4e5f8f bold","nested-branch":"6c664b","nested-percent":"6c664b","nested-files":"616d94","nested-lines":"516091","nested-code":"616d94","nested-comments":"616d94","nested-extra":"616d94","nested-size":"616d94","nested-size-unit":"4c767f","production-branch":"6c664b","production-percent":"6c664b","production-size-unit":"4c767f","tests-name":"8d4c6e bold","tests-branch":"6c664b","tests-percent":"927b86","tests-files":"91617a","tests-lines":"8e4f6f","tests-code":"91617a","tests-comments":"91617a","tests-extra":"91617a","tests-size":"91617a","tests-size-unit":"4c767f","file-name":"637096","file-branch":"6c664b","file-percent":"6c664b","file-files":"6e7897","file-lines":"5e6b92","file-code":"6e7897","file-comments":"6e7897","file-extra":"6e7897","file-size":"6e7897","file-size-unit":"4c767f","overview-label":"00596d","overview-percent":"1f1f1f","language-1":"a3144d","language-2":"02577b","language-3":"115f08","language-4":"644ac9","language-others":"8c4211","change-up":"115f08","change-down":"cb3a2a","change-same":"1f1f1f","history-entry":"a3144d bold","history-modified":"60500f","history-modified-field":"00596d","progress-bar-fill":"a3144d..02577b","progress-bar-empty":"a4a4c1","progress-bar-figures":"6c664b","summary":"1f1f1f","note":"6c664b italic","success":"00596d","warning":"60500f","error":"cb3a2a","footer":"6c664b italic"}},{name:"Forest",styles:{"version":"ce983b","heading":"ce983b bold reverse","separator-total":"4e5947","separator-header":"4e5947","sort-marker":"e0b24f","arrow":"8b9480","bar-frame":"7d8a6a","percent":"8b9480","files-label":"a8c47e italic","lines-label":"a8c47e italic","code-label":"a8c47e italic","comments-label":"a8c47e italic","extra-label":"a8c47e italic","total-size-label":"7d8a6a italic","size-unit":"7d8a6a","keyword-number":"d8dcc4","keyword-label":"d26a79","details-language-header":"a8c47e italic","details-language-name":"ce983b bold","details-module":"d26a79 bold","details-total":"a8c47e reverse","nested-name":"b3bda0 bold","nested-branch":"76806c","nested-percent":"76806c","nested-files":"98a487","nested-lines":"b1bda0","nested-code":"98a487","nested-comments":"98a487","nested-extra":"98a487","nested-size":"98a487","nested-size-unit":"7d8a6a","production-branch":"76806c","production-percent":"8b9480","production-size-unit":"7d8a6a","tests-name":"d9aaaf bold","tests-branch":"76806c","tests-percent":"8e7477","tests-files":"be9195","tests-lines":"d8aaae","tests-code":"be9195","tests-comments":"be9195","tests-extra":"be9195","tests-size":"be9195","tests-size-unit":"7d8a6a","file-name":"9aa48c","file-branch":"76806c","file-percent":"76806c","file-files":"879178","file-lines":"a0aa91","file-code":"879178","file-comments":"879178","file-extra":"879178","file-size":"879178","file-size-unit":"7d8a6a","overview-label":"a8c47e","overview-percent":"d8dcc4","language-1":"ce983b","language-2":"90ba36","language-3":"d26a79","language-4":"46915f","language-others":"c8ccad","change-up":"86c06a","change-down":"d26a79","change-same":"d8dcc4","history-entry":"ce983b bold","history-modified":"e0b24f","history-modified-field":"a8c47e","progress-bar-fill":"ce983b..46915f","progress-bar-empty":"2c3a2e","progress-bar-figures":"8b9480","summary":"d8dcc4","note":"8b9480 italic","success":"86c06a","warning":"e0b24f","error":"d26a79","footer":"8b9480 italic"}},{name:"Forest-light",styles:{"version":"886222","heading":"886222 bold reverse","separator-total":"8a9a80","separator-header":"8a9a80","sort-marker":"785915","arrow":"6c7562","bar-frame":"707c5f","percent":"6c7562","files-label":"4e642e italic","lines-label":"4e642e italic","code-label":"4e642e italic","comments-label":"4e642e italic","extra-label":"4e642e italic","total-size-label":"707c5f italic","size-unit":"707c5f","keyword-number":"4f5432","keyword-label":"c8495b","details-language-header":"4e642e italic","details-language-name":"886222 bold","details-module":"c8495b bold","details-total":"4e642e reverse","nested-name":"576144 bold","nested-branch":"757f6b","nested-percent":"757f6b","nested-files":"636e53","nested-lines":"566244","nested-code":"636e53","nested-comments":"636e53","nested-extra":"636e53","nested-size":"636e53","nested-size-unit":"707c5f","production-branch":"757f6b","production-percent":"6c7562","production-size-unit":"707c5f","tests-name":"99444d bold","tests-branch":"757f6b","tests-percent":"90777a","tests-files":"995a60","tests-lines":"98464d","tests-code":"995a60","tests-comments":"995a60","tests-extra":"995a60","tests-size":"995a60","tests-size-unit":"707c5f","file-name":"646d56","file-branch":"757f6b","file-percent":"757f6b","file-files":"6e7761","file-lines":"616a52","file-code":"6e7761","file-comments":"6e7761","file-extra":"6e7761","file-size":"6e7761","file-size-unit":"707c5f","overview-label":"4e642e","overview-percent":"4f5432","language-1":"886222","language-2":"546c1f","language-3":"c8495b","language-4":"418758","language-others":"545837","change-up":"426c2e","change-down":"c8495b","change-same":"4f5432","history-entry":"886222 bold","history-modified":"785915","history-modified-field":"4e642e","progress-bar-fill":"886222..418758","progress-bar-empty":"b1c4b3","progress-bar-figures":"6c7562","summary":"4f5432","note":"6c7562 italic","success":"426c2e","warning":"785915","error":"c8495b","footer":"6c7562 italic"}},{name:"Gruvbox",styles:{"version":"fabd2f bold","heading":"fabd2f bold reverse","separator-total":"ca4d3f","separator-header":"ca4d3f","sort-marker":"fe8019","arrow":"a89984","bar-frame":"928374","percent":"a89984","files-label":"8ec07c italic","lines-label":"8ec07c italic","code-label":"8ec07c italic","comments-label":"8ec07c italic","extra-label":"8ec07c italic","total-size-label":"928374 italic","size-unit":"928374","keyword-number":"ebdbb2","keyword-label":"ca4d3f","details-language-header":"8ec07c italic","details-language-name":"fabd2f bold","details-module":"d3869b bold","details-total":"8ec07c reverse","nested-name":"bdae93 bold","nested-branch":"7c6f64","nested-percent":"7c6f64","nested-files":"a89984","nested-lines":"c1b29d","nested-code":"a89984","nested-comments":"a89984","nested-extra":"a89984","nested-size":"a89984","nested-size-unit":"928374","production-branch":"7c6f64","production-percent":"a89984","production-size-unit":"928374","tests-name":"cfa2ad bold","tests-branch":"7c6f64","tests-percent":"836a70","tests-files":"b98e98","tests-lines":"d4a6b1","tests-code":"b98e98","tests-comments":"b98e98","tests-extra":"b98e98","tests-size":"b98e98","tests-size-unit":"928374","file-name":"a89984","file-branch":"7c6f64","file-percent":"7c6f64","file-files":"928374","file-lines":"ab9c8d","file-code":"928374","file-comments":"928374","file-extra":"928374","file-size":"928374","file-size-unit":"928374","overview-label":"8ec07c","overview-percent":"ebdbb2","language-1":"fb4934","language-2":"fba52d","language-3":"86ba26","language-4":"8bacb6","language-others":"d5c4a1","change-up":"b8bb26","change-down":"fb4934","change-same":"ebdbb2","history-entry":"fabd2f bold","history-modified":"fe8019","history-modified-field":"8ec07c","progress-bar-fill":"fb4934..fabd2f","progress-bar-empty":"3c3836","progress-bar-figures":"a89984","summary":"ebdbb2","note":"a89984 italic","success":"b8bb26","warning":"fabd2f","error":"fb4934","footer":"a89984 italic"}},{name:"Gruvbox-light",styles:{"version":"784e0d bold","heading":"784e0d bold reverse","separator-total":"ce5c4f","separator-header":"ce5c4f","sort-marker":"af3a03","arrow":"7c6f64","bar-frame":"837567","percent":"7c6f64","files-label":"396b4c italic","lines-label":"396b4c italic","code-label":"396b4c italic","comments-label":"396b4c italic","extra-label":"396b4c italic","total-size-label":"837567 italic","size-unit":"837567","keyword-number":"3c3836","keyword-label":"ce5c4f","details-language-header":"396b4c italic","details-language-name":"784e0d bold","details-module":"8f3f71 bold","details-total":"396b4c reverse","nested-name":"665c54 bold","nested-branch":"917f67","nested-percent":"917f67","nested-files":"7c6f64","nested-lines":"6e5d46","nested-code":"7c6f64","nested-comments":"7c6f64","nested-extra":"7c6f64","nested-size":"7c6f64","nested-size-unit":"837567","production-branch":"917f67","production-percent":"7c6f64","production-size-unit":"837567","tests-name":"954d5e bold","tests-branch":"917f67","tests-percent":"957c82","tests-files":"965d6a","tests-lines":"96485b","tests-code":"965d6a","tests-comments":"965d6a","tests-extra":"965d6a","tests-size":"965d6a","tests-size-unit":"837567","file-name":"7c6f64","file-branch":"917f67","file-percent":"917f67","file-files":"837567","file-lines":"786858","file-code":"837567","file-comments":"837567","file-extra":"837567","file-size":"837567","file-size-unit":"837567","overview-label":"396b4c","overview-percent":"3c3836","language-1":"9d0006","language-2":"895103","language-3":"4f6e17","language-4":"4a6c76","language-others":"504945","change-up":"66620c","change-down":"9d0006","change-same":"3c3836","history-entry":"784e0d bold","history-modified":"af3a03","history-modified-field":"396b4c","progress-bar-fill":"9d0006..784e0d","progress-bar-empty":"d8b868","progress-bar-figures":"7c6f64","summary":"3c3836","note":"7c6f64 italic","success":"66620c","warning":"784e0d","error":"9d0006","footer":"7c6f64 italic"}},{name:"Meadow",styles:{"version":"d8f26b","heading":"d8f26b bold reverse","separator-total":"4a5a4c","separator-header":"4a5a4c","sort-marker":"ffd84d","arrow":"93a898","bar-frame":"6f9392","percent":"93a898","files-label":"8fd8d6 italic","lines-label":"8fd8d6 italic","code-label":"8fd8d6 italic","comments-label":"8fd8d6 italic","extra-label":"8fd8d6 italic","total-size-label":"6f9392 italic","size-unit":"6f9392","keyword-number":"e8f2df","keyword-label":"ffe5a3","details-language-header":"8fd8d6 italic","details-language-name":"d8f26b bold","details-module":"ffe5a3 bold","details-total":"8fd8d6 reverse","nested-name":"b6c9ae bold","nested-branch":"7d8e80","nested-percent":"7d8e80","nested-files":"9db096","nested-lines":"b6c9af","nested-code":"9db096","nested-comments":"9db096","nested-extra":"9db096","nested-size":"9db096","nested-size-unit":"6f9392","production-branch":"7d8e80","production-percent":"93a898","production-size-unit":"6f9392","tests-name":"cec29a bold","tests-branch":"7d8e80","tests-percent":"908973","tests-files":"b5a982","tests-lines":"cec29a","tests-code":"b5a982","tests-comments":"b5a982","tests-extra":"b5a982","tests-size":"b5a982","tests-size-unit":"6f9392","file-name":"a3b59c","file-branch":"7d8e80","file-percent":"7d8e80","file-files":"8c9c86","file-lines":"a5b59f","file-code":"8c9c86","file-comments":"8c9c86","file-extra":"8c9c86","file-size":"8c9c86","file-size-unit":"6f9392","overview-label":"8fd8d6","overview-percent":"e8f2df","language-1":"yellow","language-2":"82e3e2","language-3":"99ff00","language-4":"ffe5a3","language-others":"ffe5a3","change-up":"99ff00","change-down":"ff7a6b","change-same":"e8f2df","history-entry":"d8f26b bold","history-modified":"ffd84d","history-modified-field":"8fd8d6","progress-bar-fill":"99ff00..82e3e2","progress-bar-empty":"21301f","progress-bar-figures":"93a898","summary":"e8f2df","note":"93a898 italic","success":"99ff00","warning":"ffd84d","error":"ff7a6b","footer":"93a898 italic"}},{name:"Meadow-light",styles:{"version":"485708","heading":"485708 bold reverse","separator-total":"849a87","separator-header":"849a87","sort-marker":"654f00","arrow":"586e5d","bar-frame":"5b7a79","percent":"586e5d","files-label":"215e5c italic","lines-label":"215e5c italic","code-label":"215e5c italic","comments-label":"215e5c italic","extra-label":"215e5c italic","total-size-label":"5b7a79 italic","size-unit":"5b7a79","keyword-number":"3d5924","keyword-label":"6a4c00","details-language-header":"215e5c italic","details-language-name":"485708 bold","details-module":"6a4c00 bold","details-total":"215e5c reverse","nested-name":"485f3f bold","nested-branch":"6a796c","nested-percent":"6a796c","nested-files":"576a50","nested-lines":"485e40","nested-code":"576a50","nested-comments":"576a50","nested-extra":"576a50","nested-size":"576a50","nested-size-unit":"5b7a79","production-branch":"6a796c","production-percent":"586e5d","production-size-unit":"5b7a79","tests-name":"645831 bold","tests-branch":"6a796c","tests-percent":"7c7562","tests-files":"6f6542","tests-lines":"645831","tests-code":"6f6542","tests-comments":"6f6542","tests-extra":"6f6542","tests-size":"6f6542","tests-size-unit":"5b7a79","file-name":"55674d","file-branch":"6a796c","file-percent":"6a796c","file-files":"64735e","file-lines":"55674f","file-code":"64735e","file-comments":"64735e","file-extra":"64735e","file-size":"64735e","file-size-unit":"5b7a79","overview-label":"215e5c","overview-percent":"3d5924","language-1":"yellow","language-2":"145a5a","language-3":"375b00","language-4":"6a4c00","language-others":"6a4c00","change-up":"375b00","change-down":"d11500","change-same":"3d5924","history-entry":"485708 bold","history-modified":"654f00","history-modified-field":"215e5c","progress-bar-fill":"375b00..145a5a","progress-bar-empty":"bed3bb","progress-bar-figures":"586e5d","summary":"3d5924","note":"586e5d italic","success":"375b00","warning":"654f00","error":"d11500","footer":"586e5d italic"}},{name:"Ocean",styles:{"version":"22d3ee","heading":"22d3ee bold reverse","separator-total":"334155","separator-header":"334155","sort-marker":"fbbf24","arrow":"74899c","bar-frame":"5b7688","percent":"74899c","files-label":"7dd3fc 232643 italic","lines-label":"7dd3fc 232643 italic","code-label":"7dd3fc 232643 italic","comments-label":"7dd3fc 232643 italic","extra-label":"7dd3fc 232643 italic","total-size-label":"5b7688 232643 italic","size-unit":"5b7688","keyword-number":"e2e8f0","keyword-label":"818cf8","details-language-header":"7dd3fc 232643 italic","details-language-name":"22d3ee bold","details-module":"818cf8 bold","details-total":"7dd3fc reverse","nested-name":"a3b4c6 bold","nested-branch":"64798c","nested-percent":"64798c","nested-files":"8b9db0","nested-lines":"a4b6c9","nested-code":"8b9db0","nested-comments":"8b9db0","nested-extra":"8b9db0","nested-size":"8b9db0","nested-size-unit":"5b7688","production-branch":"64798c","production-percent":"74899c","production-size-unit":"5b7688","tests-name":"91beaa bold","tests-branch":"64798c","tests-percent":"647d72","tests-files":"7aa694","tests-lines":"93bfac","tests-code":"7aa694","tests-comments":"7aa694","tests-extra":"7aa694","tests-size":"7aa694","tests-size-unit":"5b7688","file-name":"92a3b5","file-branch":"64798c","file-percent":"64798c","file-files":"7d8fa1","file-lines":"96a8ba","file-code":"7d8fa1","file-comments":"7d8fa1","file-extra":"7d8fa1","file-size":"7d8fa1","file-size-unit":"5b7688","overview-label":"7dd3fc 232643","overview-percent":"e2e8f0","language-1":"22d3ee","language-2":"6094fb","language-3":"63caa4","language-4":"94a3b8","language-others":"cbd5e1","change-up":"63caa4","change-down":"f87171","change-same":"e2e8f0","history-entry":"22d3ee bold","history-modified":"fbbf24","history-modified-field":"7dd3fc","progress-bar-fill":"22d3ee..6094fb","progress-bar-empty":"1e293b","progress-bar-figures":"74899c","summary":"e2e8f0","note":"74899c italic","success":"63caa4","warning":"fbbf24","error":"f87171","footer":"74899c italic"}},{name:"Ocean-light",styles:{"version":"096371","heading":"096371 bold reverse","separator-total":"a4b3c8","separator-header":"a4b3c8","sort-marker":"705102","arrow":"647a8d","bar-frame":"678599","percent":"647a8d","files-label":"035c86 cfd1e6 italic","lines-label":"035c86 cfd1e6 italic","code-label":"035c86 cfd1e6 italic","comments-label":"035c86 cfd1e6 italic","extra-label":"035c86 cfd1e6 italic","total-size-label":"678599 cfd1e6 italic","size-unit":"678599","keyword-number":"3b5372","keyword-label":"4d5df5","details-language-header":"035c86 cfd1e6 italic","details-language-name":"096371 bold","details-module":"4d5df5 bold","details-total":"035c86 reverse","nested-name":"4c637b bold","nested-branch":"6c8296","nested-percent":"6c8296","nested-files":"5a6f84","nested-lines":"4a627c","nested-code":"5a6f84","nested-comments":"5a6f84","nested-extra":"5a6f84","nested-size":"5a6f84","nested-size-unit":"678599","production-branch":"6c8296","production-percent":"647a8d","production-size-unit":"678599","tests-name":"3e6855 bold","tests-branch":"6c8296","tests-percent":"6a8579","tests-files":"4d7364","tests-lines":"3d6855","tests-code":"4d7364","tests-comments":"4d7364","tests-extra":"4d7364","tests-size":"4d7364","tests-size-unit":"678599","file-name":"576b81","file-branch":"6c8296","file-percent":"6c8296","file-files":"637689","file-lines":"53697f","file-code":"637689","file-comments":"637689","file-extra":"637689","file-size":"637689","file-size-unit":"678599","overview-label":"035c86 cfd1e6","overview-percent":"3b5372","language-1":"096371","language-2":"1662f9","language-3":"246a50","language-4":"586a84","language-others":"3e536c","change-up":"246a50","change-down":"d90b0b","change-same":"3b5372","history-entry":"096371 bold","history-modified":"705102","history-modified-field":"035c86","progress-bar-fill":"096371..1662f9","progress-bar-empty":"c9d3e3","progress-bar-figures":"647a8d","summary":"3b5372","note":"647a8d italic","success":"246a50","warning":"705102","error":"d90b0b","footer":"647a8d italic"}}];
 
 function ofLanguages(one, two, three, four, others) {
   return { "language-1": one, "language-2": two, "language-3": three,
            "language-4": four, "language-others": others };
 }
 
-const NAMED_COLORS = {
+const DARK_NAMED_COLORS = {
   "black": "#0C0C0C", "red": "#C50F1F", "green": "#13A10E", "yellow": "#C19C00",
   "blue": "#0037DA", "magenta": "#881798", "cyan": "#3A96DD", "white": "#CCCCCC",
   "bright-black": "#767676", "bright-red": "#E74856", "bright-green": "#16C60C",
   "bright-yellow": "#F9F1A5", "bright-blue": "#3B78FF", "bright-magenta": "#B4009E",
   "bright-cyan": "#61D6D6", "bright-white": "#F2F2F2"
 };
+const LIGHT_NAMED_COLORS = {
+  "black": "#383A42", "red": "#E45649", "green": "#50A14F", "yellow": "#C18301",
+  "blue": "#0184BC", "magenta": "#A626A4", "cyan": "#0997B3", "white": "#FAFAFA",
+  "bright-black": "#4F525D", "bright-red": "#DF6C75", "bright-green": "#98C379",
+  "bright-yellow": "#E4C07A", "bright-blue": "#61AFEF", "bright-magenta": "#C577DD",
+  "bright-cyan": "#56B5C1", "bright-white": "#FFFFFF"
+};
+const DARK_BG = "#0c0c0c", DARK_FG = "#c8c8c8";
+const LIGHT_BG = "#fafafa", LIGHT_FG = "#383a42";
 
 // One real run of 'mezura' over a web project with '--tests "*.spec.ts,test/" --tests-breakdown split --exclude "*.sql"',
 // with the token that paints each stretch beside it. Regenerate it from a real run and leave the
@@ -177,59 +186,59 @@ const SAMPLE = [
 // first, then a background if there is one, then the attributes.
 const GROUPS = [
   ["The header row", [
-    ["details-language-header", "b5a98a italic"],
-    ["files-label",             "b5a98a italic"],
-    ["lines-label",             "b5a98a italic"],
-    ["code-label",              "b5a98a italic"],
-    ["comments-label",          "b5a98a italic"],
-    ["extra-label",             "b5a98a italic"],
-    ["total-size-label",        "b5a98a italic"],
-    ["sort-marker",             "b5a98a"]
+    ["details-language-header", "default italic"],
+    ["files-label",             "default italic"],
+    ["lines-label",             "default italic"],
+    ["code-label",              "default italic"],
+    ["comments-label",          "default italic"],
+    ["extra-label",             "default italic"],
+    ["total-size-label",        "default italic"],
+    ["sort-marker",             "default"]
   ]],
   ["The rows", [
     ["details-language-name",   "cyan"],
-    ["details-total",           "bright-magenta"],
+    ["details-total",           "default bold"],
     ["files-number",            "default"],
-    ["lines-number",            "white bold"],
+    ["lines-number",            "default bold"],
     ["code-number",             "default"],
     ["comments-number",         "default"],
     ["extra-number",            "default"],
     ["total-size-number",       "default"],
-    ["percent",                 "969696"],
-    ["size-unit",               "7d7769"]
+    ["percent",                 "7f7f7f"],
+    ["size-unit",               "default dim"]
   ]],
   ["The production row", [
     ["production-name",         "default"],
-    ["production-branch",       "aaaaaa"],
+    ["production-branch",       "default dim"],
     ["production-files",        "default"],
-    ["production-lines",        "white bold"],
+    ["production-lines",        "default bold"],
     ["production-code",         "default"],
     ["production-comments",     "default"],
     ["production-extra",        "default"],
     ["production-size",         "default"],
-    ["production-percent",      "969696"],
-    ["production-size-unit",    "7d7769"]
+    ["production-percent",      "7f7f7f"],
+    ["production-size-unit",    "default dim"]
   ]],
   ["The tests row", [
-    ["tests-name",              "ae98b8"],
-    ["tests-branch",            "aaaaaa"],
-    ["tests-files",             "ae98b8"],
-    ["tests-lines",             "a088ad"],
-    ["tests-code",              "ae98b8"],
-    ["tests-comments",          "ae98b8"],
-    ["tests-extra",             "ae98b8"],
-    ["tests-size",              "ae98b8"],
-    ["tests-percent",           "74697a"],
-    ["tests-size-unit",         "7d7769"]
+    ["tests-name",              "green"],
+    ["tests-branch",            "default dim"],
+    ["tests-files",             "green"],
+    ["tests-lines",             "green"],
+    ["tests-code",              "green"],
+    ["tests-comments",          "green"],
+    ["tests-extra",             "green"],
+    ["tests-size",              "green"],
+    ["tests-percent",           "7f7f7f"],
+    ["tests-size-unit",         "green"]
   ]],
   ["The frame", [
     ["heading",                 "default bold underline"],
-    ["separator-header",        "aaaaaa"],
-    ["separator-total",         "aaaaaa"]
+    ["separator-header",        "default dim"],
+    ["separator-total",         "default dim"]
   ]],
   ["The keywords", [
     ["keyword-label",           "default dim"],
-    ["keyword-number",          "969696"]
+    ["keyword-number",          "default"]
   ]],
   ["The overview", [
     ["overview-label",          "default"],
@@ -238,10 +247,10 @@ const GROUPS = [
   ]],
   ["The languages", [
     ["language-1",              "cyan"],
-    ["language-2",              "bright-magenta"],
-    ["language-3",              "bright-yellow"],
-    ["language-4",              "6ad9bd"],
-    ["language-others",         "d7c9f0"]
+    ["language-2",              "yellow"],
+    ["language-3",              "green"],
+    ["language-4",              "red"],
+    ["language-others",         "default dim"]
   ]]
 ];
 
@@ -255,17 +264,19 @@ const LANGUAGE_SLOTS = ["language-1", "language-2", "language-3", "language-4", 
 // The overview keeps three languages and folds the rest into 'others', drawing a fourth only when
 // the run has exactly four, so one run never shows both. The sample is the shape that folds.
 const NO_PREVIEW = { "language-4": "shown in place of 'others' when a run has exactly four languages" };
-// What the color input shows for a token left to the terminal, which has no color of its own
-const TERM_FG = "#c8c8c8";
 
 let themes = [];
 let selected = 0;
 let customCount = 0;
-let termBg = "#0c0c0c";
+let termBg = DARK_BG;
+let backgroundBeforeLight = DARK_BG;
+// What the color input shows for a token left to the terminal, which has no color of its own
+let termFg = DARK_FG;
+let namedColors = DARK_NAMED_COLORS;
 
 function tokenToHex(token) {
   const t = token.trim().toLowerCase().replace(/_/g, "-");
-  if (NAMED_COLORS[t]) return NAMED_COLORS[t];
+  if (namedColors[t]) return namedColors[t];
   const hex = t.replace(/^#/, "");
   if (/^[0-9a-f]{6}$/.test(hex)) return "#" + hex;
   return null;
@@ -273,7 +284,7 @@ function tokenToHex(token) {
 
 function normalizeToken(token) {
   const t = token.trim().toLowerCase().replace(/_/g, "-");
-  if (NAMED_COLORS[t]) return t;
+  if (namedColors[t]) return t;
   return t.replace(/^#/, "");
 }
 
@@ -294,7 +305,7 @@ function styleOf(parts) {
 
 function hexOf(style) {
   const color = partsOf(style).color;
-  return color === "default" ? TERM_FG : tokenToHex(color);
+  return color === "default" ? termFg : tokenToHex(color);
 }
 
 function hslToHex(h, s, l) {
@@ -356,11 +367,22 @@ function shift(hex, amount) {
   return "#" + c(rgb[0]) + c(rgb[1]) + c(rgb[2]);
 }
 
+// A light background is drawn with a light scheme's colors and dark text, the way a terminal set to
+// one would draw it. The card around the run stays dark then, since its controls are drawn for one.
 function applyTermBg(hex) {
   termBg = hex;
+  const isLight = relLuminance(hexToRgb(hex)) > 0.4;
+  const changedScheme = isLight !== (namedColors === LIGHT_NAMED_COLORS);
+  namedColors = isLight ? LIGHT_NAMED_COLORS : DARK_NAMED_COLORS;
+  termFg = isLight ? LIGHT_FG : DARK_FG;
   document.documentElement.style.setProperty("--term-bg", hex);
-  document.documentElement.style.setProperty("--card-bg", shift(hex, 24));
-  document.documentElement.style.setProperty("--card-border", shift(hex, 46));
+  document.documentElement.style.setProperty("--term-fg", termFg);
+  document.documentElement.style.setProperty("--card-bg", isLight ? "#242424" : shift(hex, 24));
+  document.documentElement.style.setProperty("--card-border", isLight ? "#3a3a3a" : shift(hex, 46));
+  if (changedScheme) {
+    renderAll();
+    return;
+  }
   renderMetrics();
   // Every ratio taken against this background moves with it, and so does the empty swatch of every
   // token that names none, which stands for whatever the terminal is
@@ -397,7 +419,7 @@ function cssOf(style) {
   // either of them. The half that was never named is the terminal's own: its background where no
   // background was given, which is what the text is painted in once they change places.
   if (parts.attrs.includes("reverse")) {
-    const wasPaint = paint || TERM_FG;
+    const wasPaint = paint || termFg;
     const wasBehind = behind || termBg;
     paint = wasBehind;
     behind = wasPaint;
@@ -702,7 +724,13 @@ function renderStrip() {
     chip.addEventListener("click", event => {
       if (event.target.dataset.drop !== undefined) return;
       selected = +chip.dataset.pick;
-      renderAll();
+      const wanted = findBackgroundFor(current().name);
+      if (wanted) {
+        if (wanted === LIGHT_BG) backgroundBeforeLight = termBg;
+        showTermBg(wanted);
+      } else {
+        renderAll();
+      }
     });
   });
   document.querySelectorAll("button[data-drop]").forEach(btn => {
@@ -724,6 +752,22 @@ function renderStrip() {
     selected = themes.length - 1;
     renderAll();
   });
+}
+
+// Leaving a '-light' theme goes back to the background it was opened from, and only from the light
+// one this set, so a background somebody typed is kept
+function findBackgroundFor(name) {
+  const wantsLight = name.toLowerCase().endsWith("-light");
+  if (wantsLight && namedColors !== LIGHT_NAMED_COLORS) return LIGHT_BG;
+  if (!wantsLight && termBg === LIGHT_BG) return backgroundBeforeLight;
+  return null;
+}
+
+function showTermBg(hex) {
+  document.getElementById("bg-color").value = hex;
+  document.getElementById("bg-text").value = hex.replace("#", "");
+  document.getElementById("bg-text").classList.remove("invalid");
+  applyTermBg(hex);
 }
 
 // The strip carries the language colors of every theme, so an edit to any of them redraws it too

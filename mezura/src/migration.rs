@@ -327,7 +327,12 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
                 continue;
             }
         };
-        if ours_now.contains(&content_hash(&on_disk)) {
+        let on_disk_hash = content_hash(&on_disk);
+        if ours_now.contains(&on_disk_hash) {
+            continue;
+        }
+        // A theme they edited stays where it is, and dropping it from the record makes it theirs for good
+        if relative.starts_with(THEMES_DIR_NAME) && on_disk_hash != *hash {
             continue;
         }
         match archive(data_dir, &archived_under, relative, &on_disk)
@@ -890,6 +895,36 @@ mod tests {
         std::fs::write(path("Forest"), "heading = 111111\n").unwrap();
         assert!(migrate_data_files(&dir, false).replaced.is_empty());
         assert_eq!("heading = 111111\n", held("Forest"));
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_withdrawn_theme_they_edited_stays_theirs_and_one_they_never_touched_goes() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-withdrawn-themes/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false);
+
+        let shipped_once = "heading = ff0000\n";
+        let (untouched, edited) = (dir.clone() + "themes/Gone.txt", dir.clone() + "themes/Kept.txt");
+        std::fs::write(&untouched, shipped_once).unwrap();
+        std::fs::write(&edited, "heading = 00ff00\n").unwrap();
+        let mut manifest = read_manifest(&dir);
+        manifest.insert("themes/Gone.txt".to_owned(), content_hash(shipped_once.as_bytes()));
+        manifest.insert("themes/Kept.txt".to_owned(), content_hash(shipped_once.as_bytes()));
+        write_manifest(&dir, &manifest).unwrap();
+
+        let pass = migrate_data_files(&dir, false);
+        assert_eq!(vec!["themes/Gone.txt".to_owned()], pass.withdrawn);
+        assert!(!std::path::Path::new(&untouched).exists());
+        assert_eq!("heading = 00ff00\n", std::fs::read_to_string(&edited).unwrap());
+        assert!(!read_manifest(&dir).contains_key("themes/Kept.txt"),
+                "a theme left to them is still on the record, so a later version could take it");
+
+        let again = migrate_data_files(&dir, true);
+        assert!(again.withdrawn.is_empty() && again.replaced.is_empty());
+        assert_eq!("heading = 00ff00\n", std::fs::read_to_string(&edited).unwrap());
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

@@ -658,8 +658,10 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     configuration file, so a theme can be handed to someone else without carrying your paths
     or your settings with it.
 
-    A style that does not parse is reported and skipped, and the rest of the theme still applies.
-    A name that matches no file is an error, since that one is a mistake in the command.
+    A token the theme does not name keeps the style mezura ships for it. A style that does not
+    parse is reported and skipped, and the rest of the theme still applies. A name that matches no
+    file is an error on the command line, where it was just typed, and a warning in a
+    configuration, where the run goes on with the default look.
 ```
 
 ### <a id="cmd-style" name="cmd-style"></a>--style
@@ -692,8 +694,8 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     The live lines. Their cells alone also take two hex values as 'a..b' for an even gradient,
     or 'rainbow':
       progress-bar-fill        the cells the progress bar has drawn
-      progress-bar-empty       the cells it has not reached, a faint track behind the whole
-                               bar. 'default' takes the track away and leaves them blank
+      progress-bar-empty       the cells it has not reached, left blank by 'default' or drawn
+                               as a faint track behind the whole bar by a color
       progress-bar-figures     the file counts, the share done and the speed figures
 
     The header row of the details:
@@ -743,8 +745,8 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
       bar-frame                the brackets around the overview bar and the live one
       language-1  language-2  language-3  language-4
                                each language of the bar, its name and the color of its cells.
-                               The fourth shows only when nothing was folded into 'others'. Only
-                               the color reaches the cells; bold and the rest apply to the name
+                               The fourth shows only when nothing was folded into 'others'. The
+                               color and 'dim' reach the cells; bold and the rest apply to the name
       language-others          the folded 'others' entry, which falls back to 'language-4'
                                where a theme names that one and not this
 
@@ -1077,9 +1079,10 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
     One argument, the name of the theme file to write (case-insensitive, no extension).
 
-    Writes everything about the way this run looks into a theme file: whatever theme was loaded,
-    plus the style block of the configuration, plus any '--style' given on the command line, all
-    flattened into values. The file stands on its own and can be shared as it is.
+    Writes the way this run looks into a theme file: whatever theme was loaded, plus the style
+    block of the configuration, plus any '--style' given on the command line, flattened into
+    values. The file names only the tokens that differ from the styles mezura ships, so it can be
+    shared as it is, and every token it leaves out follows mezura's own style in each version.
 
     Combined with '--save', the configuration that is written points at this theme by name and
     carries no styles of its own.
@@ -1114,9 +1117,10 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
     A language file you changed is replaced too, since one that has fallen behind counts wrongly,
     but your copy is saved under 'data/replaced/<version>/<date and time>/' so you can carry your
-    changes over, a fresh directory per run. A language file of your own is never touched, and
-    neither are your themes or your default configuration: those are written when absent and left
-    alone.
+    changes over, a fresh directory per run. A shipped theme you edited is put back too, with your
+    copy saved the same way. A language file or a theme of your own is never touched, and neither is
+    a theme you edited that is no longer shipped, or your default configuration, which is written
+    when absent and left alone.
 
     A 'language_conflicts.txt' you have not edited is brought whole to each new version. An edited
     one is merged: your contest lines are kept as they are, lines for extensions your copy never

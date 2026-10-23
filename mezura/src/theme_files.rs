@@ -51,6 +51,12 @@ pub fn generate_theme_editor_page(themes_dir: &str, data_dir: &str) -> io::Resul
     Ok(out_path)
 }
 
+// The default and its variations lead every listing, and the rest follow by name
+pub fn build_listing_key(name: &str) -> (bool, String) {
+    let lowered = name.to_lowercase();
+    (!lowered.starts_with("mezura"), lowered)
+}
+
 // Carries every token a theme moves and not only its language colors, and resolves each file first,
 // so one that names a token twice hands over the value that would be printed.
 fn build_themes_js(themes_dir: &str) -> io::Result<String> {
@@ -65,7 +71,7 @@ fn build_themes_js(themes_dir: &str) -> io::Result<String> {
         let resolved = super::theme::resolve(&super::theme::parse_theme_file(&contents).0, &[], &[]);
         entries.push((stem.to_owned(), resolved.find_non_default_tokens()));
     }
-    entries.sort_by_key(|x| x.0.to_lowercase());
+    entries.sort_by_key(|x| build_listing_key(&x.0));
 
     Ok(entries.iter().map(|(name, styles)| {
         format!("{{name:\"{}\",styles:{{{}}}}}", js_escape(name),
@@ -109,6 +115,13 @@ mod tests {
                 "docs/theme-editor/index.html no longer matches the embedded template and the themes \
                  in data/themes. Regenerate it with \
                  MEZURA_UPDATE_PUBLISHED=1 cargo test -p mezura published_theme_editor");
+    }
+
+    #[test]
+    fn the_mezura_themes_lead_a_listing_and_the_rest_follow_by_name() {
+        let mut names = ["Ocean", "mezura-classic", "Catppuccin-light", "Mezura", "catppuccin"];
+        names.sort_by_key(|x| super::build_listing_key(x));
+        assert_eq!(["Mezura", "mezura-classic", "catppuccin", "Catppuccin-light", "Ocean"], names);
     }
 
     // The page carries its own copy of the style mezura ships for every token it lets somebody edit,

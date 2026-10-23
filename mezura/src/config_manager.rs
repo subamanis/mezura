@@ -2234,6 +2234,19 @@ mod tests {
     }
 
     #[test]
+    fn a_configuration_naming_a_theme_that_is_gone_runs_with_the_default_styles() {
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let test_file_path = &crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/test-gone-theme.txt");
+        let _ = std::fs::remove_file(test_file_path);
+        std::fs::write(test_file_path, "===> theme\nwithdrawn-theme000\n").unwrap();
+
+        let config = create_config_from_args("./ --load test-gone-theme").unwrap();
+        assert_eq!(Theme::default(), config.view.theme);
+
+        std::fs::remove_file(test_file_path).unwrap();
+    }
+
+    #[test]
     fn force_lang_takes_pairs_of_an_extension_and_a_language_and_refuses_anything_else() {
         let forced = |args: &str| create_config_from_args(&format!("./ --force-language {args}"))
                 .map(|x| x.engine.forced_languages.to_written_form());
