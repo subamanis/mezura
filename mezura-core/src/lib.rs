@@ -60,10 +60,11 @@ pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, PathPatte
 pub use engine::identity::{Claim, ClaimKind, SettledBy};
 pub use engine::path_patterns::{PatternError, validate_exclude_patterns, validate_test_patterns};
 pub use engine::targets::TargetError;
+pub use engine::test_detection::TestPreset;
 pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, TestFileRule, explain_file};
 pub use languages::{LanguageClaims, Languages};
 pub use progress::ScanProgress;
-pub use result::{FaultyFileDetails, FileEntry, FilesPresent, ModuleResult, Performance, RunError,
+pub use result::{AppliedPreset, FaultyFileDetails, FileEntry, FilesPresent, ModuleResult, Performance, RunError,
         RunResult, ScanSkip, SkippedFiles, SortCriterion, TestCode, UnreadableDirDetails};
 pub use warnings::{Affects, Code, Warning};
 
@@ -81,7 +82,9 @@ use crossbeam_deque::{Injector, Worker};
 use engine::file_parser::NestedLanguageLookup;
 use engine::modules::{ModuleId, Modules};
 use engine::path_patterns::{PathPatternMatcher, TakingBack, Unused, UnusedPattern};
-use engine::test_detection::{DirectoryScope, FilesOnDisk, TestScope, promote_declared_test_modules};
+use engine::test_detection::{ActivePreset, DirectoryScope, FilesOnDisk, OwnListing, PresetClimb, TestScope,
+        promote_declared_test_modules};
+use engine::test_detection::TEST_PRESETS;
 
 /// The name of the file that decides which language gets an extension or a file name two of them
 /// claim.
@@ -106,6 +109,7 @@ pub(crate) type NestedLanguageMapMut = Arc<Mutex<Vec<HashMap<String,HashMap<Stri
 pub(crate) type TestCodeMapMut = Arc<Mutex<Vec<HashMap<String, TestCode>>>>;
 pub(crate) type FilesPerModuleMut = Arc<Mutex<Vec<HashMap<String, Vec<FileEntry>>>>>;
 pub(crate) type ModuleRowsMut = Arc<Mutex<Vec<engine::test_detection::ModuleRow>>>;
+pub(crate) type AppliedPresetsMut = Arc<Mutex<Vec<Arc<ActivePreset>>>>;
 
 /// Counts the directories and files the configuration names, and gives back the figures.
 ///
@@ -179,11 +183,12 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
             .chain(patterns.read_from.clone()).collect::<Vec<_>>();
     let mut warnings = describe_patterns_that_changed_nothing(&config, &exclude_patterns, &test_patterns,
             |matcher, patterns| matcher.find_places_out_of_reach(&roots_of(patterns)));
-    queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector, &mut files_present,
-            &language_lookups, &modules, &progress);
+    let presets_above_the_targets = queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector,
+            &mut files_present, &language_lookups, &modules, &progress);
 
     let files_stats = Arc::new(Mutex::new(files_present));
     let unreadable_dirs = Arc::new(Mutex::new(Vec::new()));
+    let applied_presets: AppliedPresetsMut = Arc::new(Mutex::new(presets_above_the_targets));
 
     let mut producer_handles = Vec::with_capacity(config.threads.producers());
     let mut consumer_handles = Vec::with_capacity(config.threads.consumers());
@@ -206,7 +211,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
         match engine::producer::start_producer_thread(i, files_injector.clone(), dirs_injector.clone(), worker,
                 stealers.clone(), idle_producers.clone(), language_lookups.clone(), exclude_patterns.clone(),
                 test_patterns.clone(), config.clone(), files_stats.clone(), modules.clone(), unreadable_dirs.clone(),
-                producers_total.clone(), worker_panics.clone(), progress.clone()) {
+                applied_presets.clone(), producers_total.clone(), worker_panics.clone(), progress.clone()) {
             Ok(handle) => producer_handles.push(handle),
             Err(x) => last_refusal = Some(x)
         }
@@ -310,11 +315,12 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     }
     warnings.extend(describe_patterns_that_changed_nothing(&config, &exclude_patterns, &test_patterns,
             |matcher, patterns| matcher.find_names_that_matched_nothing(patterns.reports_unmatched_names)));
+    let applied_presets = describe_applied_presets(&applied_presets.lock().unwrap());
     let relevant_files_num = files_present.relevant_files;
     if relevant_files_num == 0 {
         return Ok(RunResult::of_nothing(files_present,
                 Performance { duration_millis: parsing_duration_millis, threads: threads_used }, &modules,
-                targets.to_vec(), std::mem::take(&mut unreadable_dirs.lock().unwrap()), warnings));
+                targets.to_vec(), std::mem::take(&mut unreadable_dirs.lock().unwrap()), warnings, applied_presets));
     }
 
     let mut stats_guard = stats_per_module.lock();
@@ -377,8 +383,18 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
         performance: Performance { duration_millis: parsing_duration_millis, threads: threads_used },
         targets: targets.to_vec(),
         unreadable_dirs: std::mem::take(&mut unreadable_dirs.lock().unwrap()),
-        warnings
+        warnings,
+        applied_presets
     })
+}
+
+/// The test presets this crate ships. For each test tool it gives the files that make the scan
+/// apply its default names on its own, and the patterns those names are.
+///
+/// A caller that lets somebody declare a preset by name reads the patterns from here, and a caller
+/// that lists what the scan can turn on reads the trigger files.
+pub fn get_test_presets() -> &'static [TestPreset] {
+    &TEST_PRESETS
 }
 
 /// Whether this run will print a report of where its time went to the error output, which the
@@ -404,12 +420,16 @@ impl Drop for WalkDoneGuard {
 // Only the outermost targets are queued. One that sits inside another is reached by the scan of the
 // one around it, and queueing both would count its files twice; the name it was given is not lost
 // with it, the module table still hands it back on the way down.
+//
+// What comes back is every preset the folders above the targets turned on, which the walk never
+// sees since it starts at the targets.
 pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets::Targets, test_patterns: &PathPatternMatcher,
         dirs_injector: &Arc<Injector<TraversedDir>>, files_injector: &Arc<Injector<ParsableFile>>,
         files_present: &mut FilesPresent, language_lookups: &engine::identity::ModuleLookups, modules: &Modules,
-        progress: &ScanProgress)
+        progress: &ScanProgress) -> Vec<Arc<ActivePreset>>
 {
     let mut scopes_of_directories = HashMap::new();
+    let climb = PresetClimb::default();
     for target in crate::engine::targets::topmost_targets(targets) {
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(&target);
@@ -427,7 +447,7 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
                 false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module, size)
             };
             let holder = find_test_scope_of_target(config, test_patterns, dir_path.parent().unwrap_or(dir_path), names_root,
-                    &mut scopes_of_directories);
+                    OwnListing::Unread, &climb, &mut scopes_of_directories);
             let test_scope = match config.detect_tests {
                 true => holder.of_file(dir_path, test_patterns, &mut Vec::new()).0,
                 false => TestScope::Ordinary
@@ -439,10 +459,12 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
             progress.record_file_found();
         } else if dir_path.is_dir() {
             let gitignore_stack = GitignoreStack::for_root_dir(dir_path, ObeyedIgnoreFiles::of(config));
-            let scope = find_test_scope_of_target(config, test_patterns, dir_path, names_root, &mut scopes_of_directories);
+            let scope = find_test_scope_of_target(config, test_patterns, dir_path, names_root, OwnListing::ReadByTheWalk, &climb,
+                    &mut scopes_of_directories);
             dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module, scope, exclude_root));
         }
     }
+    climb.take_turned_on()
 }
 
 // A target inside the project reads names from the project folder's parent, as 'mezura ./' typed there would
@@ -480,13 +502,27 @@ fn describe_unused_pattern(unused: UnusedPattern, so: &str) -> Warning {
 }
 
 fn find_test_scope_of_target(config: &EngineConfig, test_patterns: &PathPatternMatcher, directory: &Path, names_root: usize,
-        known: &mut HashMap<(PathBuf, usize), DirectoryScope>) -> DirectoryScope
+        own_listing: OwnListing, climb: &PresetClimb, known: &mut HashMap<(PathBuf, usize, OwnListing), DirectoryScope>)
+-> DirectoryScope
 {
     if !config.detect_tests {
         return DirectoryScope::default();
     }
-    *known.entry((directory.to_path_buf(), names_root))
-            .or_insert_with(|| DirectoryScope::of_target(directory, names_root, test_patterns))
+    known.entry((directory.to_path_buf(), names_root, own_listing))
+            .or_insert_with(|| DirectoryScope::of_target(directory, names_root, test_patterns, climb, own_listing)).clone()
+}
+
+// Sorted here, since the threads append in whichever order they reach a directory and two runs over
+// one tree must list one order
+fn describe_applied_presets(turned_on: &[Arc<ActivePreset>]) -> Vec<AppliedPreset> {
+    let mut described = turned_on.iter().map(|preset| AppliedPreset {
+        name: preset.preset.name.to_owned(),
+        directory: preset.directory.clone(),
+        trigger_file: preset.trigger_file.to_owned(),
+        matched: preset.has_matched()
+    }).collect::<Vec<_>>();
+    described.sort_by(|a, b| (&a.directory, &a.name).cmp(&(&b.directory, &b.name)));
+    described
 }
 
 // A language nobody wrote a file in would take a row in every report and add nothing to any figure.

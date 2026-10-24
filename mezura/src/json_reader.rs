@@ -192,6 +192,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
             modules,
             nested_languages,
             tests,
+            applied_presets: Vec::new(),
             // An absent list means the paths were not detailed. Something may still have gone wrong.
             // How many there were is in 'scan' and is read either way.
             faulty_files: match root.get("faulty_files") {
@@ -567,6 +568,7 @@ mod tests {
             nested_languages: hashmap!["HTML".to_owned() => hashmap!["JavaScript".to_owned() =>
                     stats(1, 300, 20, 18, 0, hashmap!["classes".to_owned() => 1])]],
             tests,
+            applied_presets: Vec::new(),
             faulty_files: vec![FaultyFileDetails::new("D:\\dev\\a \"b\".rs".to_owned(), "stream did not contain valid UTF-8".to_owned(), 412)],
             skipped_files: SkippedFiles::default(),
             files_present: FilesPresent { total_files: 9, relevant_files: 3, excluded_files: 4 },

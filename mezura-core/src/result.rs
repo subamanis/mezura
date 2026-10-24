@@ -50,7 +50,11 @@ pub struct RunResult {
     /// above.
     pub unreadable_dirs: Vec<UnreadableDirDetails>,
     /// A pattern of the exclusions or of the test code that changed nothing, which is no error.
-    pub warnings: Vec<Warning>
+    pub warnings: Vec<Warning>,
+    /// The test presets the scan turned on by itself, one entry per preset and directory whose
+    /// listing held a file of the preset, sorted by directory. Empty while
+    /// [`crate::EngineConfig::detect_tests`] is off.
+    pub applied_presets: Vec<AppliedPreset>
 }
 
 impl RunResult {
@@ -98,7 +102,8 @@ impl RunResult {
     // leaving it out would make 'has_modules' say no and take the whole block out of the document
     // exactly when the scan came back empty.
     pub(crate) fn of_nothing(files_present: FilesPresent, performance: Performance, modules: &Modules,
-            targets: Vec<Target>, unreadable_dirs: Vec<UnreadableDirDetails>, warnings: Vec<Warning>) -> Self {
+            targets: Vec<Target>, unreadable_dirs: Vec<UnreadableDirDetails>, warnings: Vec<Warning>,
+            applied_presets: Vec<AppliedPreset>) -> Self {
         RunResult {
             per_language: HashMap::new(),
             total: Stats::default(),
@@ -118,7 +123,8 @@ impl RunResult {
             performance,
             targets,
             unreadable_dirs,
-            warnings
+            warnings,
+            applied_presets
         }
     }
 }
@@ -477,6 +483,35 @@ impl UnreadableDirDetails {
     }
 }
 
+/// A [`crate::TestPreset`] the scan turned on under one directory, because the listing of that
+/// directory held one of the preset's trigger files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AppliedPreset {
+    /// The preset's name, `jest`.
+    pub name: String,
+    /// The directory whose listing held the tool's file. Absolute, with forward slashes.
+    pub directory: String,
+    /// The tool's file that turned the preset on, `jest.config.ts`.
+    pub trigger_file: String,
+    /// Whether a counted file was judged test code through it. False where the tool is present
+    /// and no counted file under its directory has a name of its tests, and false where a `!`
+    /// pattern took every such file back.
+    pub matched: bool
+}
+
+impl AppliedPreset {
+    /// The type is non-exhaustive, so this is how a crate outside this one builds it.
+    pub fn new(name: String, directory: String, trigger_file: String, matched: bool) -> Self {
+        AppliedPreset {
+            name,
+            directory,
+            trigger_file,
+            matched
+        }
+    }
+}
+
 /// A run that produced nothing at all, as opposed to a run that produced zeros.
 ///
 /// Finding no code is a result, and every file failing to parse is a result with the reasons
@@ -567,7 +602,7 @@ mod tests {
         RunResult::of_nothing(
                 FilesPresent { total_files: relevant, relevant_files: relevant, excluded_files: 0 },
                 Performance { duration_millis: 0, threads: Threads::new(1, 1) },
-                &Modules::of(&[]), Vec::new(), unreadable, Vec::new())
+                &Modules::of(&[]), Vec::new(), unreadable, Vec::new(), Vec::new())
     }
 
     #[test]

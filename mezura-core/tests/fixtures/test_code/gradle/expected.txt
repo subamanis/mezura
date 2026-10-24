@@ -1,7 +1,9 @@
 [Java]
 app/src/test/java/AppTest.java whole
+app/src/androidTest/java/AppAndroidTest.java whole # a source set the gradle preset names under the settings file
 app/src/main/java/App.java none
 [Kotlin]
 lib/src/test/kotlin/LibTest.kt whole
+lib/src/testFixtures/kotlin/Fixtures.kt whole
 lib/src/main/kotlin/Lib.kt none
 settings.gradle.kts none

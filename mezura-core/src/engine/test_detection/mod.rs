@@ -3,9 +3,13 @@ mod module_graph;
 mod path_rules;
 mod walk;
 
+pub use path_rules::TestPreset;
+
 pub(crate) use module_graph::{Declaration, FilesOnDisk, ModuleDeclarations, ModuleRow, find_declaring_chain,
         promote_declared_test_modules};
-pub(crate) use path_rules::{BuildFilesSeen, DirectoryScope, TestScope, TestsByPath, find_test_directory_along};
+pub(crate) use path_rules::{ActivePreset, BuildFilesSeen, DirectoryScope, OwnListing, PresetClimb, TestScope, TestsByPath,
+        TriggerFilesSeen, find_test_directory_along};
+pub(crate) use path_rules::TEST_PRESETS;
 pub(crate) use walk::TestWalk;
 
 pub(super) const fn build_byte_table(bytes: &[u8]) -> [bool; 256] {

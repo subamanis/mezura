@@ -814,7 +814,7 @@ mod tests {
     {
         RunResult {per_language, modules: Vec::new(), nested_languages: HashMap::new(), tests: HashMap::new(), total, faulty_files,
                 skipped_files: mezura_core::SkippedFiles::default(), files_present, targets: Vec::new(), unreadable_dirs: Vec::new(),
-                warnings: Vec::new(),
+                warnings: Vec::new(), applied_presets: Vec::new(),
                 performance: mezura_core::Performance { duration_millis: 1180, threads: mezura_core::Threads::new(2, 8) }}
     }
 

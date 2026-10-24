@@ -1,0 +1,6 @@
+[Python]
+tests/conftest.py whole
+tests/test_parser.py whole
+tests/helper.py none
+src/parser.py none
+src/test_utils.py none # the names apply under the folder holding the conftest.py and nowhere else

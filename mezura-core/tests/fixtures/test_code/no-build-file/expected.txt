@@ -8,3 +8,5 @@ test/c.ex none
 tests/d.swift none
 [Dart]
 integration_test/e.dart none
+[Go]
+testdata/f.go none

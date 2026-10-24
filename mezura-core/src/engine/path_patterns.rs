@@ -247,6 +247,19 @@ impl PathPatternMatcher {
         }).map(|end| absolute[..end].to_owned())
     }
 
+    // The first pattern to match at the first place along the path, for a list with no '!' in it
+    pub(crate) fn find_first_match_along(&self, absolute: &str, names_root: usize, ends_with_a_file: bool)
+    -> Option<(usize, String)>
+    {
+        let mut found = Vec::new();
+        find_ends_along(absolute, names_root).find_map(|end| {
+            let is_folder = end < absolute.len() || !ends_with_a_file;
+            let mut first = None;
+            self.for_each_match(&absolute[..end], names_root, is_folder, &mut found, |at| { first.get_or_insert(at); });
+            first.map(|at| (at, absolute[..end].to_owned()))
+        })
+    }
+
     fn for_each_match(&self, absolute: &str, names_root: usize, is_folder: bool, found: &mut Vec<usize>,
             mut each: impl FnMut(usize))
     {

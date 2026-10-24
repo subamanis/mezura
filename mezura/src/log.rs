@@ -277,7 +277,7 @@ mod tests {
         RunResult { per_language: HashMap::new(), modules, nested_languages: HashMap::new(), tests: HashMap::new(), total,
                 faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(),
                 files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(), warnings: Vec::new(),
-                performance: Performance { duration_millis: 0, threads: Threads::new(1, 1) } }
+                applied_presets: Vec::new(), performance: Performance { duration_millis: 0, threads: Threads::new(1, 1) } }
     }
 
     #[test]

@@ -1,0 +1,5 @@
+[PHP]
+tests/ParserTest.php whole
+src/Tests/FormatTest.php whole # a 'Tests' folder at any depth below the phpunit.xml
+src/Parser.php none
+src/Test.php none # a file named like a test is production in PHPUnit's own source

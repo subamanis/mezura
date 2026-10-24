@@ -36,6 +36,16 @@ New:
   test code. `TestFileRule::DeclaredModule` names the files that declare it as a module, the one
   holding the marker last, `TestFileRule::FileMarker` the annotation found in its code with its
   line, and `TestFileRule::InnerAttribute` the `#![cfg(test)]` standing before every item of it.
+- Test presets. A `TestPreset` is a test tool's default names for its test files, `*.test.ts` and
+  `__tests__/` for jest, with the files the tool keeps its configuration in, and `get_test_presets`
+  gives the shipped table: jest, vitest, mocha, pytest, unittest, rspec, minitest, phpunit, dotnet,
+  gradle, jvm, xt and odin. Where a directory listing holds one of a preset's trigger files, the
+  scan applies the preset's names under that directory on its own, a `!` pattern of
+  `EngineConfig::test_patterns` takes any of it back, and `RunResult::applied_presets` lists every
+  preset so turned on as an `AppliedPreset`, with its directory, the file that turned it on and
+  whether it decided any file. `TestFileRule::Preset` names the preset, the file and the pattern
+  for a file one decided.
+- A `testdata` directory at any depth below a `go.mod` is test code whole, as the go tool treats it.
 - `.t` files are counted as Perl.
 - `MultilineString::escapes_by_doubling` and `StringRules::with_string_pairs_escaped_by_doubling`,
   read from `Paired strings escaped by doubling`, for a pair whose closer written twice is one quote

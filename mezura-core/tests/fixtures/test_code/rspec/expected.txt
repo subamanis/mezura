@@ -1,0 +1,5 @@
+[Ruby]
+with/Gemfile none
+with/spec/parser_spec.rb whole
+with/lib/parser.rb none
+without/spec/parser_spec.rb none # a .rspec with no Gemfile beside it turns nothing on

@@ -1,0 +1,4 @@
+[JavaScript]
+test/parser.js whole
+lib/parser.js none
+lib/test.js none # a file named 'test.js' is production in mocha's own source

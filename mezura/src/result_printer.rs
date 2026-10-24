@@ -3117,7 +3117,7 @@ mod tests {
             files_hidden: 0,
             result: RunResult {total, per_language, modules, nested_languages: HashMap::new(), tests: HashMap::new(),
                     faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present, targets: Vec::new(),
-                    unreadable_dirs: Vec::new(), warnings: Vec::new(),
+                    unreadable_dirs: Vec::new(), warnings: Vec::new(), applied_presets: Vec::new(),
                     performance: mezura_core::Performance {duration_millis: 0, threads: mezura_core::Threads::new(1, 1)}}
         }
     }
@@ -3126,7 +3126,8 @@ mod tests {
         let result = RunResult {per_language: HashMap::new(),
                 modules: Vec::new(), nested_languages: HashMap::new(), tests: HashMap::new(), total: Stats::default(), faulty_files: Vec::new(),
                 skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
-                warnings: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
+                warnings: Vec::new(), applied_presets: Vec::new(),
+                performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
         let mut result = result;
         result.modules = modules.iter().map(|x| ModuleResult {
             name: x.name.clone(),
@@ -3692,7 +3693,8 @@ mod tests {
             per_language: content_info.clone(), modules, nested_languages: HashMap::new(), tests: HashMap::new(),
             total: crate::test_support::plain_stats_of(23, 485500, 10934, 7643, 650, hashmap![]),
             faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
-            warnings: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
+            warnings: Vec::new(), applied_presets: Vec::new(),
+            performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
         let single = || vec![ModuleResult {name: None, per_language: content_info.clone(),
                 total: Stats::total_of(&content_info), nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}];
 
@@ -3742,6 +3744,7 @@ mod tests {
             per_language: content_info.clone(), modules, nested_languages: HashMap::new(), tests: HashMap::new(),
             total: total.clone(), faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(),
             targets: vec![mezura_core::Target::of("D:/x")], unreadable_dirs: Vec::new(), warnings: Vec::new(),
+            applied_presets: Vec::new(),
             performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
 
         let split = || vec![of_module(Some("web"), &["HTML"]), of_module(None, &["Python", "Rust"])];
@@ -3889,7 +3892,8 @@ mod tests {
                     files: HashMap::new() }],
             nested_languages: nested.clone(), tests: HashMap::new(), total: total.clone(), faulty_files: Vec::new(),
             skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
-            warnings: Vec::new(), performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
+            warnings: Vec::new(), applied_presets: Vec::new(),
+            performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
 
         for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
             for top in [None, Some(1), Some(3), Some(6)] {

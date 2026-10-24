@@ -1408,6 +1408,53 @@ fn a_pattern_declares_test_code_whole_and_a_later_negative_takes_it_back_while_t
 }
 
 #[test]
+fn a_tools_own_file_turns_its_names_on_under_its_directory_and_the_run_lists_what_decided_anything() {
+    let root = write_tree("mezura-applied-presets", &[("proj/jest.config.js", "module.exports = {};\n"),
+            ("proj/src/parser.test.js", "test('a', () => {});\n"), ("proj/src/parser.js", "export {};\n"),
+            ("proj/src/__tests__/render.js", "test('b', () => {});\n"), ("proj/api/phpunit.xml", "<phpunit/>\n"),
+            ("proj/api/src/Parser.php", "<?php\n"), ("proj/api/tests/fixture.json", "{}\n"), ("proj/rails/.rspec", ""), ("proj/rails/Gemfile", ""),
+            ("proj/rails/spec/parser_spec.rb", "describe Parser do\nend\n"), ("proj/rails/lib/parser.rb", "class Parser\nend\n")]);
+    let root_str = root.to_string_lossy().replace('\\', "/");
+    let at = |path: &str| format!("{root_str}/{path}");
+    let config_of = |target: &str, test_patterns: PathPatterns, detect_tests: bool| EngineConfig { detect_tests,
+            collect_files: true, threads: Threads::new(1, 4), test_patterns, ..EngineConfig::new([target]) };
+    let listed = |result: &mezura_core::RunResult| result.applied_presets.iter()
+            .map(|x| (x.name.clone(), x.directory.clone(), x.trigger_file.clone(), x.matched)).collect::<Vec<_>>();
+    let row = |name: &str, directory: &str, trigger_file: &str, matched: bool|
+            (name.to_owned(), at(directory), trigger_file.to_owned(), matched);
+    let tests_of = |result: &mezura_core::RunResult, language: &str| result.tests.get(language).map(share_of);
+
+    let whole = count_with_shipped_languages(&config_of(&at("proj"), PathPatterns::of(&[] as &[&str]), true));
+    assert_eq!(vec![row("jest", "proj", "jest.config.js", true), row("phpunit", "proj/api", "phpunit.xml", false),
+            row("rspec", "proj/rails", ".rspec", true)], listed(&whole), "a folder with no counted file under it counts as matched");
+    assert_eq!(Some((2, 2, 42, 2)), tests_of(&whole, "JavaScript"));
+    assert_eq!(Some((1, 2, 23, 1)), tests_of(&whole, "Ruby"));
+    assert_eq!(None, tests_of(&whole, "PHP"));
+
+    let taken_back = count_with_shipped_languages(&config_of(&at("proj"), PathPatterns::of(["!*.js"]), true));
+    assert_eq!(vec![row("jest", "proj", "jest.config.js", false), row("phpunit", "proj/api", "phpunit.xml", false),
+            row("rspec", "proj/rails", ".rspec", true)], listed(&taken_back), "a preset a '!' overruled on every file counts as matched");
+    assert_eq!(None, tests_of(&taken_back, "JavaScript"));
+    let ruby_only = count_with_shipped_languages(&EngineConfig { languages_of_interest: vec!["Ruby".to_owned()].into(),
+            ..config_of(&at("proj"), PathPatterns::of(&[] as &[&str]), true) });
+    assert_eq!(vec![row("jest", "proj", "jest.config.js", false), row("phpunit", "proj/api", "phpunit.xml", false),
+            row("rspec", "proj/rails", ".rspec", true)], listed(&ruby_only), "a preset of a language left out counts as matched");
+
+    let below = count_with_shipped_languages(&config_of(&at("proj/src"), PathPatterns::of(&[] as &[&str]), true));
+    assert_eq!(vec![row("jest", "proj", "jest.config.js", true)], listed(&below), "the folders above the target were not climbed");
+    assert_eq!(Some((2, 2, 42, 2)), tests_of(&below, "JavaScript"));
+    let by_glob = count_with_shipped_languages(&config_of(&at("proj/**/*.js"), PathPatterns::of(&[] as &[&str]), true));
+    assert_eq!(vec![row("jest", "proj", "jest.config.js", true)], listed(&by_glob), "one target per file listed the preset per target");
+    assert_eq!(Some((2, 2, 42, 2)), tests_of(&by_glob, "JavaScript"));
+    let one_file = count_with_shipped_languages(&config_of(&at("proj/src/parser.test.js"), PathPatterns::of(&[] as &[&str]), true));
+    assert_eq!(Some((1, 1, 21, 1)), tests_of(&one_file, "JavaScript"), "the folder holding a file target was not read");
+
+    let off = count_with_shipped_languages(&config_of(&at("proj"), PathPatterns::of(&[] as &[&str]), false));
+    std::fs::remove_dir_all(&root).unwrap();
+    assert!(off.applied_presets.is_empty() && off.tests.is_empty());
+}
+
+#[test]
 fn an_exclusion_never_reaches_above_the_target_and_one_naming_a_path_that_changes_nothing_is_reported() {
     let root = write_tree("mezura-exclude-patterns", &[("tests/proj/src/lib.rs", "pub fn a() {}\n"),
             ("tests/proj/src/gen/g.rs", "pub fn g() {}\npub fn h() {}\n"),
@@ -1433,8 +1480,7 @@ fn an_exclusion_never_reaches_above_the_target_and_one_naming_a_path_that_change
     assert_eq!((10, 0, none.clone()), counted(&proj_str, of(&[&format!("{proj_str}/src/gen")])), "a full path did not exclude what it names");
     assert_eq!((10, 0, none.clone()), counted(&proj_str, of(&["proj/src/gen"])), "a name does not see the target's own name");
     assert_eq!((12, 0, vec!["tests/proj/src/gen".to_owned()]), counted(&proj_str, of(&["tests/proj/src/gen"])),
-            "a name reaching above the target matched, or went unreported");
-    assert_eq!((8, 0, none.clone()), counted(&proj_str, of(&["build/"])), "a script named 'build' was left out with the folder");
+            "a name reaching above the target matched, or went unreported");    assert_eq!((8, 0, none.clone()), counted(&proj_str, of(&["build/"])), "a script named 'build' was left out with the folder");
     assert_eq!((6, 0, none.clone()), counted(&proj_str, of(&["build"])));
     assert_eq!((10, 1, none.clone()), counted(&proj_str, of(&["g.rs"])), "a file left out was not counted as excluded");
     assert_eq!((12, 0, vec![format!("{proj_str}/nowhere")]), counted(&proj_str, of(&[&format!("{proj_str}/nowhere")])),

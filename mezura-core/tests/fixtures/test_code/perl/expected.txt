@@ -1,3 +1,6 @@
 [Perl]
 parser.t whole
 parser.pm none
+xt/author/pod.pl whole # Dist::Zilla's extra tests, under the Makefile.PL
+lib/Parser.pm none
+Makefile.PL none

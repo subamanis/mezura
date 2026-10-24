@@ -1,0 +1,6 @@
+[JavaScript]
+app/jest.config.js none
+app/src/parser.test.js whole
+app/src/parser.js none
+app/src/__tests__/render.js whole
+lib/format.test.js none # outside the directory holding the jest.config.js

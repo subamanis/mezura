@@ -138,7 +138,7 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
             per_language: HashMap::new(), total: mezura_core::Stats::default(), modules: Vec::new(),
             nested_languages: HashMap::new(), tests: HashMap::new(),
             faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(),
-            unreadable_dirs: Vec::new(), targets: Vec::new(), warnings: Vec::new(),
+            unreadable_dirs: Vec::new(), targets: Vec::new(), warnings: Vec::new(), applied_presets: Vec::new(),
             files_present: FilesPresent::default(),
             performance: mezura_core::Performance { duration_millis: 0, threads: config.engine.threads }
         }
