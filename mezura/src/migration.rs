@@ -10,7 +10,7 @@ use mezura_core::language_file::ConflictBlock;
 use crate::config_manager::VERSION_ID;
 use crate::message_printer::wrap_message;
 use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOGS_DIR_NAME,
-        THEMES_DIR_NAME};
+        TEST_PRESETS_DIR_NAME, THEMES_DIR_NAME};
 use crate::startup_timing::{Step, measure};
 
 const MANIFEST_FILE_NAME : &str = "installed.txt";
@@ -244,6 +244,9 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
             note_written_file(&mut outcome, name.to_owned() + "/", !recorded.is_empty());
         }
     }
+    // Made without a word and never demanded, since every installation older than it lacks it and a
+    // missing one only means no presets of the user's own
+    let _ = std::fs::create_dir_all(data_dir.to_owned() + TEST_PRESETS_DIR_NAME);
 
     // A file enters the manifest only once it is really on disk with the contents this version
     // ships, so one that could not be written is retried by the next run

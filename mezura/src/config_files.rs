@@ -9,11 +9,12 @@ use mezura_core::engine::config::{Target, Threads};
 use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE,
         MIN_PRODUCERS_VALUE};
 use mezura_core::{validate_exclude_patterns, validate_test_patterns};
-use mezura_core::{PathPatterns, PatternError};
+use mezura_core::PathPatterns;
 
 use super::config_manager::{self, ConfigurationBuilder};
 use super::config_manager::{MAX_COMPARE_LEVEL, MIN_COMPARE_LEVEL};
 use super::message_printer::{Formatted, wrap_message};
+use super::test_presets::expand_presets;
 use crate::paths::{DEFAULT_CONFIG_NAME, PERSISTENT_APP_PATHS};
 
 #[derive(Debug)]
@@ -93,9 +94,10 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     }
                 },
                 config_manager::EXCLUDE => read_patterns_value(&mut builder.exclude_patterns, &mut reader, &mut buf,
-                        config_manager::EXCLUDE, &mut issues, validate_exclude_patterns),
+                        config_manager::EXCLUDE, &mut issues, |written| validate_exclude_patterns(&written).ok().map(|()| written)),
                 config_manager::TESTS => read_patterns_value(&mut builder.test_patterns, &mut reader, &mut buf,
-                        config_manager::TESTS, &mut issues, validate_test_patterns),
+                        config_manager::TESTS, &mut issues, |written| expand_presets(written, &PERSISTENT_APP_PATHS.test_presets_dir)
+                                .ok().map(|expanded| expanded.patterns).filter(|patterns| validate_test_patterns(patterns).is_ok())),
                 config_manager::LANGUAGES => {
                     let langs = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_languages_to_vec);
                     if !langs.is_empty() {
@@ -414,13 +416,15 @@ fn read_flag_value(into: &mut Option<bool>, reader: &mut CountingReader, buf: &m
 }
 
 fn read_patterns_value(into: &mut Option<PathPatterns>, reader: &mut CountingReader, buf: &mut String,
-        field: &'static str, issues: &mut ConfigFileIssues, validate: fn(&[String]) -> Result<(), PatternError>)
+        field: &'static str, issues: &mut ConfigFileIssues, check: impl FnOnce(Vec<String>) -> Option<Vec<String>>)
 {
-    let patterns = read_lines_from_file_to_vec(reader, buf, super::args::parse_paths_to_vec);
-    if validate(&patterns).is_err() {
-        issues.invalid_fields.push(field);
-    } else if !patterns.is_empty() {
-        *into = Some(PathPatterns::of(patterns));
+    let written = read_lines_from_file_to_vec(reader, buf, super::args::parse_paths_to_vec);
+    if written.is_empty() {
+        return;
+    }
+    match check(written) {
+        Some(patterns) => *into = Some(PathPatterns::of(patterns)),
+        None => issues.invalid_fields.push(field)
     }
 }
 
@@ -494,7 +498,7 @@ mod tests {
                 --force-language m=matlab,.pl=Perl,ios/h=objective-c --languages rust,web/js \
                 --exclude-languages json,web/xml --by-file 12 --count-minified --count-generated \
                 --count-not-code --no-heuristics --no-shebang --tests-breakdown split \
-                --tests spec, !spec/fixtures, ./gen \
+                --tests spec, !spec/fixtures, ./gen, @xt \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
         let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
@@ -509,8 +513,10 @@ mod tests {
         assert_eq!(Some(mezura_core::PathPatterns::of(["a", "b", "c.txt", "d.txt"])), options.exclude_patterns);
         assert_eq!(config_builder.test_patterns, options.test_patterns);
         let cwd = crate::paths::normalise_separators(&std::env::current_dir().unwrap().to_string_lossy()).into_owned();
-        assert_eq!(Some(mezura_core::PathPatterns::of(["spec".to_owned(), "!spec/fixtures".to_owned(), format!("{cwd}/gen")])),
-                options.test_patterns, "a place was not written absolute, as a target is");
+        assert_eq!(Some(mezura_core::PathPatterns::of(["spec".to_owned(), "!spec/fixtures".to_owned(), format!("{cwd}/gen"),
+                "xt/".to_owned()])), options.test_patterns, "a place was not written absolute, as a target is");
+        assert!(!std::fs::read_to_string(SCRATCH_CONFIG_DIR.to_owned() + "auto-generated.txt")?.contains("@xt"),
+                "a preset was saved by its name, which another machine may not know");
         assert_eq!(config_builder.threads, options.threads);
         assert_eq!(config_builder.counting, options.counting);
         assert_eq!(config_builder.should_show_faulty_files, options.should_show_faulty_files);
@@ -537,6 +543,19 @@ mod tests {
         assert_eq!(3, options.config_styles.as_ref().unwrap().len());
 
         Ok(())
+    }
+
+    #[test]
+    fn a_preset_written_by_hand_in_a_configuration_reads_as_its_patterns() {
+        std::fs::create_dir_all(SCRATCH_CONFIG_DIR).unwrap();
+        let path = SCRATCH_CONFIG_DIR.to_owned() + "with-a-preset.txt";
+        std::fs::write(&path, "===> tests\n@xt, !@gradle\n\n===> exclude\n@types\n").unwrap();
+
+        let (read, issues) = parse_config_file(Some("with-a-preset"), Some(SCRATCH_CONFIG_DIR.to_owned())).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(issues.invalid_fields.is_empty(), "{:?}", issues.invalid_fields);
+        assert_eq!(Some(PathPatterns::of(["xt/", "!src/*Test/", "!src/testFixtures/"])), read.test_patterns);
+        assert_eq!(Some(PathPatterns::of(["@types"])), read.exclude_patterns, "an exclusion read a name starting with '@' as a preset");
     }
 
     // Every flag above is written from a command line, where a flag is either given or not, so a

@@ -32,6 +32,7 @@ mod result_printer;
 mod sources;
 mod startup_timing;
 mod suggestions;
+mod test_presets;
 #[cfg(test)]
 mod test_support;
 mod theme;
@@ -50,7 +51,7 @@ use mezura_core::language_file::ConflictRules;
 
 use crate::config_manager::{Configuration, OutputFormat};
 use crate::config_manager::{CHANGELOG, COUNTING, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
-        SHOW_LANGUAGES, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
+        SHOW_LANGUAGES, SHOW_PRESETS, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
 use crate::message_printer::Formatted;
 use crate::migration::{MigrationOutcome, migrate_data_files};
 use crate::startup_timing::{Report, Step, measure, record, record_language_files, stamp};
@@ -265,6 +266,9 @@ fn main() -> ExitCode {
             // Beside a revision this run is one side of two, so a pattern reaching nothing says which
             let against_a_revision = counted_baseline.as_ref().is_some_and(crate::diff::CountedBaseline::is_a_revision);
             for warning in &result.warnings {
+                if crate::test_presets::is_about_a_preset_pattern(warning, &config.view.test_patterns_from_presets) {
+                    continue;
+                }
                 let mut warning = warning.clone();
                 if against_a_revision && warning.code == mezura_core::warnings::Code::PatternMatchedNothing {
                     warning.message = format!("In the working tree, {}", warning.message);
@@ -483,7 +487,7 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
     // The one list that decides which command answers when several were typed: the first one
     // present wins, the refusal below names it, and the match below runs it.
     let message_command = [HELP, VERSION, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, RESTORE,
-            THEME_EDITOR, SHOW_THEMES].into_iter().find(|x| is_present(x))?;
+            THEME_EDITOR, SHOW_THEMES, SHOW_PRESETS].into_iter().find(|x| is_present(x))?;
 
     // Refused rather than answered, and before the banner below, which would otherwise be the first
     // thing written: 'mezura --output json --help > stats.json' leaves a file named for a document
@@ -540,6 +544,10 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
         },
         SHOW_CONFIGS => {
             crate::message_printer::print_existing_configs();
+            Some(ExitCode::SUCCESS)
+        },
+        SHOW_PRESETS => {
+            crate::message_printer::print_test_presets();
             Some(ExitCode::SUCCESS)
         },
         RESTORE => {

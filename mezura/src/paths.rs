@@ -14,6 +14,7 @@ pub const LANGUAGES_DIR_NAME : &str = "languages";
 pub const THEMES_DIR_NAME : &str = "themes";
 pub const CONFIG_DIR_NAME : &str = "config";
 pub const LOGS_DIR_NAME : &str = "logs";
+pub const TEST_PRESETS_DIR_NAME : &str = "test-presets";
 pub const DEFAULT_CONFIG_NAME : &str = "default.txt";
 pub const LOCAL_DIR_NAME : &str = ".mezura";
 pub const LOCAL_CONFIG_FILE_NAME : &str = "config.txt";
@@ -31,6 +32,7 @@ pub struct PersistentAppPaths {
     pub themes_dir: String,
     pub config_dir: String,
     pub logs_dir: String,
+    pub test_presets_dir: String,
     // Whether the environment named the directory rather than the system. The run says so while it
     // is true, since a variable left set months ago hides every saved configuration and theme with
     // nothing on screen to explain where they went.
@@ -59,6 +61,7 @@ impl PersistentAppPaths {
             themes_dir: data_dir.clone() + THEMES_DIR_NAME + "/",
             config_dir: data_dir.clone() + CONFIG_DIR_NAME + "/",
             logs_dir: data_dir.clone() + LOGS_DIR_NAME + "/",
+            test_presets_dir: data_dir.clone() + TEST_PRESETS_DIR_NAME + "/",
             data_dir,
             named_by_the_environment
         }

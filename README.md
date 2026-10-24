@@ -145,6 +145,7 @@ WHAT IS COUNTED
                        extension
   --no-shebang         identify every file by its name alone, leaving the '#!' line inside it unread
   --show-languages     print the languages this installation knows, with their extensions, and stop
+  --show-presets       print the test presets, the shipped ones and your own, and stop
 
 HOW THE REPORT LOOKS
 
@@ -180,6 +181,7 @@ YOUR DATA DIRECTORY
   --load               take the flags of this run from a saved configuration file
   --no-default-config  ignore the default configuration of this machine
   --save-theme         save the way this run looks as a named theme
+  --save-preset        save the test patterns of this run as a test preset of your own
   --show-configs       print the configurations this installation holds and stop
   --restore            put the data directory back to what this version ships, and stop
 

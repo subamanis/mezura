@@ -10,6 +10,7 @@ use mezura_core::engine::path_patterns::{absolutize_path_pattern, is_a_path_patt
 
 use super::message_printer::{Formatted, wrap_message};
 use super::paths::LocalDir;
+use super::test_presets::{ExpandedPatterns, can_name_a_preset, expand_presets, is_a_shipped_name, write_user_preset};
 use super::{message_printer, suggestions, theme::Theme};
 
 // Printed at startup and by '--version'. Also in mezura/Cargo.toml, and the two move together.
@@ -53,6 +54,7 @@ pub const LOG                :&str   = "log";
 pub const COMPARE_LEVEL     :&str   = "compare";
 pub const SAVE               :&str   = "save";
 pub const SAVE_THEME         :&str   = "save-theme";
+pub const SAVE_PRESET        :&str   = "save-preset";
 pub const SAVE_LOCAL         :&str   = "save-local";
 pub const LOAD               :&str   = "load";
 pub const NO_LOCAL           :&str   = "no-local";
@@ -63,7 +65,8 @@ pub const CHANGELOG          :&str   = "changelog";
 pub const SHOW_LANGUAGES     :&str   = "show-languages";
 pub const SHOW_CONFIGS       :&str   = "show-configs";
 pub const SHOW_THEMES        :&str   = "show-themes";
-pub const THEME_EDITOR       :&str   = "theme-editor";
+pub const SHOW_PRESETS       :&str   = "show-presets";
+pub const THEME_EDITOR      :&str   = "theme-editor";
 pub const RESTORE            :&str   = "restore";
 
 pub const MIN_COMPARE_LEVEL   : usize = 0;
@@ -125,6 +128,8 @@ pub struct ViewConfig {
     pub config_name_to_save: Option<String>,
     pub config_name_to_load: Option<String>,
     pub theme_name_to_save: Option<String>,
+    // The test patterns a typed '@name' wrote, which never warn for having matched nothing
+    pub test_patterns_from_presets: Vec<String>,
     // The project's own folder, when the run is inside one and was not told to ignore it. It
     // decides where a log with no configuration named goes, and it says whether the project's
     // settings were the ones this run counted with.
@@ -201,6 +206,7 @@ impl Default for ViewConfig {
             config_name_to_save: None,
             config_name_to_load: None,
             theme_name_to_save: None,
+            test_patterns_from_presets: Vec::new(),
             local_dir: None,
             bar_thickness: BarThickness::default(),
             progress_bar: ProgressBarStyle::default(),
@@ -741,7 +747,8 @@ impl TypedExplicitlyOnCommandLine {
             targets: _, targets_source: _, threads: _, should_show_faulty_files: _,
             should_show_skipped_files: _, theme_name: _,
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
-            theme_name_to_save: _, local_dir: _, bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _,
+            theme_name_to_save: _, preset_name_to_save: _, test_patterns_from_presets: _, local_dir: _, bar_thickness: _,
+            progress_bar: _, number_separator: _, decimal_separator: _,
             layout: _, output: _, explain: _, diff_against: _, sort_by: _, top_n: _, by_file: _,
             tests_breakdown: _, styles: _, config_styles: _, theme_styles: _, typed_explicitly: _ } = builder;
 
@@ -802,8 +809,11 @@ pub struct ConfigurationBuilder {
     pub config_name_to_save:      Option<String>,
     pub config_name_to_load:      Option<String>,
     pub theme_name_to_save:       Option<String>,
+    pub preset_name_to_save:      Option<String>,
+    // Bookkeeping about the command line like 'typed_explicitly', so never merged from a file
+    pub test_patterns_from_presets: Vec<String>,
     // Found by looking around the targets rather than filled by any command, so it is absent from
-    // 'add_missing_fields' and 'has_missing_fields' along with the two names above it
+    // 'add_missing_fields' and 'has_missing_fields' along with the names to save and load above it
     pub local_dir:                Option<LocalDir>,
     pub bar_thickness:            Option<BarThickness>,
     pub progress_bar:             Option<ProgressBarStyle>,
@@ -878,8 +888,8 @@ impl ConfigurationBuilder {
             sort_by: _, top_n: _, by_file: _, tests_breakdown: _, config_styles: _,
             // never carried by a configuration file, so never merged out of one either
             targets_source: _, log: _, config_name_to_save: _, config_name_to_load: _,
-            theme_name_to_save: _, local_dir: _, output: _, explain: _, diff_against: _,
-            styles: _, theme_styles: _, typed_explicitly: _ } = &mut self;
+            theme_name_to_save: _, preset_name_to_save: _, test_patterns_from_presets: _, local_dir: _, output: _,
+            explain: _, diff_against: _, styles: _, theme_styles: _, typed_explicitly: _ } = &mut self;
 
         // The two names of 'hide' that stop a counting, the rest of the list is the look
         if let Some(hidden) = hidden {
@@ -1017,6 +1027,7 @@ impl ConfigurationBuilder {
                 config_name_to_save: self.config_name_to_save.clone(),
                 config_name_to_load: self.config_name_to_load.clone(),
                 theme_name_to_save: self.theme_name_to_save.clone(),
+                test_patterns_from_presets: self.test_patterns_from_presets.clone(),
                 local_dir: self.local_dir.clone(),
                 bar_thickness: self.bar_thickness.unwrap_or_default(),
                 progress_bar: self.progress_bar.unwrap_or_default(),
@@ -1043,7 +1054,11 @@ impl ConfigurationBuilder {
 
 // An empty line is a run that typed nothing at all, which names no target and no command.
 pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
-    let config = create_config_builder_from_args(line)?.build();
+    let builder = create_config_builder_from_args(line)?;
+    let config = builder.build();
+    if let Some(name) = &builder.preset_name_to_save {
+        save_the_test_preset(name, &config.engine.test_patterns.patterns);
+    }
 
     // Written from the resolved theme and therefore after it is built, which is also why this does
     // not sit next to '--save': what the file has to hold is the look, not the pieces it came from
@@ -1172,8 +1187,13 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 }
                 config_builder.targets = Some(parsed)
             },
-            EXCLUDE => config_builder.exclude_patterns = Some(parse_patterns_or_refuse(EXCLUDE, arguments, validate_exclude_patterns)?),
-            TESTS => config_builder.test_patterns = Some(parse_patterns_or_refuse(TESTS, arguments, validate_test_patterns)?),
+            EXCLUDE => config_builder.exclude_patterns = Some(PathPatterns::of(
+                    parse_patterns_or_refuse(EXCLUDE, arguments, check_exclude_patterns)?.patterns)),
+            TESTS => {
+                let expanded = parse_patterns_or_refuse(TESTS, arguments, expand_and_check_test_patterns)?;
+                config_builder.test_patterns = Some(PathPatterns::of(expanded.patterns));
+                config_builder.test_patterns_from_presets = expanded.from_presets;
+            },
             LANGUAGES => config_builder.languages_of_interest = Some(parse_or_refuse(LANGUAGES, arguments,
                     |x| Some(super::args::parse_languages_to_vec(x)).filter(|vec| !vec.is_empty()))?),
             EXCLUDE_LANGUAGES => config_builder.excluded_languages = Some(parse_or_refuse(EXCLUDE_LANGUAGES, arguments,
@@ -1262,6 +1282,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             },
             SAVE => config_builder.config_name_to_save = Some(take_name(SAVE, arguments)?),
             SAVE_THEME => config_builder.theme_name_to_save = Some(take_name(SAVE_THEME, arguments)?),
+            SAVE_PRESET => config_builder.preset_name_to_save = Some(parse_or_refuse(SAVE_PRESET, arguments,
+                    |x| Some(x.trim().to_owned()).filter(|name| can_name_a_preset(name) && !is_a_shipped_name(name)))?),
             SAVE_LOCAL => save_local = take_flag(command, SAVE_LOCAL)?,
             NO_LOCAL => no_local = take_flag(command, NO_LOCAL)?,
             NO_DEFAULT_CONFIG => no_default_config = take_flag(command, NO_DEFAULT_CONFIG)?,
@@ -1398,17 +1420,50 @@ fn parse_or_refuse<T>(command: &str, arguments: &str,
 
 // A place is stored absolute, as a target is, so a saved configuration names it from anywhere
 fn parse_patterns_or_refuse(command: &str, arguments: &str,
-        validate: impl FnOnce(&[String]) -> Result<(), mezura_core::PatternError>) -> Result<PathPatterns, ArgParsingError>
+        check: impl FnOnce(Vec<String>) -> Result<ExpandedPatterns, String>) -> Result<ExpandedPatterns, ArgParsingError>
 {
     parse_or_refuse(command, arguments, |arguments| {
-        let patterns = Some(super::args::parse_paths_to_vec(arguments)).filter(|vec| !vec.is_empty())?;
-        if let Err(why) = validate(&patterns) {
-            eprintln!("\n{}", wrap_message(&why.to_string()).red());
-            return None;
+        let written = Some(super::args::parse_paths_to_vec(arguments)).filter(|vec| !vec.is_empty())?;
+        match check(written) {
+            Ok(checked) => Some(ExpandedPatterns { patterns: absolutize_path_patterns(&checked.patterns),
+                    from_presets: absolutize_path_patterns(&checked.from_presets) }),
+            Err(why) => {
+                eprintln!("\n{}", why.red());
+                None
+            }
         }
-
-        Some(PathPatterns::of(patterns.iter().map(|pattern| absolutize_path_pattern(pattern))))
     })
+}
+
+// Both answer a refusal already wrapped
+fn check_exclude_patterns(written: Vec<String>) -> Result<ExpandedPatterns, String> {
+    validate_exclude_patterns(&written).map_err(|why| wrap_message(&why.to_string()))?;
+    Ok(ExpandedPatterns { patterns: written, from_presets: Vec::new() })
+}
+
+fn expand_and_check_test_patterns(written: Vec<String>) -> Result<ExpandedPatterns, String> {
+    let presets_dir = &crate::paths::PERSISTENT_APP_PATHS.test_presets_dir;
+    let expanded = expand_presets(written, presets_dir).map_err(|why| why.format_message(presets_dir))?;
+    validate_test_patterns(&expanded.patterns).map_err(|why| wrap_message(&why.to_string()))?;
+    Ok(expanded)
+}
+
+fn absolutize_path_patterns(patterns: &[String]) -> Vec<String> {
+    patterns.iter().map(|pattern| absolutize_path_pattern(pattern)).collect()
+}
+
+fn save_the_test_preset(name: &str, patterns: &[String]) {
+    let presets_dir = &crate::paths::PERSISTENT_APP_PATHS.test_presets_dir;
+    if patterns.is_empty() {
+        eprintln!("\n{}", wrap_message(&format!("Nothing to save in test preset '{name}': this run declares no test \
+                patterns.")).yellow());
+        return;
+    }
+    match write_user_preset(presets_dir, name, patterns) {
+        Err(error) => eprintln!("\n{}", wrap_message(&format!(
+                "Test preset '{name}' could not be written to '{presets_dir}': {error}")).yellow()),
+        Ok(path) => eprintln!("\nTest preset '{name}' saved in '{path}'. Use it with '--{TESTS} @{name}'.")
+    }
 }
 
 fn take_flag(segment: &str, command: &str) -> Result<bool, ArgParsingError> {
@@ -1586,8 +1641,9 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             // them and they never reach 'invalid_fields'
             languages_of_interest: _, excluded_languages: _,
             // not carried by a configuration file at all
-            config_name_to_save: _, config_name_to_load: _, theme_name_to_save: _, output: _,
+            config_name_to_save: _, config_name_to_load: _, theme_name_to_save: _, preset_name_to_save: _, output: _,
             explain: _, diff_against: _, log: _, targets_source: _, local_dir: _, typed_explicitly: _,
+            test_patterns_from_presets: _,
             // a style that does not parse is reported per line and skipped, and the rest of the file
             // still applies, so these warn instead of reaching here
             styles: _, config_styles: _, theme_styles: _ } = config_builder;
@@ -1791,6 +1847,9 @@ mod tests {
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("tests".to_owned(), String::new())), create_config_from_args("./ --tests"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("tests".to_owned(), "[invalid".to_owned())), create_config_from_args("./ --tests [invalid"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("tests".to_owned(), "!".to_owned())), create_config_from_args("./ --tests !"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("tests".to_owned(), "@nope".to_owned())), create_config_from_args("./ --tests @nope"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save-preset".to_owned(), "Jest".to_owned())),
+                create_config_from_args("./ --save-preset Jest"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("no-gitignore".to_owned())), create_config_from_args("./ --no-gitignore a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned(), String::new())), create_config_from_args("./ --load"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned(), String::new())), create_config_from_args("./ --load   "));
@@ -1838,6 +1897,12 @@ mod tests {
                 create_config_from_args("./ --exclude ./gen/, D:/x/**").unwrap(), "a place was not stored absolute, as a target is");
         assert_eq!(conf("./", |c| {c.engine.test_patterns = PathPatterns::of(["spec".to_owned(), "!spec/fixtures".to_owned(), format!("{cwd}/gen")]); c.typed_explicitly.tests = true;}),
                 create_config_from_args("./ --tests spec, !spec/fixtures ,  ./gen").unwrap());
+        let pytest = ["test_*.py", "*_test.py", "conftest.py"].map(str::to_owned);
+        assert_eq!(conf("./", |c| {c.engine.test_patterns = PathPatterns::of(pytest.iter().chain(&["!tests/data/".to_owned()]));
+                c.view.test_patterns_from_presets = pytest.to_vec(); c.typed_explicitly.tests = true;}),
+                create_config_from_args("./ --tests @pytest, !tests/data/").unwrap(), "a preset was not written out where it was typed");
+        assert_eq!(conf("./", |c| {c.engine.exclude_patterns = PathPatterns::of(["@types"]); c.typed_explicitly.exclude = true;}),
+                create_config_from_args("./ --exclude @types").unwrap(), "an exclusion read a name starting with '@' as a preset");
         assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned(),"b".to_owned(),"c".to_owned()].into(); c.typed_explicitly.languages = true;}),
                 create_config_from_args("./ --languages a,b,c").unwrap());
         assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned()].into(); c.typed_explicitly.languages = true;}),
@@ -2581,6 +2646,23 @@ mod tests {
         assert!(!contents.contains(&project), "the project was written into its own configuration as an absolute path:\n{contents}");
 
         std::fs::remove_dir_all(&project).unwrap();
+    }
+
+    #[test]
+    fn a_name_a_preset_wrote_never_warns_for_matching_nothing_while_a_typed_one_beside_it_does() {
+        let root = std::env::temp_dir().join("mezura-preset-names-unmatched");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src").join("test_parser.py"), "def test_a():\n    pass\n").unwrap();
+        let root_str = crate::paths::normalise_separators(&root.to_string_lossy()).into_owned();
+
+        let config = create_config_from_args(&format!("{root_str} --tests @pytest,spec")).unwrap();
+        let warned = counted(&config).warnings.iter()
+                .filter(|x| x.code == mezura_core::warnings::Code::PatternMatchedNothing)
+                .filter(|x| !crate::test_presets::is_about_a_preset_pattern(x, &config.view.test_patterns_from_presets))
+                .map(|x| x.subject.clone()).collect::<Vec<_>>();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(vec!["spec".to_owned()], warned);
     }
 
     #[test]

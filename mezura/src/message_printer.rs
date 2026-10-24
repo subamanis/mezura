@@ -1,11 +1,12 @@
 use std::fs;
 
 use colored::{ColoredString, Colorize};
-use mezura_core::{CountingModel, Language, LanguageClaims, RunError};
+use mezura_core::{CountingModel, Language, LanguageClaims, RunError, get_test_presets};
 use mezura_core::language_file::{ConflictRules, FaultyLanguageFile, LanguageDirParseError};
 
 use super::config_manager::*;
 use crate::paths::PERSISTENT_APP_PATHS;
+use crate::test_presets::{PRESET_SIGIL, PresetError, collect_user_preset_names, is_a_shipped_name, read_user_preset};
 
 static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
 const MESSAGE_WIDTH : usize = 110;
@@ -101,7 +102,7 @@ pub const TESTS_HELP  :  &str =
     files and directories to count as test code, as glob patterns
 
     1..n glob patterns separated by commas. A '!' in front of one takes back what an earlier
-    pattern, a build tool or a toolchain's file name declared.
+    pattern, a preset, a build tool or a toolchain's file name declared.
 
     What a pattern names is counted as test code whole, the files of a directory included. A
     pattern starting with './' or '../', or carrying a root or a drive, names one place and
@@ -118,6 +119,14 @@ pub const TESTS_HELP  :  &str =
     stay found beside the patterns, and so do the markers that open lines inside a file and a
     file another file declares as a module under a marker, which a '!' never reaches. A marker
     that makes a whole file test code, '@Test' in Java, is off under a '!'.
+
+    A preset is the names a test tool gives its test files. '--tests @pytest' stands for
+    'test_*.py', '*_test.py' and 'conftest.py', and '--tests !@pytest' takes each of them back.
+    A preset also turns itself on under a folder holding the tool's own file, the jest one under
+    a 'jest.config.ts', and a pattern typed here comes after it, so a '!' corrects it there too.
+    '--show-presets' lists them, and '--save-preset' keeps a list of your own under a name. A
+    folder whose name starts with '@' is written as a place or after '**/': './@types/' or
+    '**/@types/'.
 
     In a project's own configuration the patterns are read from the project directory, so they
     say the same thing from wherever inside the project the command is typed. '--hide tests'
@@ -541,6 +550,22 @@ pub const SAVE_THEME_HELP  :  &str =
 
     Combined with '--save', the configuration that is written points at this theme by name and
     carries no styles of its own.
+
+";
+pub const SAVE_PRESET_HELP  :  &str =
+"--save-preset
+    save the test patterns of this run as a test preset of your own
+
+    One argument, the name of the preset, which '--tests @<name>' will use: no spaces, and none
+    of / \\ , ! @ { }.
+
+    Writes the test patterns of this run, whether typed with '--tests' or read from a
+    configuration, into 'data/test-presets/<name>.txt', every '@<name>' among them written out.
+    The name of a shipped preset is refused: to change one, take it back and add your own,
+    '--tests !@jest,@mine'.
+
+    The file holds its patterns under a '===> tests' line, as a configuration does, and whatever
+    is written above that line is the description '--show-presets' prints.
 
 ";
 pub const SORT_HELP  :  &str =
@@ -1153,6 +1178,17 @@ pub const SHOW_CONFIGS_HELP  :  &str =
     loaded with '--load <name>'.
 
 ";
+pub const SHOW_PRESETS_HELP  :  &str =
+"--show-presets
+    print the test presets, the shipped ones and your own, and stop
+
+    No arguments.
+
+    Lists every preset '--tests @<name>' can name: each shipped one with the files that turn it
+    on by itself and the patterns it declares, then your own, read from the 'data/test-presets/'
+    directory. Counts nothing.
+
+";
 
 pub const VERSION_HELP  :  &str =
 "--version
@@ -1200,6 +1236,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 8] = [
         (NO_HEURISTICS, NO_HEURISTICS_HELP),
         (NO_SHEBANG, NO_SHEBANG_HELP),
         (SHOW_LANGUAGES, SHOW_LANGUAGES_HELP),
+        (SHOW_PRESETS, SHOW_PRESETS_HELP),
     ]),
     ("How the report looks", &[
         (LAYOUT, LAYOUT_HELP),
@@ -1230,6 +1267,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 8] = [
         (LOAD, LOAD_HELP),
         (NO_DEFAULT_CONFIG, NO_DEFAULT_CONFIG_HELP),
         (SAVE_THEME, SAVE_THEME_HELP),
+        (SAVE_PRESET, SAVE_PRESET_HELP),
         (SHOW_CONFIGS, SHOW_CONFIGS_HELP),
         (RESTORE, RESTORE_HELP),
     ]),
@@ -1635,6 +1673,10 @@ pub fn print_existing_configs() {
     outln!("{}", format_existing_configs_message(&config_names));
 }
 
+pub fn print_test_presets() {
+    outln!("{}", format_test_presets_message(&PERSISTENT_APP_PATHS.test_presets_dir));
+}
+
 // The reason travels beside each name: one heading over both reasons a file can fail is true of
 // only one of them, and a file saved in an unreadable encoding would be announced as a file with a
 // typo in it.
@@ -1758,6 +1800,57 @@ fn format_existing_configs_message(config_names: &[String]) -> String {
     } else {
         format!("{}Found these configurations:\n  {}\n", get_data_dir_str(), config_names.join("\n  "))
     }
+}
+
+fn format_test_presets_message(presets_dir: &str) -> String {
+    const LABEL_WIDTH : usize = 14;
+    let yours = collect_user_preset_names(presets_dir);
+    let name_width = get_test_presets().iter().map(|preset| preset.name).chain(yours.iter().map(String::as_str))
+            .map(|name| name.chars().count() + 3).max().unwrap_or(0);
+    let indent = LIST_INDENT + name_width + LABEL_WIDTH;
+    let format_entry = |name: &str, lines: &[(&str, String)]| lines.iter().enumerate().map(|(at, (label, value))| {
+        let named = if at == 0 {format!("{PRESET_SIGIL}{name}")} else {String::new()};
+        format!("{}{named:<name_width$}{label:<LABEL_WIDTH$}{}\n", " ".repeat(LIST_INDENT),
+                hang_under(value, MESSAGE_WIDTH - indent, indent))
+    }).collect::<String>();
+
+    let mut message = format!("\n{}\n\n", wrap_message(&format!("The shipped test presets. One with a file to turn \
+            it on applies itself under every folder holding that file, '--{TESTS} {PRESET_SIGIL}<name>' declares one \
+            everywhere, and '--{TESTS} !{PRESET_SIGIL}<name>' takes it back.")));
+    for preset in get_test_presets() {
+        let turned_on_by = match (preset.trigger_files, preset.companion_file) {
+            ([], _) => format!("no file, only '--{TESTS} {PRESET_SIGIL}{}'", preset.name),
+            (files, None) => files.join(", "),
+            (files, Some(companion)) => format!("{}, with a {companion} beside it", files.join(", "))
+        };
+        message.push_str(&format_entry(preset.name, &[("turned on by", turned_on_by),
+                ("patterns", preset.patterns.join(", "))]));
+    }
+
+    let dir = presets_dir.trim_end_matches(['/', '\\']);
+    if yours.is_empty() {
+        return message + &format!("\n{}\n", wrap_message(&format!(
+                "None of your own. '--{SAVE_PRESET} <name>' writes one into '{dir}'.")));
+    }
+    message.push_str(&format!("\nYour own, in '{dir}':\n\n"));
+    for name in &yours {
+        let lines = if is_a_shipped_name(name) {
+            vec![("not used", format!("'{PRESET_SIGIL}{}' names the shipped one, so this file is never read.",
+                    name.to_lowercase()))]
+        } else {
+            match read_user_preset(presets_dir, name) {
+                Ok(preset) if preset.description.is_empty() => vec![("patterns", preset.patterns.join(", "))],
+                Ok(preset) => vec![("about", preset.description.split_whitespace().collect::<Vec<_>>().join(" ")),
+                        ("patterns", preset.patterns.join(", "))],
+                Err(PresetError::Unusable { why, .. }) => vec![("not used", why)],
+                Err(PresetError::Unknown(_)) => vec![("not used",
+                        format!("The name cannot be written after '{PRESET_SIGIL}' in a list of patterns."))]
+            }
+        };
+        message.push_str(&format_entry(name, &lines));
+    }
+
+    message
 }
 
 fn get_data_dir_str() -> String {

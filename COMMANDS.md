@@ -19,6 +19,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
   - [--no-heuristics](#cmd-no-heuristics)
   - [--no-shebang](#cmd-no-shebang)
   - [--show-languages](#cmd-show-languages)
+  - [--show-presets](#cmd-show-presets)
 - [How the report looks](#how-the-report-looks)
   - [--layout](#cmd-layout)
   - [--sort](#cmd-sort)
@@ -45,6 +46,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
   - [--load](#cmd-load)
   - [--no-default-config](#cmd-no-default-config)
   - [--save-theme](#cmd-save-theme)
+  - [--save-preset](#cmd-save-preset)
   - [--show-configs](#cmd-show-configs)
   - [--restore](#cmd-restore)
 - [The settings of a project](#the-settings-of-a-project)
@@ -169,7 +171,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     files and directories to count as test code, as glob patterns
 
     1..n glob patterns separated by commas. A '!' in front of one takes back what an earlier
-    pattern, a build tool or a toolchain's file name declared.
+    pattern, a preset, a build tool or a toolchain's file name declared.
 
     What a pattern names is counted as test code whole, the files of a directory included. A
     pattern starting with './' or '../', or carrying a root or a drive, names one place and
@@ -186,6 +188,14 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     stay found beside the patterns, and so do the markers that open lines inside a file and a
     file another file declares as a module under a marker, which a '!' never reaches. A marker
     that makes a whole file test code, '@Test' in Java, is off under a '!'.
+
+    A preset is the names a test tool gives its test files. '--tests @pytest' stands for
+    'test_*.py', '*_test.py' and 'conftest.py', and '--tests !@pytest' takes each of them back.
+    A preset also turns itself on under a folder holding the tool's own file, the jest one under
+    a 'jest.config.ts', and a pattern typed here comes after it, so a '!' corrects it there too.
+    '--show-presets' lists them, and '--save-preset' keeps a list of your own under a name. A
+    folder whose name starts with '@' is written as a place or after '**/': './@types/' or
+    '**/@types/'.
 
     In a project's own configuration the patterns are read from the project directory, so they
     say the same thing from wherever inside the project the command is typed. '--hide tests'
@@ -430,6 +440,19 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     A name on the list that cannot count anything is reported under it: two files declaring one
     language, and a language whose every extension is held by another one, which a line in
     'language_conflicts.txt' hands back.
+```
+
+### <a id="cmd-show-presets" name="cmd-show-presets"></a>--show-presets
+
+```
+--show-presets
+    print the test presets, the shipped ones and your own, and stop
+
+    No arguments.
+
+    Lists every preset '--tests @<name>' can name: each shipped one with the files that turn it
+    on by itself and the patterns it declares, then your own, read from the 'data/test-presets/'
+    directory. Counts nothing.
 ```
 
 ## How the report looks
@@ -1087,6 +1110,24 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
     Combined with '--save', the configuration that is written points at this theme by name and
     carries no styles of its own.
+```
+
+### <a id="cmd-save-preset" name="cmd-save-preset"></a>--save-preset
+
+```
+--save-preset
+    save the test patterns of this run as a test preset of your own
+
+    One argument, the name of the preset, which '--tests @<name>' will use: no spaces, and none
+    of / \ , ! @ { }.
+
+    Writes the test patterns of this run, whether typed with '--tests' or read from a
+    configuration, into 'data/test-presets/<name>.txt', every '@<name>' among them written out.
+    The name of a shipped preset is refused: to change one, take it back and add your own,
+    '--tests !@jest,@mine'.
+
+    The file holds its patterns under a '===> tests' line, as a configuration does, and whatever
+    is written above that line is the description '--show-presets' prints.
 ```
 
 ### <a id="cmd-show-configs" name="cmd-show-configs"></a>--show-configs
