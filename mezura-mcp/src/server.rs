@@ -87,6 +87,13 @@ pub struct CountArguments {
             it never reaches a folder above it ('node_modules', '*.min.js', 'src/generated'). A \
             trailing '/' means a directory only.")]
     pub exclude: Option<Vec<String>>,
+    #[schemars(description = "Files and directories to count as test code, as glob patterns read \
+            the way 'exclude' reads them ('test_*.py', '*.spec.ts', 'spec/', '__tests__/'). What \
+            a compiler, a toolchain or a build tool marks as tests is found without this; what a \
+            framework or a project merely favours is declared here, from what its files show. A \
+            pattern starting with '!' takes back what an earlier one or a rule gave, the last match \
+            deciding ('spec/', '!spec/fixtures/').")]
+    pub tests: Option<Vec<String>>,
     #[schemars(description = "Count only these languages and leave every other one out, named \
             either by language ('rust', 'c++') or by any extension they claim ('js' names \
             JavaScript). Leave it out to count everything.")]
@@ -129,6 +136,10 @@ impl CountArguments {
         if let Some(exclude) = self.exclude.as_ref().filter(|x| !x.is_empty()) {
             arguments.push(mezura_cli::EXCLUDE.to_owned());
             arguments.push(as_a_list_of_paths(exclude)?);
+        }
+        if let Some(tests) = self.tests.as_ref().filter(|x| !x.is_empty()) {
+            arguments.push(mezura_cli::TESTS.to_owned());
+            arguments.push(as_a_list_of_paths(tests)?);
         }
         if let Some(languages) = self.languages.as_ref().filter(|x| !x.is_empty()) {
             arguments.push(mezura_cli::LANGUAGES.to_owned());
@@ -329,6 +340,7 @@ mod tests {
         let arguments = every_option_set().to_command_line().unwrap();
 
         assert_eq!(vec!["src".to_owned(), "--exclude".to_owned(), "*.txt,vendor".to_owned(),
+                "--tests".to_owned(), "test_*.py,!tests/fixtures/".to_owned(),
                 "--languages".to_owned(), "rust,visual basic".to_owned(), "--top".to_owned(), "5".to_owned(),
                 "--by-file".to_owned(), "3".to_owned(), "--counting".to_owned(), "region".to_owned()], arguments);
     }
@@ -443,7 +455,7 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join("only.rs"), "fn main() {}\n").unwrap();
 
-        let arguments = CountArguments {path: directory.to_string_lossy().into_owned(), exclude: None,
+        let arguments = CountArguments {path: directory.to_string_lossy().into_owned(), exclude: None, tests: None,
                 languages: None, top: None, by_file: None, counting: None};
         let report = run("spaced", &arguments.to_report_command_line().unwrap()).await;
         let _ = std::fs::remove_dir_all(&directory);
@@ -455,6 +467,7 @@ mod tests {
         CountArguments {
             path: "src".to_owned(),
             exclude: Some(vec!["*.txt".to_owned(), "vendor".to_owned()]),
+            tests: Some(vec!["test_*.py".to_owned(), "!tests/fixtures/".to_owned()]),
             languages: Some(vec!["rust".to_owned(), "visual basic".to_owned()]),
             top: Some(5),
             by_file: Some(3),

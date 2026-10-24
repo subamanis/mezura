@@ -9,6 +9,7 @@ pub const EXPLAIN   : &str = "--explain";
 pub const HIDE      : &str = "--hide";
 pub const LANGUAGES : &str = "--languages";
 pub const OUTPUT    : &str = "--output";
+pub const TESTS     : &str = "--tests";
 pub const TOP       : &str = "--top";
 
 pub const BINARY_PATH_VARIABLE : &str = "MEZURA_BIN";

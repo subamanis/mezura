@@ -5,6 +5,13 @@ comments, the share of the project it holds, and its size on disk. A language's 
 of its own under it, and under the total. Then the counts of what each language declares (classes,
 structs, functions).
 
+Only certain test code is found on its own: the markers a compiler reads (Rust's '#[cfg(test)]',
+Java's and Kotlin's '@Test', C#'s '[Fact]' and '[Test]'), the names a toolchain defines ('_test.go',
+Perl's '.t'), and the directory a build tool compiles for tests alone ('tests/' beside a Cargo.toml,
+'src/test/' beside a pom.xml or a build.gradle). A language with no 'tests' row has none of those,
+so a Python, JavaScript, PHP, Ruby or C++ project shows no tests until its convention is declared
+with 'tests' ('test_*.py', '*.spec.ts', 'spec/'), which the project's own files say.
+
 Answers questions like: how big is this project, what is it written in, how much of it is comments,
 which language holds most of the code, which files are the longest.
 

@@ -25,6 +25,8 @@ Main changes:
       'by_file[].tests', the keywords found inside the test code under 'languages[].tests' and
       'total.tests', and a comparison carries the same as 'from', 'to' and 'change'.
       '--explain --output json' marks a line with 'in_test' and names the rule under 'test_file'.
+  -> mezura-mcp 1.1.0: the two count tools take 'tests' patterns, and the descriptions say what
+      test code is found on its own and how the rest is declared.
   -> Themes gained the 'tests-*' and 'production-*' families, one for each of the two rows.
   -> The default look paints its text in the terminal's own text color and its red, green, yellow
       and cyan, with one mid grey for the percentages, so it reads on a light terminal as well as
