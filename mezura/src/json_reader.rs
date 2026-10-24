@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use mezura_core::{FaultyFileDetails, FileEntry, FilesPresent, LineClasses, ModuleResult, Performance,
+use mezura_core::{AppliedPreset, FaultyFileDetails, FileEntry, FilesPresent, LineClasses, ModuleResult, Performance,
         RunResult, SkippedFiles, Stats, Target, TestCode, Threads, UnreadableDirDetails};
 use serde_json::{Map, Value};
 
@@ -168,6 +168,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
                 read_optional_number(root, "files_hidden", "")?)
     };
 
+    let applied_presets = parse_applied_presets(scope)?;
     let (scope, targets) = parse_scope(scope)?;
     Ok(Document {
         mezura_version: read_text(root, "mezura_version", "")?,
@@ -192,7 +193,7 @@ pub fn parse(contents: &str) -> Result<Document, DocumentError> {
             modules,
             nested_languages,
             tests,
-            applied_presets: Vec::new(),
+            applied_presets,
             // An absent list means the paths were not detailed. Something may still have gone wrong.
             // How many there were is in 'scan' and is read either way.
             faulty_files: match root.get("faulty_files") {
@@ -451,6 +452,18 @@ fn parse_targets(entries: &[Value]) -> Result<Vec<Target>, DocumentError> {
     }).collect()
 }
 
+// Absent from a document of the builds that had no presets, which applied none
+fn parse_applied_presets(scope: &Map<String, Value>) -> Result<Vec<AppliedPreset>, DocumentError> {
+    let Some(entries) = scope.get("test_presets") else { return Ok(Vec::new()) };
+    read_array(entries, "scope.test_presets")?.iter().enumerate().map(|(i, entry)| {
+        let at = format!("scope.test_presets[{i}]");
+        let entry = read_object(entry, &at)?;
+
+        Ok(AppliedPreset::new(read_text(entry, "name", &at)?, read_text(entry, "directory", &at)?,
+                read_text(entry, "trigger_file", &at)?, read_flag(entry, "matched", &at)?))
+    }).collect()
+}
+
 fn read_member<'a>(parent: &'a Map<String, Value>, key: &str, at: &str) -> Result<&'a Value, DocumentError> {
     parent.get(key).ok_or_else(|| DocumentError::Missing(join_location(at, key)))
 }
@@ -568,7 +581,8 @@ mod tests {
             nested_languages: hashmap!["HTML".to_owned() => hashmap!["JavaScript".to_owned() =>
                     stats(1, 300, 20, 18, 0, hashmap!["classes".to_owned() => 1])]],
             tests,
-            applied_presets: Vec::new(),
+            applied_presets: vec![AppliedPreset::new("jest".to_owned(), "D:/dev/web".to_owned(), "jest.config.ts".to_owned(), true),
+                    AppliedPreset::new("pytest".to_owned(), "D:/dev/web/tools".to_owned(), "conftest.py".to_owned(), false)],
             faulty_files: vec![FaultyFileDetails::new("D:\\dev\\a \"b\".rs".to_owned(), "stream did not contain valid UTF-8".to_owned(), 412)],
             skipped_files: SkippedFiles::default(),
             files_present: FilesPresent { total_files: 9, relevant_files: 3, excluded_files: 4 },
@@ -611,6 +625,7 @@ mod tests {
         assert_eq!(written.tests, read.tests);
         assert_eq!(written.files_present, read.files_present);
         assert_eq!(written.targets, read.targets);
+        assert_eq!(written.applied_presets, read.applied_presets);
         assert_eq!(written.performance.duration_millis, read.performance.duration_millis);
         assert_eq!(3, read.targets.len());
         assert_eq!(written.performance.threads, read.performance.threads);

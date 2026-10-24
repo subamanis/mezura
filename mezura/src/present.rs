@@ -1,7 +1,20 @@
-use mezura_core::{FaultyFileDetails, RunResult, ScanSkip, UnreadableDirDetails};
+use std::collections::BTreeMap;
 
-use super::config_manager::Configuration;
+use mezura_core::{FaultyFileDetails, RunResult, ScanSkip, Target, UnreadableDirDetails};
+
+use super::config_manager::{Configuration, HIDE, TESTS};
+use crate::message_printer::MESSAGE_WIDTH;
 use crate::paths::PERSISTENT_APP_PATHS;
+use crate::test_presets::PRESET_SIGIL;
+
+// A file that says which ecosystem a project is in without saying where its tests are, the presets
+// that ecosystem's test tools have, and the languages those tests are written in
+const GENERIC_PROJECT_FILES : [(&str, &[&str], &[&str]); 4] = [
+    ("package.json", &["jest", "vitest", "mocha"], &["JavaScript", "TypeScript", "JSX", "TSX"]),
+    ("pyproject.toml", &["pytest", "unittest"], &["Python"]),
+    ("Gemfile", &["rspec", "minitest"], &["Ruby"]),
+    ("composer.json", &["phpunit"], &["PHP"]),
+];
 
 pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>, config: &Configuration) {
     let datetime_now = chrono::Local::now();
@@ -68,6 +81,7 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     let log_file_path = determine_log_file_path(config);
     let existing_log_contents = log_file_path.as_ref().and_then(|path| super::log::extract_file_contents(path));
     super::result_printer::format_and_print_results(result, &existing_log_contents, &datetime_now, config);
+    print_test_preset_notes(result, config);
 
     if config.view.log.should_log && let Some(path) = log_file_path
         && let Err(reason) = super::log::log_stats(&path, existing_log_contents.as_deref(), result, &datetime_now, config) {
@@ -165,8 +179,99 @@ fn format_files_left_out(result: &RunResult, show_skipped: bool) -> Vec<String> 
     lines
 }
 
-// In the error color and not a milder one: everything under an unreadable directory appears in no
-// total at all, where a faulty file is at least counted among the files that were found.
+// Nothing once the project's own configuration declares its test patterns. The rows keep to the
+// width themselves, so nothing wraps them.
+fn print_test_preset_notes(result: &RunResult, config: &Configuration) {
+    let decided = config.view.local_dir.as_ref().is_some_and(|x| x.configuration_applied && x.declares_test_patterns);
+    if !config.view.prints_text() || !config.engine.detect_tests || decided {
+        return;
+    }
+    let lines = format_applied_presets(result).into_iter()
+            .chain(find_presets_to_suggest(result).iter().map(|names| format_preset_suggestion(names)))
+            .collect::<Vec<_>>();
+    if !lines.is_empty() {
+        eprintln!();
+    }
+    for line in lines {
+        eprintln!("{}", super::theme::get_active().note.paint(&line));
+    }
+}
+
+fn format_applied_presets(result: &RunResult) -> Vec<String> {
+    let mut rows : BTreeMap<&str, (Vec<String>, Vec<&str>)> = BTreeMap::new();
+    for preset in result.applied_presets.iter().filter(|preset| preset.matched) {
+        let (directories, trigger_files) = rows.entry(preset.name.as_str()).or_default();
+        directories.push(format_preset_directory(&preset.directory, &result.targets));
+        if !trigger_files.contains(&preset.trigger_file.as_str()) {
+            trigger_files.push(&preset.trigger_file);
+        }
+    }
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let name_width = rows.keys().map(|name| name.chars().count() + 4).max().unwrap_or(0);
+    let mut lines = vec!["Test presets applied:".to_owned()];
+    for (name, (directories, trigger_files)) in &rows {
+        let opening = format!("  {:<name_width$}under ", format!("{PRESET_SIGIL}{name}"));
+        let closing = format!(" ({})", trigger_files.join(", "));
+        let room = MESSAGE_WIDTH.saturating_sub(opening.chars().count() + closing.chars().count());
+        let shown = (1..=directories.len()).rev()
+                .find(|&shown| format_directory_list(directories, shown).chars().count() <= room).unwrap_or(1);
+        lines.push(format!("{opening}{}{closing}", format_directory_list(directories, shown)));
+    }
+    lines.push(format!("To disable a test preset: '--{TESTS} !{PRESET_SIGIL}<name>'. To disable test detection: \
+            '--{HIDE} tests'."));
+
+    lines
+}
+
+fn format_directory_list(directories: &[String], shown: usize) -> String {
+    let listed = directories[..shown].join(", ");
+    match directories.len() - shown {
+        0 => listed,
+        more => format!("{listed} and {more} more")
+    }
+}
+
+fn format_preset_directory(directory: &str, targets: &[Target]) -> String {
+    let relative = targets.iter().filter(|target| super::result_printer::is_inside(directory, &target.path))
+            .max_by_key(|target| target.path.len())
+            .map(|target| format!("./{}", directory[target.path.len()..].trim_start_matches('/')));
+
+    super::result_printer::elide_long_path(relative.as_deref().unwrap_or(directory)).into_owned()
+}
+
+fn find_presets_to_suggest(result: &RunResult) -> Vec<&'static [&'static str]> {
+    GENERIC_PROJECT_FILES.iter().filter(|(file, presets, languages)| {
+        let in_a_target = result.targets.iter().any(|target| std::path::Path::new(&target.path).join(file).is_file());
+        let counted = languages.iter().any(|language| result.per_language.contains_key(*language));
+        let tests_found = languages.iter().any(|language| result.tests.get(*language).is_some_and(|x| x.stats.lines > 0))
+                || result.applied_presets.iter().any(|preset| preset.matched && presets.contains(&preset.name.as_str()));
+        in_a_target && counted && !tests_found
+    }).map(|(_, presets, _)| *presets).collect()
+}
+
+fn format_preset_suggestion(names: &[&str]) -> String {
+    let declared = names.iter().enumerate().map(|(at, name)| match at {
+        0 => format!("'--{TESTS} {PRESET_SIGIL}{name}'"),
+        _ => format!("'{PRESET_SIGIL}{name}'")
+    }).collect::<Vec<_>>();
+
+    format!("{} tests are declared with {}.", join_with_or(names), join_with_or(&declared))
+}
+
+fn join_with_or(items: &[impl AsRef<str>]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.as_ref().to_owned(),
+        [first @ .., last] => format!("{} or {}", first.iter().map(|item| item.as_ref()).collect::<Vec<&str>>().join(", "),
+                last.as_ref())
+    }
+}
+
+// In the error color, since everything under an unreadable directory appears in no total at all,
+// where a faulty file is at least counted among the files that were found.
 fn print_unreadable_dirs(unreadable_dirs: &[UnreadableDirDetails], config: &Configuration) {
     if unreadable_dirs.is_empty() {return;}
 
@@ -247,7 +352,7 @@ fn determine_log_file_path(config: &Configuration) -> Option<String> {
 mod tests {
     use std::collections::HashMap;
 
-    use mezura_core::{FilesPresent, Performance, Threads};
+    use mezura_core::{AppliedPreset, FilesPresent, Performance, Threads};
 
     use super::*;
 
@@ -292,6 +397,41 @@ mod tests {
             warnings: Vec::new(),
             applied_presets: Vec::new()
         }
+    }
+
+    #[test]
+    fn the_presets_list_gathers_the_folders_of_a_preset_to_the_width_and_leaves_out_one_that_decided_nothing() {
+        let applied = |name: &str, directory: String, trigger_file: &str, matched| AppliedPreset::new(name.to_owned(),
+                directory, trigger_file.to_owned(), matched);
+        let mut result = result_with(0, 0);
+        result.targets = vec![Target::of("D:/proj")];
+        result.applied_presets = vec![applied("jest", "D:/proj".to_owned(), "jest.config.js", true),
+                applied("pytest", "D:/proj/tools".to_owned(), "conftest.py", false), applied("jest", "D:/".to_owned(), "jest.config.ts", true)];
+        result.applied_presets.extend((0..20).map(|i| applied("jest", format!("D:/proj/packages/package-{i:02}"), "jest.config.js", true)));
+
+        let lines = format_applied_presets(&result);
+        assert_eq!(3, lines.len(), "a preset that decided nothing got a row: {lines:#?}");
+        assert_eq!("  @jest   under ./, D:/, ./packages/package-00 and 19 more (jest.config.js, jest.config.ts)", lines[1]);
+        result.applied_presets.truncate(4);
+        assert_eq!("  @jest   under ./, D:/, ./packages/package-00 (jest.config.js, jest.config.ts)", format_applied_presets(&result)[1]);
+    }
+
+    #[test]
+    fn a_generic_project_file_names_the_presets_of_its_ecosystem_until_a_test_of_it_is_found() {
+        let root = std::env::temp_dir().join("mezura-preset-suggestion");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("package.json"), "{}").unwrap();
+        let mut result = result_with(0, 0);
+        result.targets = vec![Target::of(crate::paths::normalise_separators(&root.to_string_lossy()))];
+        result.per_language.insert("TypeScript".to_owned(), result.total.clone());
+
+        let suggested = find_presets_to_suggest(&result).iter().map(|names| format_preset_suggestion(names)).collect::<Vec<_>>();
+        assert_eq!(vec!["jest, vitest or mocha tests are declared with '--tests @jest', '@vitest' or '@mocha'.".to_owned()], suggested);
+        result.applied_presets = vec![AppliedPreset::new("vitest".to_owned(), "D:/".to_owned(), "vitest.config.ts".to_owned(), true)];
+        assert!(find_presets_to_suggest(&result).is_empty(), "a preset that found the tests was suggested again");
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

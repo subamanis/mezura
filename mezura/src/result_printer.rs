@@ -1354,7 +1354,7 @@ fn create_compared_file_rows(files: Vec<super::diff::FileStatsChange>, complete:
 
 // What is too wide loses whole components out of its middle and never a piece of one: the file's own
 // name is what tells one row from another, so a name too wide on its own is the floor
-fn elide_long_path(relative: &str) -> Cow<'_, str> {
+pub(crate) fn elide_long_path(relative: &str) -> Cow<'_, str> {
     if calculate_widest_visible_line(relative) <= SHOWN_PATH_WIDTH {
         return Cow::Borrowed(relative);
     }

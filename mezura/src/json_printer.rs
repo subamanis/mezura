@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Local, SecondsFormat};
-use mezura_core::{CountingModel, FaultyFileDetails, LineClasses, RunResult, Stats, TestCode};
+use mezura_core::{AppliedPreset, CountingModel, FaultyFileDetails, LineClasses, RunResult, Stats, TestCode};
 
 use super::config_manager::Configuration;
 use super::result_printer;
@@ -42,7 +42,7 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
         String::from("\"kind\":\"run\""),
         format!("\"mezura_version\":\"{}\"", escape(config.view.version.trim_start_matches('v'))),
         format!("\"generated_at\":\"{}\"", datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false)),
-        format!("\"scope\":{}", create_scope_object(config,&result.targets)),
+        format!("\"scope\":{}", create_scope_object(config, &result.targets, &result.applied_presets)),
         format!("\"scan\":{}", create_scan_object(&result.files_present, result.faulty_files.len(),
                 &super::json_reader::SkippedCounts::of(&result.skipped_files),
                 result.unreadable_dirs.len())),
@@ -317,7 +317,8 @@ fn create_side_object(reading: &super::diff::Reading) -> String {
     // side, not for a comparison of two.
     members.push(format!("\"scan\":{}", create_scan_object(&reading.result.files_present,
             reading.faulty_files_count, &reading.skipped_counts, reading.unreadable_dirs_count)));
-    members.push(format!("\"scope\":{}", create_scope_object_of(&reading.scope, &reading.result.targets)));
+    members.push(format!("\"scope\":{}", create_scope_object_of(&reading.scope, &reading.result.targets,
+            &reading.result.applied_presets)));
     // Only what the side's own document recorded: what this very process warned about belongs to
     // the comparison and sits at its top level, wherever the run appears in it
     members.push(format!("\"warnings\":{}", create_document_warnings_array(&reading.warnings)));
@@ -328,7 +329,9 @@ fn create_side_object(reading: &super::diff::Reading) -> String {
 // The scope in the shape the run document writes it, from wherever the reading carried it. The
 // targets are in it because two sides that measured different trees would otherwise read as code
 // that changed.
-fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_core::Target]) -> String {
+fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_core::Target],
+        applied_presets: &[AppliedPreset]) -> String
+{
     let members = [
         format!("\"targets\":{}", create_targets_array(targets)),
         format!("\"exclude\":{}", create_string_array(&scope.exclude)),
@@ -347,6 +350,7 @@ fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_c
         format!("\"count_not_code\":{}", scope.count_not_code),
         format!("\"use_heuristics\":{}", scope.use_heuristics),
         format!("\"shebangs\":{}", scope.shebangs),
+        format!("\"test_presets\":{}", create_applied_presets_array(applied_presets)),
     ];
 
     create_object(members)
@@ -470,7 +474,7 @@ fn create_keyword_triads(before: &HashMap<String, usize>, now: &HashMap<String, 
 
 // Only what can change a number: no theme, no layout, no separators. Without it, two documents that
 // differ by an '--exclude' look like a code change.
-fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) -> String {
+fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target], applied_presets: &[AppliedPreset]) -> String {
     let members = [
         // The resolved list off the result, not the declared one off the configuration: the same
         // './src' over two different trees is two different measurements
@@ -494,6 +498,7 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target]) 
         format!("\"count_not_code\":{}", config.engine.count_not_code),
         format!("\"use_heuristics\":{}", config.engine.use_heuristics),
         format!("\"shebangs\":{}", config.engine.detect_shebangs),
+        format!("\"test_presets\":{}", create_applied_presets_array(applied_presets)),
     ];
 
     create_object(members)
@@ -755,6 +760,15 @@ fn create_targets_array(targets: &[mezura_core::Target]) -> String {
         let module = target.module.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escape(x)));
         format!("{{\"module\":{module},\"path\":\"{}\"}}", escape(&target.path))
     }))
+}
+
+fn create_applied_presets_array(applied_presets: &[AppliedPreset]) -> String {
+    create_array(applied_presets.iter().map(|preset| create_object([
+        format!("\"name\":\"{}\"", escape(&preset.name)),
+        format!("\"directory\":\"{}\"", escape(&preset.directory)),
+        format!("\"trigger_file\":\"{}\"", escape(&preset.trigger_file)),
+        format!("\"matched\":{}", preset.matched),
+    ])))
 }
 
 // The extension is the key, since that is what a run is asked about and what can only be claimed

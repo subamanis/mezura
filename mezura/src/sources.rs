@@ -147,6 +147,7 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
         let mut result = mezura_core::run_watched(&of_git_revision, resolved, Some(progress.clone()), |_| {})
                 .map_err(|error| GitError::CountingRevision { revision: git_revision.to_owned(), error })?;
         move_file_paths_out_of_checkout(&mut result, &of_git_revision.targets, &counted_declared);
+        move_preset_directories_out_of_checkout(&mut result, &checkout.path, &side.resolved.repository);
         result.targets = counted_declared;
         result
     };
@@ -173,6 +174,18 @@ fn move_file_paths_out_of_checkout(result: &mut mezura_core::RunResult,
                     super::result_printer::is_inside(&file.path, counted)) {
                 file.path = declared.to_string() + &file.path[counted.len()..];
             }
+        }
+    }
+}
+
+// A tool's file inside the checkout stands for the same file in the repository, and the checkout is a
+// different directory on every run
+fn move_preset_directories_out_of_checkout(result: &mut mezura_core::RunResult, checkout: &str, repository: &str) {
+    let checkout = super::paths::normalise_separators(checkout).trim_end_matches('/').to_owned();
+    let repository = super::paths::normalise_separators(repository).trim_end_matches('/').to_owned();
+    for preset in &mut result.applied_presets {
+        if super::result_printer::is_inside(&preset.directory, &checkout) {
+            preset.directory = repository.clone() + &preset.directory[checkout.len()..];
         }
     }
 }

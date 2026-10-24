@@ -9,7 +9,7 @@ use crate::paths::PERSISTENT_APP_PATHS;
 use crate::test_presets::{PRESET_SIGIL, PresetError, collect_user_preset_names, is_a_shipped_name, read_user_preset};
 
 static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
-const MESSAGE_WIDTH : usize = 110;
+pub(crate) const MESSAGE_WIDTH : usize = 110;
 // The help paints itself with these rather than through the theme, because it is printed before a
 // theme is chosen: 'main' answers the message-only commands above the line that sets one, so
 // anything that does ask for a theme there is handed the default.

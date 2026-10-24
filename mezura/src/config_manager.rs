@@ -128,7 +128,6 @@ pub struct ViewConfig {
     pub config_name_to_save: Option<String>,
     pub config_name_to_load: Option<String>,
     pub theme_name_to_save: Option<String>,
-    // The test patterns a typed '@name' wrote, which never warn for having matched nothing
     pub test_patterns_from_presets: Vec<String>,
     // The project's own folder, when the run is inside one and was not told to ignore it. It
     // decides where a log with no configuration named goes, and it says whether the project's
@@ -1513,6 +1512,9 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
     local_config.targets = local_config.targets.map(|declared| rebase_targets_on(&local.project_dir, declared));
     local_config.exclude_patterns = local_config.exclude_patterns.map(|declared| rebase_patterns_on(&local.project_dir, declared));
     local_config.test_patterns = local_config.test_patterns.map(|declared| rebase_patterns_on(&local.project_dir, declared));
+    if let Some(found) = &mut config_builder.local_dir {
+        found.declares_test_patterns = local_config.test_patterns.is_some();
+    }
     config_builder.add_missing_fields(local_config);
 
     Ok(true)

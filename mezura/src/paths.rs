@@ -76,12 +76,14 @@ pub struct LocalDir {
     // mean the same thing from wherever inside the project the command was typed.
     pub project_dir: String,
     // A folder may hold a log and no settings at all, and then there is nothing to announce
-    pub configuration_applied: bool
+    pub configuration_applied: bool,
+    pub declares_test_patterns: bool
 }
 
 impl LocalDir {
     pub fn of(project_dir: &str) -> Self {
-        LocalDir { project_dir: project_dir.trim_end_matches('/').to_owned(), configuration_applied: false }
+        LocalDir { project_dir: project_dir.trim_end_matches('/').to_owned(), configuration_applied: false,
+                declares_test_patterns: false }
     }
 
     // With the trailing separator that the configuration reader joins a file name to

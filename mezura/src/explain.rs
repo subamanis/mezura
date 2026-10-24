@@ -314,6 +314,9 @@ fn describe_test_file_rule(rule: &TestFileRule, language: &str) -> Option<String
                 build_files.iter().map(|file| format!("'{file}'")).collect::<Vec<_>>().join(" and "))),
         TestFileRule::FileName(shape) => Some(format!("The whole file is test code: {language} names its test \
                 files '{shape}'.")),
+        TestFileRule::Preset { name, directory, trigger_file, pattern, matched_folder } => Some(format!("The whole \
+                file is test code: '{trigger_file}' in '{directory}' turns on the test names of {name}, and '{pattern}' \
+                matches {}.", matched_folder.as_ref().map_or_else(|| "it".to_owned(), |folder| format!("the folder '{folder}'")))),
         TestFileRule::Declared { pattern, matched_folder: Some(folder) } => Some(format!("The whole file is test \
                 code: the '--tests' pattern '{pattern}' matches the folder '{folder}'.")),
         TestFileRule::Declared { pattern, matched_folder: None } => Some(format!("The whole file is test code: the \
@@ -346,6 +349,9 @@ fn build_test_file_entry(rule: &TestFileRule) -> Option<String> {
                 create_string_array(build_files))),
         TestFileRule::FileName(shape) => Some(format!("{{\"rule\":\"file_name\",\"shape\":\"{}\"}}",
                 escape(&shape.to_string()))),
+        TestFileRule::Preset { name, directory, trigger_file, pattern, matched_folder } => Some(format!(
+                "{{\"rule\":\"preset\",\"name\":\"{}\",\"directory\":\"{}\",\"trigger_file\":\"{}\",\"pattern\":\"{}\"{}}}",
+                escape(name), escape(directory), escape(trigger_file), escape(pattern), matched(matched_folder))),
         TestFileRule::Declared { pattern, matched_folder } => Some(format!(
                 "{{\"rule\":\"declared\",\"pattern\":\"{}\"{}}}", escape(pattern), matched(matched_folder))),
         TestFileRule::DeclaredNotTests { pattern, matched_folder } => Some(format!(
@@ -435,6 +441,13 @@ mod tests {
                         build_files: owned(&["D:/proj/DESCRIPTION", "D:/proj/NAMESPACE"]) }, "R"));
         assert_eq!(Some("The whole file is test code: Go names its test files '*_test.go'.".to_owned()),
                 describe_test_file_rule(&TestFileRule::FileName(TestFileName::EndsWith("_test.go".to_owned())), "Go"));
+        let jest = |matched_folder: Option<&str>| TestFileRule::Preset { name: "jest".to_owned(), directory: "D:/web".to_owned(),
+                trigger_file: "jest.config.ts".to_owned(), pattern: "__tests__/".to_owned(), matched_folder: matched_folder.map(str::to_owned) };
+        assert_eq!(Some("The whole file is test code: 'jest.config.ts' in 'D:/web' turns on the test names of jest, and \
+                '__tests__/' matches the folder 'D:/web/src/__tests__'.".to_owned()),
+                describe_test_file_rule(&jest(Some("D:/web/src/__tests__")), "JavaScript"));
+        assert_eq!(Some("The whole file is test code: 'jest.config.ts' in 'D:/web' turns on the test names of jest, and \
+                '__tests__/' matches it.".to_owned()), describe_test_file_rule(&jest(None), "JavaScript"));
         assert_eq!(Some("The whole file is test code: the '--tests' pattern 'spec/' matches the folder 'D:/dev/proj/spec'.".to_owned()),
                 describe_test_file_rule(&TestFileRule::Declared { pattern: "spec/".to_owned(),
                         matched_folder: Some("D:/dev/proj/spec".to_owned()) }, "Rust"));
@@ -497,6 +510,9 @@ mod tests {
                 build_test_file_entry(&TestFileRule::FileName(TestFileName::EndsWith(".t".to_owned()))));
         assert_eq!(Some(r#"{"rule":"declared","pattern":"*.spec.rs"}"#.to_owned()),
                 build_test_file_entry(&TestFileRule::Declared { pattern: "*.spec.rs".to_owned(), matched_folder: None }));
+        assert_eq!(Some(r#"{"rule":"preset","name":"pytest","directory":"D:/proj","trigger_file":"conftest.py","pattern":"test_*.py"}"#.to_owned()),
+                build_test_file_entry(&TestFileRule::Preset { name: "pytest".to_owned(), directory: "D:/proj".to_owned(),
+                        trigger_file: "conftest.py".to_owned(), pattern: "test_*.py".to_owned(), matched_folder: None }));
         assert_eq!(Some(r#"{"rule":"declared_module","declared_by":["D:/proj/src/tests.rs","D:/proj/src/lib.rs"]}"#.to_owned()),
                 build_test_file_entry(&TestFileRule::DeclaredModule { declared_by: vec!["D:/proj/src/tests.rs".to_owned(),
                         "D:/proj/src/lib.rs".to_owned()] }));
