@@ -16,8 +16,9 @@ New:
 - `TestCode::total_of` adds every language's test code together, `TestCode::add` adds one to
   another, and `TestCode::calculate_production_of` gives what a language holds outside its test
   code. `RunResult` and `ModuleResult` give the same per language and in total with
-  `calculate_production_per_language` and `calculate_production_total`, and a `FileEntry` gives
-  its own with `calculate_production`, and `is_tests_whole` says whether all of it is test code.
+  `calculate_production_per_language` and `calculate_production_total`, and their test code in
+  total with `calculate_tests_total`. A `FileEntry` gives its own with `calculate_production`,
+  and `is_tests_whole` says whether all of it is test code.
 - `Language::test_markers`, `Language::test_file_names`, `Language::with_test_markers` and
   `Language::with_test_file_names`, read from the `Tests` block of a language file, and
   `TestFileName` for the three shapes a name takes.
@@ -37,6 +38,7 @@ New:
   test code. `TestFileRule::DeclaredModule` names the files that declare it as a module, the one
   holding the marker last, `TestFileRule::FileMarker` the annotation found in its code with its
   line, and `TestFileRule::InnerAttribute` the `#![cfg(test)]` standing before every item of it.
+  `TestFileRule::name` gives the rule as one word, `preset` or `declared_not_tests`.
 - Test presets. A `TestPreset` is a test tool's default names for its test files, `*.test.ts` and
   `__tests__/` for jest, with the files the tool keeps its configuration in, and `get_test_presets`
   gives the shipped table: jest, vitest, mocha, pytest, unittest, rspec, minitest, phpunit, dotnet,
@@ -47,6 +49,8 @@ New:
   whether it decided any file. `TestFileRule::Preset` names the preset, the file and the pattern
   for a file one decided.
 - A `testdata` directory at any depth below a `go.mod` is test code whole, as the go tool treats it.
+- `render::calculate_percentage` gives one number's share of a total, rounded the way
+  `calculate_percentages_of_a_given_total` rounds each of its entries.
 - `.t` files are counted as Perl.
 - `MultilineString::escapes_by_doubling` and `StringRules::with_string_pairs_escaped_by_doubling`,
   read from `Paired strings escaped by doubling`, for a pair whose closer written twice is one quote

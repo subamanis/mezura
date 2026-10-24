@@ -70,7 +70,12 @@ impl RunResult {
 
     /// Every language outside its test code, added together.
     pub fn calculate_production_total(&self) -> Stats {
-        TestCode::total_of(&self.tests).calculate_production_of(&self.total)
+        self.calculate_tests_total().calculate_production_of(&self.total)
+    }
+
+    /// Every language's test code, added together.
+    pub fn calculate_tests_total(&self) -> TestCode {
+        TestCode::total_of(&self.tests)
     }
 
     /// Files belonging to a counted language were found and every one of them failed to be read.
@@ -163,7 +168,12 @@ impl ModuleResult {
 
     /// Every language of this module outside its test code, added together.
     pub fn calculate_production_total(&self) -> Stats {
-        TestCode::total_of(&self.tests).calculate_production_of(&self.total)
+        self.calculate_tests_total().calculate_production_of(&self.total)
+    }
+
+    /// Every language of this module's test code, added together.
+    pub fn calculate_tests_total(&self) -> TestCode {
+        TestCode::total_of(&self.tests)
     }
 }
 

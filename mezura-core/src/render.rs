@@ -103,6 +103,11 @@ pub fn calculate_percentages_of_a_given_total(numbers: &[usize], total: usize) -
     shares
 }
 
+/// One number's share of a total, rounded as [`calculate_percentages_of_a_given_total`] rounds.
+pub fn calculate_percentage(number: usize, total: usize) -> f64 {
+    calculate_percentages_of_a_given_total(&[number], total)[0]
+}
+
 /// How much bigger or smaller the newer figure is, as a percentage of the older one.
 ///
 /// Signed, so a shrinking count comes back negative, and zero when there was nothing to grow from:

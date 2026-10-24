@@ -98,6 +98,23 @@ pub enum TestFileRule {
     },
 }
 
+impl TestFileRule {
+    /// `test_directory`, `file_name`, `preset`, `declared`, `declared_not_tests`,
+    /// `declared_module`, `file_marker` or `inner_attribute`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::TestDirectory { .. } => "test_directory",
+            Self::FileName(_) => "file_name",
+            Self::Preset { .. } => "preset",
+            Self::Declared { .. } => "declared",
+            Self::DeclaredNotTests { .. } => "declared_not_tests",
+            Self::DeclaredModule { .. } => "declared_module",
+            Self::FileMarker { .. } => "file_marker",
+            Self::InnerAttribute { .. } => "inner_attribute"
+        }
+    }
+}
+
 /// What one line of the file came to.
 #[derive(Debug)]
 pub struct ExplainedLine {
