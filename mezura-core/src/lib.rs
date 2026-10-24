@@ -309,7 +309,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
         skipped_files.get_of_kind_mut(kind).sort_unstable();
     }
     warnings.extend(describe_patterns_that_changed_nothing(&config, &exclude_patterns, &test_patterns,
-            |matcher, _| matcher.find_names_that_matched_nothing()));
+            |matcher, patterns| matcher.find_names_that_matched_nothing(patterns.reports_unmatched_names)));
     let relevant_files_num = files_present.relevant_files;
     if relevant_files_num == 0 {
         return Ok(RunResult::of_nothing(files_present,
@@ -473,7 +473,8 @@ fn describe_unused_pattern(unused: UnusedPattern, so: &str) -> Warning {
         Unused::OutsideEveryTarget => format!("'{}' names a place outside every target, so {so}.", unused.written),
         Unused::MatchedNothing => format!("'{}' matched no file or directory under any target, so {so}. A name is \
                 read from the folder that holds the target down and never reaches a folder above it: 'api/gen' for \
-                the target 'services/api', or the place written out, './services/api/gen'.", unused.written)
+                the target 'services/api', or the place written out, './services/api/gen'.", unused.written),
+        Unused::NameMatchedNothing => format!("'{}' matched no file or directory under any target, so {so}.", unused.written)
     };
     Warning::new(Code::PatternMatchedNothing, &unused.written, message)
 }

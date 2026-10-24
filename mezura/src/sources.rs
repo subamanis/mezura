@@ -205,7 +205,8 @@ fn move_patterns_into_checkout(checkout: &str, repository: &str, patterns: &Path
             let (negation, place) = mezura_core::engine::path_patterns::split_negation(pattern);
             format!("{negation}{}", moved(place))
         }).collect(),
-        read_from: patterns.read_from.as_deref().map(moved)
+        read_from: patterns.read_from.as_deref().map(moved),
+        reports_unmatched_names: patterns.reports_unmatched_names
     }
 }
 
@@ -303,7 +304,7 @@ mod tests {
         let (tree, revision) = both_sides(&config);
         assert_eq!((2, 2), (tree.total.lines, revision.result.total.lines), "a name saw a folder above the target");
         config.engine.exclude_patterns = mezura_core::PathPatterns { patterns: vec!["api/src/gen/".to_owned()],
-                read_from: Some(format!("{repository}/api")) };
+                read_from: Some(format!("{repository}/api")), ..Default::default() };
         let (tree, revision) = both_sides(&config);
         assert_eq!((1, 1), (tree.total.lines, revision.result.total.lines),
                 "the folder a project's names are read from was not carried into the checkout");
@@ -348,7 +349,8 @@ mod tests {
         assert_eq!(of(&["D:/repository/x"]), move_patterns_into_checkout("C:/tmp/chk/repo", "D:/repo", &of(&["D:/repository/x"])),
                 "a path sharing the repository's first characters was moved");
 
-        let of_a_project = |project: &str| PathPatterns { patterns: vec!["spec/".to_owned()], read_from: Some(project.to_owned()) };
+        let of_a_project = |project: &str| PathPatterns { patterns: vec!["spec/".to_owned()], read_from: Some(project.to_owned()),
+                ..Default::default() };
         assert_eq!(of_a_project("C:/tmp/chk/repo/api"),
                 move_patterns_into_checkout("C:/tmp/chk/repo", "D:/repo", &of_a_project("D:/repo/api")),
                 "the folder the names are read from stayed outside the checkout");

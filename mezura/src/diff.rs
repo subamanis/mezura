@@ -161,8 +161,7 @@ impl DiffRequest {
                     if other.needs_counting() => Some(x),
             _ => None
         };
-        let notes_so_far = settings_source.map(|document| adopt_settings_from(document, config))
-                .unwrap_or_default().into_iter().collect();
+        let notes_so_far = settings_source.map(|document| adopt_settings_from(document, config)).unwrap_or_default();
 
         // Known before the scan: a document that cannot pair files closes the gate at print time,
         // so the run should not pay for collecting an entry per file
@@ -239,6 +238,10 @@ impl CountedBaseline {
     pub fn with_subject(self, subject: Reading, config: &Configuration) -> Comparison {
         Comparison::of(self.baseline, subject, config, self.notes_so_far)
     }
+
+    pub fn is_a_revision(&self) -> bool {
+        matches!(self.baseline.source, Source::GitRevision { .. })
+    }
 }
 
 // Every one of these stops the run before a single file is counted, so that a mistake in the
@@ -312,6 +315,7 @@ pub enum Change {
 #[derive(Debug,PartialEq)]
 pub enum Note {
     SettingsAdopted { from: String, settings: Vec<&'static str>, naming_nothing: Vec<String> },
+    TestPatternsUnused { patterns: Vec<String>, from: String },
     SettingsDiffer { baseline: String, subject: String, settings: Vec<&'static str> },
     VersionsDiffer { baseline: String, baseline_version: String, subject: String, subject_version: String },
     CountsInDoubt { about: String, doubts: Vec<String> },
@@ -694,10 +698,10 @@ fn forget_tests_of(reading: &mut Reading) {
     }
 }
 
-fn adopt_settings_from(document: &Reading, config: &mut Configuration) -> Option<Note> {
+fn adopt_settings_from(document: &Reading, config: &mut Configuration) -> Vec<Note> {
     let settings = resolve_settings(&document.scope, config);
     if settings.is_empty() {
-        return None;
+        return Vec::new();
     }
     let adopted_patterns = settings.iter().flat_map(|setting| match *setting {
         EXCLUDE => config.engine.exclude_patterns.patterns.iter(),
@@ -706,8 +710,15 @@ fn adopt_settings_from(document: &Reading, config: &mut Configuration) -> Option
     });
     let naming_nothing = adopted_patterns.filter(|pattern| is_a_path_pattern(pattern) && !is_on_disk(pattern))
             .cloned().collect();
+    let typed_patterns_unused = settings.contains(&HIDE_TESTS) && config.typed_explicitly.tests
+            && !config.engine.test_patterns.is_empty();
 
-    Some(Note::SettingsAdopted { from: document.determine_display_name(), settings, naming_nothing })
+    let mut notes = vec![Note::SettingsAdopted { from: document.determine_display_name(), settings, naming_nothing }];
+    if typed_patterns_unused {
+        notes.push(Note::TestPatternsUnused { patterns: config.engine.test_patterns.patterns.clone(),
+                from: document.determine_display_name() });
+    }
+    notes
 }
 
 // Splits '--diff a.json..b.json' into the two readings it names, and answers None for the second
@@ -1164,6 +1175,39 @@ mod tests {
         patterned.tests_detected = false;
         plain.tests_detected = false;
         assert!(find_settings_that_differ(&patterned, &plain).is_empty());
+    }
+
+    #[test]
+    fn patterns_typed_against_a_document_without_detection_are_said_to_be_unused() {
+        let document = |detected: bool| {
+            let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
+            let mut scope = scope_of(&mezura_core::EngineConfig::default(), mezura_core::CountingModel::Content);
+            scope.tests_detected = detected;
+            Reading { source: Source::Document { path: "old.json".to_owned() }, taken: "2026-08-07T10:00:00+03:00".to_owned(),
+                    version: "3.3.0".to_owned(), scope, warnings: Vec::new(), faulty_files_count: 0,
+                    skipped_counts: crate::json_reader::SkippedCounts::default(), unreadable_dirs_count: 0,
+                    files_recorded: true, files_hidden: 0, result: crate::test_support::plain_result_of(per_language, Vec::new(), Vec::new()) }
+        };
+        let typed = || {
+            let mut config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+            config.engine.test_patterns = PathPatterns::of(["spec/"]);
+            config.typed_explicitly.tests = true;
+            config
+        };
+
+        let mut config = typed();
+        assert_eq!(vec![
+            Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec![HIDE_TESTS], naming_nothing: Vec::new() },
+            Note::TestPatternsUnused { patterns: vec!["spec/".to_owned()], from: "old.json".to_owned() }],
+            adopt_settings_from(&document(false), &mut config));
+        assert!(!config.engine.detect_tests);
+
+        let mut config = typed();
+        assert!(adopt_settings_from(&document(true), &mut config).is_empty(), "the patterns were said to be unused with the detection on");
+
+        let mut untyped = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        assert_eq!(vec![Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec![HIDE_TESTS], naming_nothing: Vec::new() }],
+                adopt_settings_from(&document(false), &mut untyped));
     }
 
     // Every combination is written out because the answer is a guard over an or-pattern, where the

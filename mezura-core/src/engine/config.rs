@@ -258,13 +258,18 @@ pub struct PathPatterns {
     /// The project directory whose own configuration supplied the patterns. Every target inside
     /// it then reads names from that directory's parent, the way `mezura ./` typed there would.
     /// `None` reads them from each target's own parent.
-    pub read_from: Option<String>
+    pub read_from: Option<String>,
+    /// Whether a plain name that matched nothing is reported, which a list typed for this run
+    /// wants and a list shared between projects does not. A place or a name with a slash in it
+    /// is reported either way.
+    pub reports_unmatched_names: bool
 }
 
 impl PathPatterns {
-    /// Patterns read from each target's own parent.
+    /// Patterns read from each target's own parent, their unmatched names unreported.
     pub fn of(patterns: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
-        PathPatterns { patterns: patterns.into_iter().map(|x| x.as_ref().to_owned()).collect(), read_from: None }
+        PathPatterns { patterns: patterns.into_iter().map(|x| x.as_ref().to_owned()).collect(), read_from: None,
+                reports_unmatched_names: false }
     }
 
     /// Whether it holds no pattern at all.

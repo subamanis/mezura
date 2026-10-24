@@ -1433,9 +1433,12 @@ fn format_note_sentence(theme: &Theme, note: &super::diff::Note) -> String {
         Note::SettingsAdopted { from, settings, naming_nothing } => {
             let one = settings.len() == 1;
             let (was, value, it) = if one {("has", "value", "it")} else {("have", "values", "them")};
-            // Nothing can be typed to keep the keywords or the tests switched on
+            // Nothing can be typed to keep the keywords or the tests switched on, and with the
+            // tests off a typed pattern list keeps nothing either
+            let tests_off = settings.contains(&super::diff::HIDE_TESTS);
             let typeable = settings.iter().copied()
-                    .filter(|setting| ![super::diff::HIDE_KEYWORDS, super::diff::HIDE_TESTS].contains(setting))
+                    .filter(|setting| ![super::diff::HIDE_KEYWORDS, super::diff::HIDE_TESTS].contains(setting)
+                            && !(tests_off && *setting == config_manager::TESTS))
                     .collect::<Vec<_>>();
             let advice = match typeable.len() {
                 0 => String::new(),
@@ -1451,6 +1454,9 @@ fn format_note_sentence(theme: &Theme, note: &super::diff::Note) -> String {
                     readings are counted the same way.{advice}{nowhere}",
                     settings.join("', '"))
         },
+        Note::TestPatternsUnused { patterns, from } => format!(
+                "'--{} {}' was left unused, since '{from}' was written without test detection and the \
+                comparison runs without it.", config_manager::TESTS, patterns.join(",")),
         Note::SettingsDiffer { baseline, subject, settings } => format!(
                 "'{baseline}' and '{subject}' were not taken with the same {}, so part of the \
                 difference below is those settings and not code that changed.", settings.join(", ")),
@@ -4206,6 +4212,14 @@ mod tests {
         let mixed = sentence_of(vec!["exclude", crate::diff::HIDE_TESTS, "counting"]);
         assert!(mixed.contains("'exclude', 'hide tests', 'counting' have been overridden"), "{mixed}");
         assert!(mixed.contains("Provide 'exclude', 'counting' explicitly"), "{mixed}");
+        let patterns_too = sentence_of(vec!["tests", crate::diff::HIDE_TESTS]);
+        assert!(!patterns_too.contains("Provide"), "the patterns were offered as typeable with the detection off: {patterns_too}");
+        assert!(sentence_of(vec!["tests"]).contains("Provide it explicitly"));
+
+        let unused = format_note_sentence(&theme, &crate::diff::Note::TestPatternsUnused {
+                patterns: vec!["spec/".to_owned(), "!spec/fixtures/".to_owned()], from: "old.json".to_owned() }).replace('\n', " ");
+        assert_eq!("'--tests spec/,!spec/fixtures/' was left unused, since 'old.json' was written without test detection \
+                and the comparison runs without it.", unused);
     }
 
     #[test]

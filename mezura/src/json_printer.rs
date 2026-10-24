@@ -408,6 +408,10 @@ fn create_note_entries(note: &super::diff::Note) -> Vec<WarningEntry> {
                 .chain(naming_nothing.iter().map(|pattern| entry("setting-adopted", Affects::Settings, pattern.clone(),
                     format!("'{pattern}' was taken from '{from}' and names nothing on this machine."))))
                 .collect(),
+        Note::TestPatternsUnused { patterns, from } => vec![entry("command-ignored", Affects::Settings,
+                super::config_manager::TESTS.to_owned(),
+                format!("'--{} {}' was left unused, since '{from}' was written without test detection and the comparison runs \
+                without it.", super::config_manager::TESTS, patterns.join(",")))],
         Note::SettingsDiffer { settings, .. } => settings.iter()
                 .map(|setting| entry("setting-differs", Affects::Counts, (*setting).to_owned(),
                     format!("The two readings were not taken with the same '{setting}', so part of the difference is that setting and not code that changed.")))

@@ -83,7 +83,8 @@ pub const EXCLUDE_HELP  :  &str =
 
     A '!' in front of a pattern is refused: a directory left out is never entered, so there is
     nothing to take back. A pattern that names nothing on disk, or a name with a slash in it
-    that matched nothing, is reported.
+    that matched nothing, is reported, and so is a plain name that matched nothing when it was
+    typed for the run.
 
     A file left out counts among the excluded files of the scan. The files of a directory left
     out are never seen, so they are not counted there.

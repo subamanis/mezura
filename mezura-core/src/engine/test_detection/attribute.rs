@@ -13,6 +13,7 @@ const CFG_ATTR : &[u8] = b"cfg_attr";
 const TEST : &[u8] = b"test";
 const BENCH : &[u8] = b"bench";
 const NOT : &[u8] = b"not";
+const ANY : &[u8] = b"any";
 const LINE_COMMENT : &[u8] = b"//";
 const BLOCK_COMMENT_START : &[u8] = b"/*";
 const BLOCK_COMMENT_END : &[u8] = b"*/";
@@ -210,10 +211,11 @@ fn holds_test(name: &[u8]) -> bool {
     name.windows(4).any(|window| u32::from_le_bytes([window[0], window[1], window[2], window[3]]) == test)
 }
 
-// The word test as a term of its own, at a depth where no enclosing group is a not. A string is
-// skipped whole, so a feature named with the word says nothing.
+// The word test as a term of its own, at a depth where no enclosing group is a not or an any. An
+// any is met whenever another of its arms holds, so what sits under it ships in a build with that
+// feature or target on. A string is skipped whole, so a feature named with the word says nothing.
 fn predicate_says_test(predicate: &[u8]) -> bool {
-    let mut not_groups = 0u64;
+    let mut not_or_any_groups = 0u64;
     let mut depth = 0u32;
     let mut last_word: &[u8] = &[];
     let mut at = 0;
@@ -225,19 +227,19 @@ fn predicate_says_test(predicate: &[u8]) -> bool {
         } else if byte == b'/' && let Some(past) = skip_comment(predicate, at, predicate.len()) {
             at = past;
         } else if byte == b'(' {
-            if last_word == NOT && depth < 64 { not_groups |= 1 << depth; }
+            if (last_word == NOT || last_word == ANY) && depth < 64 { not_or_any_groups |= 1 << depth; }
             depth += 1;
             last_word = &[];
             at += 1;
         } else if byte == b')' {
             depth = depth.saturating_sub(1);
-            if depth < 64 { not_groups &= !(1 << depth); }
+            if depth < 64 { not_or_any_groups &= !(1 << depth); }
             last_word = &[];
             at += 1;
         } else if is_word_start(byte) {
             let end = find_word_end(predicate, at);
             let word = &predicate[at..end];
-            if word == TEST && ends_a_term(predicate, end) && not_groups == 0 { return true; }
+            if word == TEST && ends_a_term(predicate, end) && not_or_any_groups == 0 { return true; }
             last_word = word;
             at = end;
         } else {
@@ -313,12 +315,14 @@ mod tests {
     }
 
     #[test]
-    fn a_cfg_predicate_is_read_for_test_under_no_not() {
-        for attribute in ["#[cfg(test)]", "#[cfg(any(test, testlib))]", "#[cfg(all(feature = \"std\", test))]",
-                "#[cfg(any(not(feature = \"x\"), test))]", "#[cfg( test )]", "#[cfg(\n    test\n)]"] {
+    fn a_cfg_predicate_is_read_for_test_under_no_not_and_no_any() {
+        for attribute in ["#[cfg(test)]", "#[cfg(all(feature = \"std\", test))]", "#[cfg(all(test, any(unix, windows)))]",
+                "#[cfg( test )]", "#[cfg(\n    test\n)]"] {
             assert_eq!(read_marker_of(attribute), Some((false, attribute.len())), "{attribute}");
         }
         for attribute in ["#[cfg(not(test))]", "#[cfg(not(any(test, testlib)))]", "#[cfg(all(not(test), feature = \"x\"))]",
+                "#[cfg(any(test, testlib))]", "#[cfg(any(feature = \"std\", test))]", "#[cfg(any(not(feature = \"x\"), test))]",
+                "#[cfg(any(all(test, unix), feature = \"x\"))]", "#[cfg(all(any(test, miri), unix))]",
                 "#[cfg(testlib)]", "#[cfg(feature = \"test-util\")]", "#[cfg(target_os = \"linux\")]",
                 "#[cfg(tests)]", "#[cfg(test_harness)]"] {
             assert_eq!(read_marker_of(attribute), None, "{attribute}");
@@ -328,11 +332,12 @@ mod tests {
     #[test]
     fn a_cfg_attr_is_a_marker_only_where_a_test_attribute_is_applied_under_test() {
         for attribute in ["#[cfg_attr(test, test)]", "#[cfg_attr(test, tokio::test, ignore)]",
-                "#[cfg_attr(any(test, feature = \"x\"), rstest)]"] {
+                "#[cfg_attr(all(test, feature = \"x\"), rstest)]"] {
             assert_eq!(read_marker_of(attribute), Some((false, attribute.len())), "{attribute}");
         }
         for attribute in ["#[cfg_attr(test, derive(Debug))]", "#![cfg_attr(test, allow(deref_nullptr))]",
-                "#[cfg_attr(not(test), test)]", "#[cfg_attr(feature = \"x\", test)]", "#[cfg_attr(test)]"] {
+                "#[cfg_attr(not(test), test)]", "#[cfg_attr(feature = \"x\", test)]", "#[cfg_attr(test)]",
+                "#[cfg_attr(any(test, feature = \"x\"), rstest)]"] {
             assert_eq!(read_marker_of(attribute), None, "{attribute}");
         }
     }
@@ -375,7 +380,7 @@ mod tests {
     fn a_comment_before_a_name_or_its_arguments_hides_nothing() {
         for attribute in ["#[/* a note */ test]", "#[cfg /* a note */ (test)]", "#[cfg_attr(test, /* a note */ test)]",
                 "#[cfg_attr(test,\n    // a note\n    test)]", "#[cfg(test /* a note */)]", "#[cfg(test // a note\n)]",
-                "#[cfg(any(test /* a note */, unix))]", "#[cfg_attr(test /* a note */, test)]"] {
+                "#[cfg(all(test /* a note */, unix))]", "#[cfg_attr(test /* a note */, test)]"] {
             assert_eq!(read_marker_of(attribute), Some((false, attribute.len())), "{attribute}");
         }
         assert_eq!(read_marker_of("#[cfg(testing /* test */)]"), None);

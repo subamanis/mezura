@@ -981,7 +981,7 @@ impl ConfigurationBuilder {
         // behaviour cannot answer differently
         let engine_defaults = EngineConfig::default();
 
-        Configuration {
+        let mut config = Configuration {
             typed_explicitly: self.typed_explicitly,
             engine: EngineConfig {
                 targets: self.targets.clone().unwrap_or_default(),
@@ -1034,7 +1034,10 @@ impl ConfigurationBuilder {
                 theme: super::theme::resolve(self.theme_styles.as_deref().unwrap_or_default(),
                         self.config_styles.as_deref().unwrap_or_default(), self.styles.as_deref().unwrap_or_default())
             }
-        }
+        };
+        config.engine.exclude_patterns.reports_unmatched_names = config.typed_explicitly.exclude;
+        config.engine.test_patterns.reports_unmatched_names = config.typed_explicitly.tests;
+        config
     }
 }
 
@@ -1557,7 +1560,7 @@ fn rebase_patterns_on(project_dir: &str, declared: PathPatterns) -> PathPatterns
         }
     }).collect();
 
-    PathPatterns { patterns, read_from: Some(project_dir.to_owned()) }
+    PathPatterns { patterns, read_from: Some(project_dir.to_owned()), reports_unmatched_names: false }
 }
 
 fn print_config_file_warnings(issues: &[(mezura_core::warnings::Code, String)], config_name: &str) {
@@ -1745,6 +1748,8 @@ mod tests {
     fn conf(dir: &str, edit: impl FnOnce(&mut Configuration)) -> Configuration {
         let mut config = new_conf(dir);
         edit(&mut config);
+        config.engine.exclude_patterns.reports_unmatched_names = config.typed_explicitly.exclude;
+        config.engine.test_patterns.reports_unmatched_names = config.typed_explicitly.tests;
         config
     }
 
@@ -2319,7 +2324,8 @@ mod tests {
         let rescued = create_config_from_args(
                 "./ --load test002 --sort name --top 3 --bar-thickness fat --progress-bar hash --number-separator dot --decimal-separator comma --force-language m=matlab --by-file 8 --counting region --count-minified --count-generated --count-not-code --no-heuristics --no-shebang --tests-breakdown split --tests spec").unwrap();
         assert_eq!(TestsBreakdown::Split, rescued.view.tests_breakdown);
-        assert_eq!(PathPatterns::of(["spec"]), rescued.engine.test_patterns);
+        assert_eq!(PathPatterns { patterns: vec!["spec".to_owned()], read_from: None, reports_unmatched_names: true },
+                rescued.engine.test_patterns);
         assert!(rescued.engine.count_minified && rescued.engine.count_generated && rescued.engine.count_not_code);
         assert!(!rescued.engine.use_heuristics);
         assert!(!rescued.engine.detect_shebangs);
@@ -2418,7 +2424,8 @@ mod tests {
                 "===> exclude\nnode_modules\n\n===> languages\nrust,java\n\n===> top\n7\n");
 
         let found = create_config_from_args(&format!("{project}/src")).unwrap();
-        let of_the_project = PathPatterns { patterns: vec!["node_modules".to_owned()], read_from: Some(project.clone()) };
+        let of_the_project = PathPatterns { patterns: vec!["node_modules".to_owned()], read_from: Some(project.clone()),
+                ..Default::default() };
         assert_eq!(of_the_project, found.engine.exclude_patterns);
         assert_eq!(vec!["rust".to_owned(), "java".to_owned()], found.engine.languages_of_interest.to_written_form());
         assert_eq!(Some(7), found.view.top_n);
@@ -2553,16 +2560,18 @@ mod tests {
 
         let found = create_config_from_args(&format!("{project}/src")).unwrap();
         assert_eq!(PathPatterns { patterns: vec![format!("{project}/spec"), format!("!{project}/spec/fixtures/"),
-                "fixtures/".to_owned(), format!("{project}/../shared/**")], read_from: Some(project.clone()) },
-                found.engine.test_patterns);
-        assert_eq!(PathPatterns { patterns: vec![format!("{project}/build/"), "node_modules".to_owned()], read_from: Some(project.clone()) },
-                found.engine.exclude_patterns);
+                "fixtures/".to_owned(), format!("{project}/../shared/**")], read_from: Some(project.clone()),
+                reports_unmatched_names: false }, found.engine.test_patterns);
+        assert_eq!(PathPatterns { patterns: vec![format!("{project}/build/"), "node_modules".to_owned()], read_from: Some(project.clone()),
+                reports_unmatched_names: false }, found.engine.exclude_patterns);
         assert!(!found.typed_explicitly.tests && !found.typed_explicitly.exclude);
 
         let cwd = crate::paths::normalise_separators(&std::env::current_dir().unwrap().to_string_lossy()).into_owned();
         let typed = create_config_from_args(&format!("{project}/src --tests ./spec --exclude ./gen")).unwrap();
-        assert_eq!(PathPatterns::of([format!("{cwd}/spec")]), typed.engine.test_patterns, "a typed place was read from the project");
-        assert_eq!(PathPatterns::of([format!("{cwd}/gen")]), typed.engine.exclude_patterns);
+        assert_eq!(PathPatterns { patterns: vec![format!("{cwd}/spec")], read_from: None, reports_unmatched_names: true },
+                typed.engine.test_patterns, "a typed place was read from the project, or a typed name goes unreported");
+        assert_eq!(PathPatterns { patterns: vec![format!("{cwd}/gen")], read_from: None, reports_unmatched_names: true },
+                typed.engine.exclude_patterns);
         assert!(typed.typed_explicitly.tests && typed.typed_explicitly.exclude);
 
         create_config_from_args(&format!("{project} --top 4 --{SAVE_LOCAL}")).unwrap();

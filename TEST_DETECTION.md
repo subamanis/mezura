@@ -138,7 +138,8 @@ The rules in short, with the whole of them under `--tests` in [COMMANDS.md](COMM
   that makes a whole file test code, `@Test`, is off there, since the `!` answers that very
   question: a corpus of JUnit files kept as test data stays data under `--tests "!cases/"`.
 - A place missing from disk or outside every target, and a name with a slash that matched nothing,
-  are reported.
+  are reported. A plain name that matched nothing is reported when it was typed for the run, and
+  stays quiet from a configuration, which names folders some of its projects lack.
 - In PowerShell, quote the whole list or escape each comma with a backtick.
 
 Patterns saved in a project's own configuration, with `--save-local` or under `===> tests` in
@@ -182,9 +183,11 @@ project included. Where a project has a production folder of that name, write th
   `#[wasm_bindgen_test]`, `#[test_case]`, `#[std::prelude::v1::test]`. Measured over the 11,921
   Rust files of a cargo registry: of 30,083 attributes with `test` in the name, one was no test
   attribute, `#[proptest_config]`, and it sat over a proptest anyway.
-- `#[cfg(...)]` whose predicate holds `test` outside a `not(...)`: `#[cfg(test)]`,
-  `#[cfg(any(test, feature = "x"))]`. `#[cfg(not(test))]` is production, and `#[cfg(testlib)]` is
-  a cfg of its own.
+- `#[cfg(...)]` whose predicate holds `test` outside every `not(...)` and every `any(...)`:
+  `#[cfg(test)]`, `#[cfg(all(test, unix))]`. `#[cfg(not(test))]` is production, and so is
+  `#[cfg(any(test, feature = "x"))]`, since every build with the feature on compiles it; of the 66
+  such attributes in the same registry, all sit over code a default build ships. `#[cfg(testlib)]`
+  is a cfg of its own.
 - `#[cfg_attr(predicate, attribute)]` only when the predicate says test and the attribute applied
   holds `test` in its name: `#[cfg_attr(test, test)]` is a marker, while
   `#[cfg_attr(test, derive(Debug))]` and `#![cfg_attr(test, allow(deref_nullptr))]` are settings.
@@ -219,6 +222,8 @@ at the root, says otherwise for that one folder. Everywhere else, `examples/`, `
 
 **Missed**, each with what mezura answers today:
 
+- A `#[cfg(any(test, X))]` where X is a cfg only test builds set, the kernel's `testlib` and tokio's
+  `fuzzing`: production, since what X is lives in the build script.
 - A marker on a struct field, an enum variant, a match arm or a parameter counts to the `}` of the
   block around it, so the siblings after it come along:
   ```rust

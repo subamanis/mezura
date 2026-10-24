@@ -556,7 +556,8 @@ mod tests {
         };
         let default = EngineConfig::default();
         let declared = EngineConfig { test_patterns: crate::PathPatterns { patterns: vec!["spec/".to_owned(),
-                "!spec/fixtures/".to_owned(), "*.spec.rs".to_owned(), "!vendor/".to_owned()], read_from: Some(at("proj")) },
+                "!spec/fixtures/".to_owned(), "*.spec.rs".to_owned(), "!vendor/".to_owned()], read_from: Some(at("proj")),
+                ..Default::default() },
                 ..EngineConfig::default() };
         let declared_as_a_path = EngineConfig { test_patterns: crate::PathPatterns::of([at("proj/spec")]), ..EngineConfig::default() };
         let detection_off = EngineConfig { detect_tests: false, ..EngineConfig::default() };
@@ -627,7 +628,7 @@ mod tests {
         assert_eq!((None, vec![true, true, false]), explain("proj/src/lib.rs", &default));
 
         let taken_back = EngineConfig { test_patterns: crate::PathPatterns { patterns: vec!["!src/tests/".to_owned()],
-                read_from: Some(at("proj")) }, ..EngineConfig::default() };
+                read_from: Some(at("proj")), ..Default::default() }, ..EngineConfig::default() };
         assert_eq!(declared_by(&["proj/src/lib.rs"]), explain("proj/src/tests/mod.rs", &taken_back).0, "a '!' pattern undid the declaration");
         let detection_off = EngineConfig { detect_tests: false, ..EngineConfig::default() };
         assert_eq!((None, vec![false]), explain("proj/src/tests/mod.rs", &detection_off));

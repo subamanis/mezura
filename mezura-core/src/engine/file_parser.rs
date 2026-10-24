@@ -6174,15 +6174,18 @@ mod tests {
     }
 
     #[test]
-    fn a_cfg_predicate_under_not_is_production_code() {
+    fn a_cfg_predicate_under_not_or_any_is_production_code() {
         let source = concat!(
             "#[cfg(not(test))]\n",
             "fn prod() {\n",
             "}\n",
             "#[cfg(any(test, feature = \"x\"))]\n",
+            "fn shipped_with_x() {\n",
+            "}\n",
+            "#[cfg(all(test, unix))]\n",
             "fn helper() {\n",
             "}\n");
-        assert_eq!(find_rust_test_lines(source), vec![4, 5, 6]);
+        assert_eq!(find_rust_test_lines(source), vec![7, 8, 9]);
     }
 
     #[test]

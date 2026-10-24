@@ -262,8 +262,14 @@ fn main() -> ExitCode {
     match outcome {
         Ok(result) => {
             let at = stamp();
+            // Beside a revision this run is one side of two, so a pattern reaching nothing says which
+            let against_a_revision = counted_baseline.as_ref().is_some_and(crate::diff::CountedBaseline::is_a_revision);
             for warning in &result.warnings {
-                crate::warning_collector::emit(warning.clone());
+                let mut warning = warning.clone();
+                if against_a_revision && warning.code == mezura_core::warnings::Code::PatternMatchedNothing {
+                    warning.message = format!("In the working tree, {}", warning.message);
+                }
+                crate::warning_collector::emit(warning);
             }
             let comparison = counted_baseline.map(|baseline| baseline.with_subject(
                     crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config), &config));

@@ -376,7 +376,7 @@ mod tests {
         assert_eq!(Some(working_dir), anchored.test_patterns.read_from);
 
         let of_a_project = EngineConfig { test_patterns: PathPatterns { patterns: vec!["spec/".to_owned()],
-                read_from: Some("D:/proj".to_owned()) }, ..engine.clone() };
+                read_from: Some("D:/proj".to_owned()), ..Default::default() }, ..engine.clone() };
         assert_eq!(of_a_project, read_names_as_a_run_from_here_would(&of_a_project));
 
         let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
