@@ -683,14 +683,14 @@ impl Formatted for ArgParsingError {
             Self::UnreadableConfig(name, line, super::config_files::UnreadableCause::Io(error)) => paint(&wrap_message(&format!("Configuration '{name}' could not be read past line {line}, so none of it was used: {error}"))),
             Self::UnexpectedCommandArgs(p) => paint(&wrap_message(&format!("Command '--{p}' does not expect any arguments."))),
             Self::NonExistantConfig(p) => {
-                let names = super::config_files::read_names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.config_dir);
+                let names = super::config_files::read_names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.config_dir, None);
                 let tail = suggestions::format_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
                         .unwrap_or_else(|| format!("Run '--{SHOW_CONFIGS}' to see the ones you have."));
                 let error = paint(&format!("Configuration '{p}' does not exist."));
                 ColoredString::from(format!("{error}\n\n{tail}").as_str())
             },
             Self::NonExistantTheme(p) => {
-                let names = super::config_files::read_names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.themes_dir);
+                let names = super::config_files::read_names_in_dir(&crate::paths::PERSISTENT_APP_PATHS.themes_dir, None);
                 let tail = suggestions::format_suggestion(p, &names.iter().map(String::as_str).collect::<Vec<_>>())
                         .unwrap_or_else(|| format!("Run '--{SHOW_THEMES}' to see the ones you have."));
                 let error = paint(&format!("Theme '{p}' was not found, or could not be read."));
@@ -2498,7 +2498,8 @@ mod tests {
         assert_eq!(Some(7), found.view.top_n);
         assert_eq!(Some(project.clone() + "/.mezura/config.txt"),
                 found.view.local_dir.as_ref().map(LocalDir::get_config_path));
-        assert!(found.view.local_dir.is_some_and(|x| x.configuration_applied));
+        assert!(found.view.local_dir.is_some_and(|x| x.configuration_applied && !x.declares_test_patterns),
+                "a project with no tests block silenced the presets list");
 
         let overridden = create_config_from_args(&format!("{project}/src --languages python --top 2")).unwrap();
         assert_eq!(vec!["python".to_owned()], overridden.engine.languages_of_interest.to_written_form());
@@ -2632,6 +2633,8 @@ mod tests {
         assert_eq!(PathPatterns { patterns: vec![format!("{project}/build/"), "node_modules".to_owned()], read_from: Some(project.clone()),
                 reports_unmatched_names: false }, found.engine.exclude_patterns);
         assert!(!found.typed_explicitly.tests && !found.typed_explicitly.exclude);
+        assert!(found.view.local_dir.as_ref().is_some_and(|x| x.declares_test_patterns),
+                "a project that saved its test patterns still gets the presets list");
 
         let cwd = crate::paths::normalise_separators(&std::env::current_dir().unwrap().to_string_lossy()).into_owned();
         let typed = create_config_from_args(&format!("{project}/src --tests ./spec --exclude ./gen")).unwrap();
@@ -2659,10 +2662,9 @@ mod tests {
         let root_str = crate::paths::normalise_separators(&root.to_string_lossy()).into_owned();
 
         let config = create_config_from_args(&format!("{root_str} --tests @pytest,spec")).unwrap();
-        let warned = counted(&config).warnings.iter()
-                .filter(|x| x.code == mezura_core::warnings::Code::PatternMatchedNothing)
-                .filter(|x| !crate::test_presets::is_about_a_preset_pattern(x, &config.view.test_patterns_from_presets))
-                .map(|x| x.subject.clone()).collect::<Vec<_>>();
+        let warned = crate::collect_warnings_to_emit(&counted(&config).warnings, &config.view.test_patterns_from_presets, false)
+                .into_iter().filter(|x| x.code == mezura_core::warnings::Code::PatternMatchedNothing)
+                .map(|x| x.subject).collect::<Vec<_>>();
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(vec!["spec".to_owned()], warned);
     }

@@ -380,7 +380,9 @@ pub struct EngineConfig {
     pub detect_shebangs: bool,
     /// Whether test code is told apart from the rest, which is the lines a language's markers
     /// open, the files its file markers make test code whole, the files its toolchain names as
-    /// tests, and the files under the test directory of a build tool. True by default.
+    /// tests, the files under the test directory of a build tool, and the default test names of a
+    /// test tool under the directory holding its own file (see [`crate::TestPreset`]). True by
+    /// default.
     pub detect_tests: bool,
     /// Patterns declaring which files and directories are test code whole, beside what
     /// [`Self::detect_tests`] finds on its own. A `!` pattern takes a file or a directory back

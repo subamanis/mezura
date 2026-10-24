@@ -4,7 +4,7 @@ use mezura_core::engine::path_patterns::split_negation;
 use mezura_core::warnings::{Code, Warning};
 use mezura_core::{TestPreset, get_test_presets, validate_test_patterns};
 
-use crate::config_files::strip_byte_order_mark;
+use crate::config_files::{find_block_name, read_names_in_dir, strip_byte_order_mark};
 use crate::message_printer::wrap_message;
 
 pub const PRESET_SIGIL : char = '@';
@@ -74,7 +74,7 @@ pub fn read_user_preset(presets_dir: &str, name: &str) -> Result<UserPreset, Pre
         Err(error) => return Err(build_unusable(name, format!("'{path}' could not be read: {error}.")))
     };
     let lines = strip_byte_order_mark(&text).lines().collect::<Vec<_>>();
-    let Some(heading) = lines.iter().position(|line| is_the_patterns_heading(line)) else {
+    let Some(heading) = lines.iter().position(|line| find_block_name(line) == Some(crate::config_manager::TESTS)) else {
         return Err(build_unusable(name, format!("'{path}' has no '{PATTERNS_HEADING}' line for its patterns to go under.")));
     };
     let written = lines[heading + 1..].iter().take_while(|line| !line.trim().is_empty())
@@ -99,12 +99,7 @@ pub fn write_user_preset(presets_dir: &str, name: &str, patterns: &[String]) -> 
 }
 
 pub fn collect_user_preset_names(presets_dir: &str) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(presets_dir) else { return Vec::new() };
-    let mut names = entries.flatten().map(|entry| entry.path())
-            .filter(|path| path.is_file() && path.extension().is_some_and(|x| x == PRESET_FILE_EXTENSION))
-            .filter_map(|path| path.file_stem().and_then(|x| x.to_str()).map(str::to_owned)).collect::<Vec<_>>();
-    names.sort_by_key(|name| name.to_lowercase());
-    names
+    read_names_in_dir(presets_dir, Some(PRESET_FILE_EXTENSION))
 }
 
 // Without regard to case, since on Windows and macOS 'Jest.txt' is the file 'jest.txt' would be
@@ -132,13 +127,16 @@ fn expand_with(written: Vec<String>, find: impl Fn(&str) -> Result<Vec<String>, 
             continue;
         };
         for named in find(name)? {
-            let text = match split_negation(&named) {
-                _ if negation.is_empty() => named.clone(),
-                ("", rest) => format!("{negation}{rest}"),
-                _ => continue
+            let added = if negation.is_empty() {
+                named
+            } else {
+                match split_negation(&named) {
+                    ("", rest) => format!("{negation}{rest}"),
+                    _ => continue
+                }
             };
-            expanded.from_presets.push(text.clone());
-            expanded.patterns.push(text);
+            expanded.from_presets.push(added.clone());
+            expanded.patterns.push(added);
         }
     }
 
@@ -151,11 +149,6 @@ fn find_shipped_preset(name: &str) -> Option<&'static TestPreset> {
 
 fn copy_patterns_of(preset: &TestPreset) -> Vec<String> {
     preset.patterns.iter().map(|pattern| (*pattern).to_owned()).collect()
-}
-
-fn is_the_patterns_heading(line: &str) -> bool {
-    let line = line.trim();
-    line.starts_with("===>") && line.trim_start_matches("===>").split_whitespace().next() == Some(crate::config_manager::TESTS)
 }
 
 fn build_unusable(name: &str, why: String) -> PresetError {

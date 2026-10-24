@@ -464,7 +464,7 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
             dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module, scope, exclude_root));
         }
     }
-    climb.take_turned_on()
+    climb.into_turned_on()
 }
 
 // A target inside the project reads names from the project folder's parent, as 'mezura ./' typed there would

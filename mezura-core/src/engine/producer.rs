@@ -90,7 +90,7 @@ fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs
                     // in it settle the scope of every child before anything under that child is
                     // found. A listing made streaming would break that without a word.
                     let entries = entries.flatten().collect::<Vec<_>>();
-                    let (present, build_files, trigger_files) = find_ignore_and_build_files_among(&entries,
+                    let (present, build_files, trigger_files) = find_ignore_build_and_trigger_files_among(&entries,
                             ObeyedIgnoreFiles::of(&config), config.detect_tests);
                     let gitignore_stack = GitignoreStack::extend_with_ignore_files(&dir.path,
                             dir.gitignore_stack.clone(), &present);
@@ -145,7 +145,7 @@ fn steal_a_dir(id: usize, dirs_injector: &Injector<TraversedDir>, stealers: &[St
     None
 }
 
-fn find_ignore_and_build_files_among(entries: &[DirEntry], obeyed: ObeyedIgnoreFiles, note_build_files: bool)
+fn find_ignore_build_and_trigger_files_among(entries: &[DirEntry], obeyed: ObeyedIgnoreFiles, detect_tests: bool)
 -> (Vec<&'static str>, BuildFilesSeen, TriggerFilesSeen)
 {
     let mut present = Vec::new();
@@ -155,8 +155,8 @@ fn find_ignore_and_build_files_among(entries: &[DirEntry], obeyed: ObeyedIgnoreF
         let file_name = entry.file_name();
         let name = file_name.as_encoded_bytes();
         let ignore_file = obeyed.get_file_names().find(|wanted| is_the_same_name(name, wanted.as_bytes()));
-        let is_a_build_file = note_build_files && BuildFilesSeen::is_a_build_file(name);
-        let is_a_trigger_file = note_build_files && TriggerFilesSeen::is_a_trigger_file(name);
+        let is_a_build_file = detect_tests && BuildFilesSeen::is_a_build_file(name);
+        let is_a_trigger_file = detect_tests && TriggerFilesSeen::is_a_trigger_file(name);
         if ignore_file.is_none() && !is_a_build_file && !is_a_trigger_file {
             continue;
         }
@@ -188,9 +188,6 @@ fn find_ignore_and_build_files_among(entries: &[DirEntry], obeyed: ObeyedIgnoreF
 fn turn_on_presets(scope: &DirectoryScope, trigger_files: TriggerFilesSeen, directory: &Path,
         applied_presets: &Mutex<Vec<Arc<ActivePreset>>>) -> Option<DirectoryScope>
 {
-    if trigger_files.is_empty() {
-        return None;
-    }
     let turned_on = trigger_files.turn_on(directory);
     if turned_on.is_empty() {
         return None;

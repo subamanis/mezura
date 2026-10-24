@@ -74,9 +74,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
         if size == 0 {break};
         // Only the first line of the file can carry the mark, but asking on every line costs one
         // comparison and spares the loop a special case
-        let line = strip_byte_order_mark(buf.trim());
-        if line.starts_with("===>") {
-            let id = line.trim_start_matches("===>").split_whitespace().next().unwrap_or("").to_owned();
+        if let Some(id) = find_block_name(strip_byte_order_mark(buf.trim())).map(str::to_owned) {
             let repeated = !seen_sections.insert(id.clone());
             let mut known = true;
 
@@ -220,6 +218,11 @@ pub fn strip_byte_order_mark(contents: &str) -> &str {
     contents.trim_start_matches('\u{feff}')
 }
 
+pub fn find_block_name(line: &str) -> Option<&str> {
+    let line = line.trim();
+    line.starts_with("===>").then(|| line.trim_start_matches("===>").split_whitespace().next().unwrap_or(""))
+}
+
 // The targets must be set before this is called: they are unwrapped below.
 // 'relative_to' is the project a configuration of its own is being written for, and the targets are
 // then written the way that project reads them back.
@@ -360,10 +363,11 @@ fn yes_or_no(value: bool) -> &'static str {
     if value {"yes"} else {"no"}
 }
 
-pub fn read_names_in_dir(dir: &str) -> Vec<String> {
+pub fn read_names_in_dir(dir: &str, extension: Option<&str>) -> Vec<String> {
     let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
-    let mut names = entries.flatten().filter(|x| x.path().is_file())
-            .filter_map(|x| x.path().file_stem().and_then(|x| x.to_str()).map(str::to_owned)).collect::<Vec<_>>();
+    let mut names = entries.flatten().map(|x| x.path())
+            .filter(|path| path.is_file() && extension.is_none_or(|wanted| path.extension().is_some_and(|x| x == wanted)))
+            .filter_map(|path| path.file_stem().and_then(|x| x.to_str()).map(str::to_owned)).collect::<Vec<_>>();
     names.sort_by_key(|x| x.to_lowercase());
     names
 }

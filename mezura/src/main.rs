@@ -265,14 +265,7 @@ fn main() -> ExitCode {
             let at = stamp();
             // Beside a revision this run is one side of two, so a pattern reaching nothing says which
             let against_a_revision = counted_baseline.as_ref().is_some_and(crate::diff::CountedBaseline::is_a_revision);
-            for warning in &result.warnings {
-                if crate::test_presets::is_about_a_preset_pattern(warning, &config.view.test_patterns_from_presets) {
-                    continue;
-                }
-                let mut warning = warning.clone();
-                if against_a_revision && warning.code == mezura_core::warnings::Code::PatternMatchedNothing {
-                    warning.message = format!("In the working tree, {}", warning.message);
-                }
+            for warning in collect_warnings_to_emit(&result.warnings, &config.view.test_patterns_from_presets, against_a_revision) {
                 crate::warning_collector::emit(warning);
             }
             let comparison = counted_baseline.map(|baseline| baseline.with_subject(
@@ -358,6 +351,19 @@ fn read_available_languages(outcome: &MigrationOutcome, restore_was_asked_for: b
             parsed
         }
     }
+}
+
+fn collect_warnings_to_emit(warnings: &[mezura_core::Warning], from_presets: &[String], against_a_revision: bool)
+-> Vec<mezura_core::Warning>
+{
+    warnings.iter().filter(|warning| !crate::test_presets::is_about_a_preset_pattern(warning, from_presets))
+            .map(|warning| {
+                let mut warning = warning.clone();
+                if against_a_revision && warning.code == mezura_core::warnings::Code::PatternMatchedNothing {
+                    warning.message = format!("In the working tree, {}", warning.message);
+                }
+                warning
+            }).collect()
 }
 
 fn format_exec_time(instant: &Instant) -> String {

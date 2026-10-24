@@ -364,7 +364,6 @@ pub(crate) struct PresetMatch {
 #[derive(Default)]
 pub(crate) struct PresetClimb {
     by_directory: RefCell<HashMap<PathBuf, Vec<Arc<ActivePreset>>>>,
-    turned_on: RefCell<Vec<Arc<ActivePreset>>>,
 }
 
 impl PresetClimb {
@@ -379,8 +378,8 @@ impl PresetClimb {
         (!presets.is_empty()).then(|| Arc::from(presets))
     }
 
-    pub(crate) fn take_turned_on(&self) -> Vec<Arc<ActivePreset>> {
-        std::mem::take(&mut *self.turned_on.borrow_mut())
+    pub(crate) fn into_turned_on(self) -> Vec<Arc<ActivePreset>> {
+        self.by_directory.into_inner().into_values().flatten().collect()
     }
 
     fn read_presets_of(&self, directory: &Path) -> Vec<Arc<ActivePreset>> {
@@ -388,7 +387,6 @@ impl PresetClimb {
             return known.clone();
         }
         let turned_on = read_trigger_files_of(directory).turn_on(directory);
-        self.turned_on.borrow_mut().extend(turned_on.iter().cloned());
         self.by_directory.borrow_mut().insert(directory.to_path_buf(), turned_on.clone());
         turned_on
     }
@@ -444,10 +442,6 @@ impl TriggerFilesSeen {
         }
     }
 
-    pub(crate) fn is_empty(self) -> bool {
-        self.0 == 0
-    }
-
     pub(crate) fn turn_on(self, directory: &Path) -> Vec<Arc<ActivePreset>> {
         if self.is_empty() {
             return Vec::new();
@@ -461,6 +455,10 @@ impl TriggerFilesSeen {
                     names_root: find_names_root_below(directory), matcher: get_preset_matcher(at),
                     matched: AtomicBool::new(false) }))
         }).collect()
+    }
+
+    fn is_empty(self) -> bool {
+        self.0 == 0
     }
 
     fn holds(self, file: &str) -> bool {
@@ -766,9 +764,11 @@ mod tests {
 
     #[test]
     fn every_shipped_preset_compiles_and_its_trigger_files_fit_the_table() {
-        for (at, preset) in TEST_PRESETS.iter().enumerate() {
+        for preset in &TEST_PRESETS {
             assert!(!preset.name.is_empty() && !preset.patterns.is_empty(), "{}", preset.name);
-            assert!(!get_preset_matcher(at).is_empty(), "{}", preset.name);
+            if let Err(error) = PathPatternMatcher::compile(preset.patterns, TakingBack::Refused) {
+                panic!("{}: {error:?}", preset.name);
+            }
             assert!(preset.companion_file.is_none() || !preset.trigger_files.is_empty(), "{}: a companion of nothing", preset.name);
         }
         let names = TEST_PRESETS.iter().flat_map(|preset| preset.trigger_files.iter().copied().chain(preset.companion_file)).count();

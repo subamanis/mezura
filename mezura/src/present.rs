@@ -183,12 +183,12 @@ fn format_files_left_out(result: &RunResult, show_skipped: bool) -> Vec<String> 
 // Nothing once the project's own configuration declares its test patterns. The rows keep to the
 // width themselves, so nothing wraps them.
 fn print_test_preset_notes(result: &RunResult, config: &Configuration) {
-    let decided = config.view.local_dir.as_ref().is_some_and(|x| x.configuration_applied && x.declares_test_patterns);
-    if !config.view.prints_text() || !config.engine.detect_tests || decided {
+    let declared_by_the_project = config.view.local_dir.as_ref().is_some_and(|x| x.declares_test_patterns);
+    if !config.view.prints_text() || !config.engine.detect_tests || declared_by_the_project {
         return;
     }
     let lines = format_applied_presets(result).into_iter()
-            .chain(find_presets_to_suggest(result).iter().map(|names| format_preset_suggestion(names)))
+            .chain(find_names_of_presets_to_suggest(result).iter().map(|names| format_preset_suggestion(names)))
             .collect::<Vec<_>>();
     if !lines.is_empty() {
         eprintln!();
@@ -243,14 +243,14 @@ fn format_preset_directory(directory: &str, targets: &[Target]) -> String {
     super::result_printer::elide_long_path(relative.as_deref().unwrap_or(directory)).into_owned()
 }
 
-fn find_presets_to_suggest(result: &RunResult) -> Vec<&'static [&'static str]> {
-    GENERIC_PROJECT_FILES.iter().filter(|(file, presets, languages)| {
-        let counted = languages.iter().any(|language| result.per_language.contains_key(*language));
-        let tests_found = languages.iter().any(|language| result.tests.get(*language).is_some_and(|x| x.stats.lines > 0))
-                || result.applied_presets.iter().any(|preset| preset.matched && presets.contains(&preset.name.as_str()));
+fn find_names_of_presets_to_suggest(result: &RunResult) -> Vec<&'static [&'static str]> {
+    GENERIC_PROJECT_FILES.iter().filter(|(file, names_of_presets, names_of_languages)| {
+        let counted = names_of_languages.iter().any(|language| result.per_language.contains_key(*language));
+        let tests_found = names_of_languages.iter().any(|language| result.tests.get(*language).is_some_and(|x| x.stats.lines > 0))
+                || result.applied_presets.iter().any(|preset| preset.matched && names_of_presets.contains(&preset.name.as_str()));
         counted && !tests_found
                 && result.targets.iter().any(|target| std::path::Path::new(&target.path).join(file).is_file())
-    }).map(|(_, presets, _)| *presets).collect()
+    }).map(|(_, names_of_presets, _)| *names_of_presets).collect()
 }
 
 fn format_preset_suggestion(names: &[&str]) -> String {
@@ -427,10 +427,10 @@ mod tests {
         result.targets = vec![Target::of(crate::paths::normalise_separators(&root.to_string_lossy()))];
         result.per_language.insert("TypeScript".to_owned(), result.total.clone());
 
-        let suggested = find_presets_to_suggest(&result).iter().map(|names| format_preset_suggestion(names)).collect::<Vec<_>>();
+        let suggested = find_names_of_presets_to_suggest(&result).iter().map(|names| format_preset_suggestion(names)).collect::<Vec<_>>();
         assert_eq!(vec!["jest, vitest or mocha tests are declared with '--tests @jest', '@vitest' or '@mocha'.".to_owned()], suggested);
         result.applied_presets = vec![AppliedPreset::new("vitest".to_owned(), "D:/".to_owned(), "vitest.config.ts".to_owned(), true)];
-        assert!(find_presets_to_suggest(&result).is_empty(), "a preset that found the tests was suggested again");
+        assert!(find_names_of_presets_to_suggest(&result).is_empty(), "a preset that found the tests was suggested again");
 
         std::fs::remove_dir_all(&root).unwrap();
     }
