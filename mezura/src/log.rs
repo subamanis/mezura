@@ -6,13 +6,13 @@ use std::io::{self, BufWriter, Read, Write};
 use std::path::Path;
 
 use chrono::{DateTime, Local, SecondsFormat};
-use mezura_core::{LineClasses, RunResult, Stats, Target, UNNAMED_MODULE_NAME};
+use mezura_core::{LineClasses, RunResult, Stats, Target, TestCode, UNNAMED_MODULE_NAME};
 use serde_json::Value;
 
 use super::config_manager::Configuration;
 use super::json_printer::{create_array, create_object, escape};
 use super::json_reader::{DocumentError, Scope};
-use super::json_reader::{parse_classes, parse_scope, parse_stats, read_list, read_nested,
+use super::json_reader::{join_location, parse_classes, parse_scope, parse_stats, read_list, read_nested,
         read_number, read_object, read_optional_name, read_text};
 
 // Separate from the run document's version: it moves when a key of an entry is removed or changes
@@ -27,15 +27,18 @@ pub struct LogEntry {
     pub scope: Scope,
     pub targets: Vec<Target>,
     pub total: Stats,
+    // None on an entry written before the tests were recorded
+    pub tests: Option<TestCode>,
     pub modules: Vec<ModuleEntry>
 }
 
-// Only what a module line of the history section prints: the files and the extra lines are on the
+// Only what a module line of the history section prints. The files and the extra lines are on the
 // total and not repeated per module.
 pub struct ModuleEntry {
     pub name: String,
     pub lines: usize,
-    pub classes: LineClasses
+    pub classes: LineClasses,
+    pub tests: Option<TestCode>
 }
 
 // A log is the one output that cannot be measured again, since the trees those runs counted have
@@ -109,11 +112,12 @@ fn format_entry_line(config: &Configuration, datetime_now: &DateTime<Local>, res
             .map_or("null".to_owned(), |name| format!("\"{}\"", escape(name)));
 
     format!("{{\"format\":{LOG_FORMAT_VERSION},\"kind\":\"{LOG_ENTRY_KIND}\",\"name\":{name},\
-            \"taken_at\":\"{}\",\"scope\":{},\"total\":{},\"modules\":{}}}",
+            \"taken_at\":\"{}\",\"scope\":{},\"total\":{},\"tests\":{},\"modules\":{}}}",
             datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false),
             format_scope(config, &result.targets),
             format_stats(&result.total),
-            format_modules(result))
+            format_tests(&result.tests, config),
+            format_modules(result, config))
 }
 
 // The same keys as the run document's scope, read back through the same 'parse_scope', so the two
@@ -148,20 +152,31 @@ fn format_stats(total: &Stats) -> String {
             total.files, total.bytes, total.lines, format_classes(&total.classes))
 }
 
+// Null with the detection off, since a zero there would read as a run that found none. The whole
+// files go beside the figures, since taking the tests out of a total takes those files out.
+fn format_tests(tests: &HashMap<String, TestCode>, config: &Configuration) -> String {
+    if !config.engine.detect_tests {
+        return String::from("null");
+    }
+    let tests = TestCode::total_of(tests);
+    format!("{{\"files\":{},\"whole_files\":{},\"bytes\":{},\"lines\":{},\"classes\":{}}}",
+            tests.stats.files, tests.whole_files, tests.stats.bytes, tests.stats.lines, format_classes(&tests.stats.classes))
+}
+
 fn format_classes(classes: &LineClasses) -> String {
     create_object(LineClasses::NAMES.iter().zip(classes.to_array())
             .map(|(name, count)| format!("\"{name}\":{count}")))
 }
 
-fn format_modules(result: &RunResult) -> String {
+fn format_modules(result: &RunResult, config: &Configuration) -> String {
     if !result.has_modules() {
         return String::from("[]");
     }
 
     create_array(result.modules.iter().map(|module| {
         let name = module.name.as_ref().map_or("null".to_owned(), |name| format!("\"{}\"", escape(name)));
-        format!("{{\"name\":{name},\"lines\":{},\"classes\":{}}}",
-                module.total.lines, format_classes(&module.total.classes))
+        format!("{{\"name\":{name},\"lines\":{},\"classes\":{},\"tests\":{}}}",
+                module.total.lines, format_classes(&module.total.classes), format_tests(&module.tests, config))
     }))
 }
 
@@ -224,6 +239,7 @@ fn parse_entry(line: &str) -> Result<LogEntry, DocumentError> {
         scope,
         targets,
         total: parse_stats(read_nested(root, "total", "")?, "total")?,
+        tests: parse_tests(root, "")?,
         modules: read_list(root, "modules", "")?.iter().enumerate().map(|(i, entry)| {
             let at = format!("modules[{i}]");
             let entry = read_object(entry, &at)?;
@@ -231,10 +247,18 @@ fn parse_entry(line: &str) -> Result<LogEntry, DocumentError> {
                 name: read_optional_name(entry, "name", &at)?
                         .unwrap_or_else(|| UNNAMED_MODULE_NAME.to_owned()),
                 lines: read_number(entry, "lines", &at)?,
-                classes: parse_classes(entry, &at)?
+                classes: parse_classes(entry, &at)?,
+                tests: parse_tests(entry, &at)?
             })
         }).collect::<Result<Vec<_>, _>>()?
     })
+}
+
+fn parse_tests(parent: &serde_json::Map<String, Value>, at: &str) -> Result<Option<TestCode>, DocumentError> {
+    let Some(value) = parent.get("tests").filter(|value| !value.is_null()) else { return Ok(None) };
+    let at = join_location(at, "tests");
+    let tests = read_object(value, &at)?;
+    Ok(Some(TestCode { stats: parse_stats(tests, &at)?, whole_files: read_number(tests, "whole_files", &at)? }))
 }
 
 #[cfg(test)]
@@ -272,6 +296,10 @@ mod tests {
         let mut result = result_of(crate::test_support::plain_stats_of(10, 5000, 1000, 700, 200, HashMap::new()),
                 vec![module_of(Some("frontend"), 600, 400, 150), module_of(None, 400, 300, 50)]);
         result.targets = vec![Target::named("frontend", "./web"), Target::of("./src")];
+        let tests_of = |files: usize, lines: usize, whole_files: usize| hashmap!["Rust".to_owned() => TestCode {
+                stats: crate::test_support::plain_stats_of(files, lines * 30, lines, lines - 20, 10, HashMap::new()), whole_files }];
+        result.tests = tests_of(3, 120, 2);
+        result.modules[0].tests = tests_of(1, 40, 1);
 
         let now: DateTime<Local> = DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
         let entry = parse_entry(&format_entry_line(&config, &now, &result)).unwrap();
@@ -293,12 +321,29 @@ mod tests {
         assert_eq!((600, 400, 150), (entry.modules[0].lines,
                 model.calculate_code_lines(&entry.modules[0].classes),
                 model.calculate_comment_lines(&entry.modules[0].classes)));
+        let tests = entry.tests.unwrap();
+        assert_eq!((3, 2, 3600, 120, 100), (tests.stats.files, tests.whole_files, tests.stats.bytes, tests.stats.lines,
+                tests.stats.calculate_code_lines(model)));
+        assert_eq!((40, 1), entry.modules[0].tests.as_ref().map(|x| (x.stats.lines, x.whole_files)).unwrap());
+        assert_eq!(0, entry.modules[1].tests.as_ref().unwrap().stats.lines, "a module with no tests records zeros");
 
         config.view.set_log_option(LogOption::new(None));
-        let plain = parse_entry(&format_entry_line(&config, &now,
-                &result_of(crate::test_support::plain_stats_of(1, 1, 1, 1, 0, HashMap::new()), Vec::new()))).unwrap();
+        let plain_line = format_entry_line(&config, &now,
+                &result_of(crate::test_support::plain_stats_of(1, 1, 1, 1, 0, HashMap::new()), Vec::new()));
+        let plain = parse_entry(&plain_line).unwrap();
         assert_eq!(None, plain.name);
         assert!(plain.modules.is_empty());
+        assert_eq!(0, plain.tests.as_ref().unwrap().stats.lines);
+
+        let before_tests_were_recorded = plain_line.replace(&format!(",\"tests\":{}", format_tests(&HashMap::new(), &config)), "");
+        assert_ne!(plain_line, before_tests_were_recorded);
+        assert!(parse_entry(&before_tests_were_recorded).unwrap().tests.is_none(), "an entry written without tests refused to read");
+
+        config.engine.detect_tests = false;
+        let detection_off = format_entry_line(&config, &now, &result);
+        assert!(detection_off.contains(",\"tests\":null,\"modules\""), "{detection_off}");
+        let parsed = parse_entry(&detection_off).unwrap();
+        assert!(parsed.tests.is_none() && parsed.modules.iter().all(|x| x.tests.is_none()), "a run with the detection off recorded a count");
     }
 
     // Or the same project counted from two checkouts of it reads as two measurements, and every

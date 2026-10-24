@@ -525,7 +525,7 @@ fn read_array<'a>(value: &'a Value, at: &str) -> Result<&'a Vec<Value>, Document
     value.as_array().ok_or_else(|| DocumentError::WrongType { at: at.to_owned(), wanted: "an array" })
 }
 
-fn join_location(at: &str, key: &str) -> String {
+pub(crate) fn join_location(at: &str, key: &str) -> String {
     if at.is_empty() {
         key.to_owned()
     } else {

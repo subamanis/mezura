@@ -2786,8 +2786,8 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
     }
     let mut scope = super::diff::scope_of(&config.engine, config.view.counting);
     scope.exclude = config_manager::format_patterns_inside(project.map(|project| project.project_dir.as_str()), &scope.exclude);
-    // The log holds no keyword counts and no tests, so a run that only stopped counting either, or
-    // declared its tests with other patterns, changed nothing the log records
+    // The log's totals are whole, so a run that only stopped counting keywords or tests, or
+    // declared its tests with other patterns, changed nothing they hold
     changed.extend(super::diff::find_settings_that_differ(&entry.scope, &scope)
             .into_iter().filter(|setting| ![super::diff::HIDE_KEYWORDS, super::diff::HIDE_TESTS,
                     config_manager::TESTS].contains(setting)));
@@ -2810,7 +2810,7 @@ fn format_modified_tag(changed: &[&'static str]) -> String {
 // One line per module under the line of the entry, and narrower than it: Files and Extra stay on
 // the total, or one entry is five wide lines and '--compare 3' stops being readable.
 fn format_module_comparison_lines(entry: &super::log::LogEntry, modules: &[mezura_core::ModuleResult],
-        model: CountingModel) -> String {
+        model: CountingModel, without_tests: bool) -> String {
     let theme = super::theme::get_active();
     fn name_of(module: &mezura_core::ModuleResult) -> &str {
         module.name.as_deref().unwrap_or(UNNAMED_MODULE_NAME)
@@ -2820,22 +2820,30 @@ fn format_module_comparison_lines(entry: &super::log::LogEntry, modules: &[mezur
                     .filter(|name| !modules.iter().any(|x| name_of(x) == name)))
             .collect::<Vec<_>>();
     let width = names.iter().map(|x| calculate_widest_visible_line(x)).max().unwrap_or(0);
+    let figures_of = |then: &super::log::ModuleEntry| {
+        let whole = Stats::new(0, 0, then.lines, then.classes.clone(), HashMap::new());
+        match (without_tests, &then.tests) {
+            (true, Some(tests)) => tests.calculate_production_of(&whole),
+            _ => whole
+        }
+    };
 
     // Right aligned, since these three narrow columns are meant to be read down the entry.
-    let compared = names.iter().filter_map(|name| entry.modules.iter().find(|x| &x.name == name)).collect::<Vec<_>>();
-    let number_width = |value: &dyn Fn(&super::log::ModuleEntry) -> usize|
+    let compared = names.iter().filter_map(|name| entry.modules.iter().find(|x| &x.name == name))
+            .map(figures_of).collect::<Vec<_>>();
+    let number_width = |value: &dyn Fn(&Stats) -> usize|
             compared.iter().map(|x| format_with_separators(value(x)).len()).max().unwrap_or(0);
     let (lines_width, code_width, comments_width) = (number_width(&|x| x.lines),
-            number_width(&|x| model.calculate_code_lines(&x.classes)),
-            number_width(&|x| model.calculate_comment_lines(&x.classes)));
+            number_width(&|x| x.calculate_code_lines(model)),
+            number_width(&|x| x.calculate_comment_lines(model)));
 
     let mut rendered = String::with_capacity(names.len() * 80);
     for name in &names {
         let padded = format!("       {}{}   ", theme.details_module.paint(name),
                 " ".repeat(width - calculate_widest_visible_line(name)));
-        let now = modules.iter().find(|x| name_of(x) == name).map(|x| &x.total);
-        let then = entry.modules.iter().find(|x| &x.name == name);
-        // A module compared against nothing would read '+100%', which is false: it did not grow, it
+        let now = modules.iter().find(|x| name_of(x) == name).map(|x| ShownFigures::of_module(x, without_tests).total);
+        let then = entry.modules.iter().find(|x| &x.name == name).map(figures_of);
+        // A module compared against nothing would read '+100%', which is false. It did not grow, it
         // started being counted on its own. The ones that are not in both are named as what they are.
         let tail = match (now, then) {
             (Some(now), Some(then)) => {
@@ -2849,10 +2857,10 @@ fn format_module_comparison_lines(entry: &super::log::LogEntry, modules: &[mezur
                         cell(&theme.lines_number, now.lines, then.lines, lines_width),
                         theme.history_label.paint("Code:"),
                         cell(&theme.code_number, now.calculate_code_lines(model),
-                                model.calculate_code_lines(&then.classes), code_width),
+                                then.calculate_code_lines(model), code_width),
                         theme.history_label.paint("Comments:"),
                         cell(&theme.comments_number, now.calculate_comment_lines(model),
-                                model.calculate_comment_lines(&then.classes), comments_width))
+                                then.calculate_comment_lines(model), comments_width))
             },
             (Some(_), None) => theme.note.paint("declared in this run, nothing to compare against").to_string(),
             _ => theme.note.paint("not counted any more").to_string()
@@ -2880,7 +2888,9 @@ fn print_comparison_to_previous_runs(result: &RunResult, log_content: &str, conf
     let theme = super::theme::get_active();
     outln!("\n{}.\n", theme.heading.paint("History"));
 
-    let total = &result.total;
+    let without_tests = leaves_tests_out(config);
+    let shown = ShownFigures::of_run(result, without_tests);
+    let total = shown.total.as_ref();
     let log_entries = super::log::read_last_entries(log_content, config.view.compare_level);
 
     let mut comparison_str = String::with_capacity(200);
@@ -2889,7 +2899,12 @@ fn print_comparison_to_previous_runs(result: &RunResult, log_content: &str, conf
         let (days, hours, minutes) = split_minutes_to_D_H_M(duration.num_minutes());
         let arrow = theme.history_entry.paint("->");
         let age = theme.history_age.paint(&format!("({days} days, {hours} hours and {minutes} minutes ago)"));
-        let tag = format_modified_tag(&find_settings_changed_since(entry, config, &result.targets));
+        let (then, whole) = match (without_tests, &entry.tests) {
+            (true, Some(tests)) => (Cow::Owned(tests.calculate_production_of(&entry.total)), String::new()),
+            (true, None) => (Cow::Borrowed(&entry.total), format!("   {}", theme.history_modified.paint("tests included"))),
+            _ => (Cow::Borrowed(&entry.total), String::new())
+        };
+        let tag = format_modified_tag(&find_settings_changed_since(entry, config, &result.targets)) + &whole;
         if let Some(name) = &entry.name {
             comparison_str.push_str(&format!("{arrow} \"{name}\" {age}{tag}\n"));
         } else {
@@ -2900,16 +2915,16 @@ fn print_comparison_to_previous_runs(result: &RunResult, log_content: &str, conf
                 theme.history_label.paint(name), style.paint(&format_with_separators(then)),
                 paint_percentage(&format_signed_percentage_difference(then, now)));
         comparison_str.push_str(&format!("     {} {} {} {} {}\n",
-                field("Files:", &theme.files_number, entry.total.files, total.files),
-                field("Lines:", &theme.lines_number, entry.total.lines, total.lines),
-                field("Code:", &theme.code_number, entry.total.calculate_code_lines(model), total.calculate_code_lines(model)),
-                field("Comments:", &theme.comments_number, entry.total.calculate_comment_lines(model), total.calculate_comment_lines(model)),
+                field("Files:", &theme.files_number, then.files, total.files),
+                field("Lines:", &theme.lines_number, then.lines, total.lines),
+                field("Code:", &theme.code_number, then.calculate_code_lines(model), total.calculate_code_lines(model)),
+                field("Comments:", &theme.comments_number, then.calculate_comment_lines(model), total.calculate_comment_lines(model)),
                 field(&format!("{}:", get_third_column_header(model)), &theme.extra_number,
-                        entry.total.calculate_extra_lines(model), total.calculate_extra_lines(model))));
-        // A run that named no module says nothing about them here either; the 'modified: targets'
-        // tag is what already reports that the targets are not the ones they were
+                        then.calculate_extra_lines(model), total.calculate_extra_lines(model))));
+        // A run that named no module says nothing about them here either. The modified targets tag
+        // is what already reports that the targets are not the ones they were.
         if result.has_modules() {
-            comparison_str.push_str(&format_module_comparison_lines(entry, &result.modules, model));
+            comparison_str.push_str(&format_module_comparison_lines(entry, &result.modules, model, without_tests));
         }
         comparison_str.push('\n');
     }
@@ -4370,7 +4385,7 @@ mod tests {
             edit(&mut then);
             crate::log::LogEntry { name: None, datetime: Local::now(),
                     scope: crate::diff::scope_of(&then.engine, then.view.counting), targets: Vec::new(),
-                    total: crate::test_support::plain_stats_of(1, 1, 1, 1, 0, hashmap![]), modules: Vec::new() }
+                    total: crate::test_support::plain_stats_of(1, 1, 1, 1, 0, hashmap![]), tests: None, modules: Vec::new() }
         };
 
         // Taken with the same settings: nothing to say
@@ -4429,7 +4444,7 @@ mod tests {
         let entry = crate::log::LogEntry { name: None, datetime: Local::now(),
                 scope: crate::diff::scope_of(&config.engine, config.view.counting),
                 targets: vec![mezura_core::Target::of("./web")],
-                total: crate::test_support::plain_stats_of(1, 1, 1, 1, 0, hashmap![]), modules: Vec::new() };
+                total: crate::test_support::plain_stats_of(1, 1, 1, 1, 0, hashmap![]), tests: None, modules: Vec::new() };
 
         assert!(find_settings_changed_since(&entry, &config, &[mezura_core::Target::of("/home/other/portal/web")]).is_empty());
         assert_eq!(vec!["targets"],
@@ -4441,6 +4456,27 @@ mod tests {
         config.view.config_name_to_load = Some("portal".to_owned());
         assert_eq!(vec!["targets"],
                 find_settings_changed_since(&entry, &config, &[mezura_core::Target::of("/home/other/portal/web")]));
+    }
+
+    #[test]
+    fn under_removed_the_history_takes_out_the_tests_an_entry_recorded_and_shows_an_older_entry_whole() {
+        let stats = |files, lines, code| crate::test_support::plain_stats_of(files, lines * 10, lines, code, 0, hashmap![]);
+        let tests_of = |lines, code| TestCode { stats: stats(1, lines, code), whole_files: 1 };
+        let now = mezura_core::ModuleResult { name: Some("core".to_owned()), per_language: hashmap![], nested_languages: hashmap![],
+                files: hashmap![], tests: hashmap!["Rust".to_owned() => tests_of(40, 30)], total: stats(3, 100, 70) };
+        let entry = |tests: Option<TestCode>| {
+            let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+            crate::log::LogEntry { name: None, datetime: Local::now(), scope: crate::diff::scope_of(&config.engine, config.view.counting),
+                    targets: Vec::new(), total: stats(3, 90, 60), tests: None,
+                    modules: vec![crate::log::ModuleEntry { name: "core".to_owned(), lines: 90, classes: stats(3, 90, 60).classes, tests }] }
+        };
+
+        let whole = format_module_comparison_lines(&entry(Some(tests_of(30, 20))), std::slice::from_ref(&now), CountingModel::Content, false);
+        assert!(whole.contains("90") && whole.contains("60") && !whole.contains("40"), "{whole}");
+        let outside = format_module_comparison_lines(&entry(Some(tests_of(30, 20))), std::slice::from_ref(&now), CountingModel::Content, true);
+        assert!(outside.contains("60") && outside.contains("40") && !outside.contains("90"), "{outside}");
+        let unrecorded = format_module_comparison_lines(&entry(None), &[now], CountingModel::Content, true);
+        assert!(unrecorded.contains("90") && unrecorded.contains("60"), "an entry without tests was not shown whole: {unrecorded}");
     }
 
     #[test]
