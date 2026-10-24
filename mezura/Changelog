@@ -101,9 +101,9 @@ Bugfixes:
 
 Change in commands:
   -> A name pattern that reaches above a target no longer matches: 'services/api/gen' with the
-      target './services/api' is written 'api/gen' or './services/api/gen'. A name with a slash that
-      matched nothing, or a path that names nothing on disk or a place outside every target, is
-      reported, for '--exclude' and '--tests' alike.
+      target './services/api' is written 'api/gen' or './services/api/gen'. A path that names
+      nothing on disk or a place outside every target is reported, and so is a name typed for the
+      run that matched nothing, for '--exclude' and '--tests' alike.
   -> 'x/**' means the folder 'x', which is skipped and leaves the excluded count.
   -> A trailing '/' means a folder only, so '--exclude "test/"' leaves a script named 'test' alone.
   -> '--exclude' refuses a pattern starting with '!'.

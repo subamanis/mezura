@@ -1472,6 +1472,7 @@ fn an_exclusion_never_reaches_above_the_target_and_one_naming_a_path_that_change
         (result.total.lines, result.files_present.excluded_files, warned)
     };
     let of = |patterns: &[&str]| PathPatterns::of(patterns);
+    let typed = |patterns: &[&str]| PathPatterns { reports_unmatched_names: true, ..of(patterns) };
     let none : Vec<String> = Vec::new();
 
     assert_eq!((12, 0, none.clone()), counted(&proj_str, of(&[])));
@@ -1479,7 +1480,7 @@ fn an_exclusion_never_reaches_above_the_target_and_one_naming_a_path_that_change
     assert_eq!((10, 0, none.clone()), counted(&proj_str, of(&["src/gen"])));
     assert_eq!((10, 0, none.clone()), counted(&proj_str, of(&[&format!("{proj_str}/src/gen")])), "a full path did not exclude what it names");
     assert_eq!((10, 0, none.clone()), counted(&proj_str, of(&["proj/src/gen"])), "a name does not see the target's own name");
-    assert_eq!((12, 0, vec!["tests/proj/src/gen".to_owned()]), counted(&proj_str, of(&["tests/proj/src/gen"])),
+    assert_eq!((12, 0, vec!["tests/proj/src/gen".to_owned()]), counted(&proj_str, typed(&["tests/proj/src/gen"])),
             "a name reaching above the target matched, or went unreported");    assert_eq!((8, 0, none.clone()), counted(&proj_str, of(&["build/"])), "a script named 'build' was left out with the folder");
     assert_eq!((6, 0, none.clone()), counted(&proj_str, of(&["build"])));
     assert_eq!((10, 1, none.clone()), counted(&proj_str, of(&["g.rs"])), "a file left out was not counted as excluded");
@@ -1492,7 +1493,7 @@ fn an_exclusion_never_reaches_above_the_target_and_one_naming_a_path_that_change
 
     let from_project = |patterns: &[&str]| PathPatterns { read_from: Some(proj_str.clone()), ..of(patterns) };
     let src = format!("{proj_str}/src");
-    assert_eq!((5, 0, vec!["proj/src/gen".to_owned()]), counted(&src, of(&["proj/src/gen"])),
+    assert_eq!((5, 0, vec!["proj/src/gen".to_owned()]), counted(&src, typed(&["proj/src/gen"])),
             "a target below the project saw the project's name");
     assert_eq!((3, 0, none.clone()), counted(&src, from_project(&["proj/src/gen"])),
             "names from the project are read from the project folder's parent for a target inside it");

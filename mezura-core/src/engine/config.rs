@@ -259,8 +259,8 @@ pub struct PathPatterns {
     /// it then reads names from that directory's parent, the way `mezura ./` typed there would.
     /// `None` reads them from each target's own parent.
     pub read_from: Option<String>,
-    /// Whether a plain name that matched nothing is reported, which a list typed for this run
-    /// wants and a list shared between projects does not. A place or a name with a slash in it
+    /// Whether a name that matched nothing is reported, which a list typed for this run wants and
+    /// a list shared between projects does not. A place missing from disk or outside every target
     /// is reported either way.
     pub reports_unmatched_names: bool
 }

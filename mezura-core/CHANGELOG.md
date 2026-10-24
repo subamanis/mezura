@@ -28,7 +28,8 @@ New:
 - `PathPatterns`, the patterns of the exclusions and of the test code together with the directory
   their names are read from, and `PatternError` for one that does not parse. The warning code
   `pattern-matched-nothing` reports a place missing from disk or outside every target, and a name
-  with a slash that nothing matched. `validate_test_patterns` checks a list of test patterns as it
+  that nothing matched when `PathPatterns::reports_unmatched_names` says the list was typed for the
+  run. `validate_test_patterns` checks a list of test patterns as it
   is typed, and `engine::path_patterns::is_a_path_pattern`, `absolutize_path_pattern`, `is_on_disk`
   and `split_negation` beside it read the place a pattern names.
 - `FileExplanation::test_file_rule` names the rule that made a whole file test code, or the `!`

@@ -195,10 +195,11 @@ impl PathPatternMatcher {
         }).collect()
     }
 
-    pub(crate) fn find_names_that_matched_nothing(&self, plain_names_too: bool) -> Vec<UnusedPattern> {
+    pub(crate) fn find_names_that_matched_nothing(&self, typed_for_the_run: bool) -> Vec<UnusedPattern> {
+        if !typed_for_the_run { return Vec::new(); }
         self.rules.iter().zip(&self.matched).filter_map(|(rule, matched)| {
             match rule.kind {
-                Kind::Name { reaches_into_a_path } if !matched.load(Ordering::Relaxed) && (reaches_into_a_path || plain_names_too) =>
+                Kind::Name { reaches_into_a_path } if !matched.load(Ordering::Relaxed) =>
                         Some(UnusedPattern { written: rule.written.clone(), reason: match reaches_into_a_path {
                             true => Unused::MatchedNothing,
                             false => Unused::NameMatchedNothing
@@ -608,13 +609,12 @@ mod tests {
         let mut found = Vec::new();
         names.find_last_match(&format!("{target}/src/gen"), names_root, true, &mut found);
         names.find_last_match(&format!("{target}/vendor/lib"), names_root, false, &mut found);
-        assert_eq!(vec![unused("**/spec/helpers", Unused::MatchedNothing), unused("vendor/lib/", Unused::MatchedNothing),
-                unused("!src/gen/out", Unused::MatchedNothing)], names.find_names_that_matched_nothing(false),
-                "a plain name was reported, or a folder-only match on a file counted");
+        assert_eq!(Vec::<UnusedPattern>::new(), names.find_names_that_matched_nothing(false),
+                "a name from a list nobody typed for the run was reported");
         assert_eq!(vec![unused("tests", Unused::NameMatchedNothing), unused("**/spec/helpers", Unused::MatchedNothing),
                 unused("vendor/lib/", Unused::MatchedNothing), unused("!src/gen/out", Unused::MatchedNothing)],
-                names.find_names_that_matched_nothing(true), "a typed plain name that matched nothing was passed over");
-        assert!(placed.find_names_that_matched_nothing(false).len() == 1, "{:?}", placed.find_names_that_matched_nothing(false));
+                names.find_names_that_matched_nothing(true), "a typed name that matched nothing was passed over, or a folder-only match on a file counted");
+        assert!(placed.find_names_that_matched_nothing(true).len() == 1, "{:?}", placed.find_names_that_matched_nothing(true));
 
         std::fs::remove_dir_all(&root).unwrap();
     }

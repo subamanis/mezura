@@ -137,9 +137,9 @@ The rules in short, with the whole of them under `--tests` in [COMMANDS.md](COMM
   still test code, and so is a file another file declares as a module under a marker. A marker
   that makes a whole file test code, `@Test`, is off there, since the `!` answers that very
   question: a corpus of JUnit files kept as test data stays data under `--tests "!cases/"`.
-- A place missing from disk or outside every target, and a name with a slash that matched nothing,
-  are reported. A plain name that matched nothing is reported when it was typed for the run, and
-  stays quiet from a configuration, which names folders some of its projects lack.
+- A place missing from disk or outside every target is reported. A name that matched nothing is
+  reported when it was typed for the run, and stays quiet from a configuration, which names
+  folders some of its projects lack.
 - In PowerShell, quote the whole list or escape each comma with a backtick.
 
 Patterns saved in a project's own configuration, with `--save-local` or under `===> tests` in
