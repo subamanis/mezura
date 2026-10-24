@@ -1481,7 +1481,8 @@ fn an_exclusion_never_reaches_above_the_target_and_one_naming_a_path_that_change
     assert_eq!((10, 0, none.clone()), counted(&proj_str, of(&[&format!("{proj_str}/src/gen")])), "a full path did not exclude what it names");
     assert_eq!((10, 0, none.clone()), counted(&proj_str, of(&["proj/src/gen"])), "a name does not see the target's own name");
     assert_eq!((12, 0, vec!["tests/proj/src/gen".to_owned()]), counted(&proj_str, typed(&["tests/proj/src/gen"])),
-            "a name reaching above the target matched, or went unreported");    assert_eq!((8, 0, none.clone()), counted(&proj_str, of(&["build/"])), "a script named 'build' was left out with the folder");
+            "a name reaching above the target matched, or went unreported");
+    assert_eq!((8, 0, none.clone()), counted(&proj_str, of(&["build/"])), "a script named 'build' was left out with the folder");
     assert_eq!((6, 0, none.clone()), counted(&proj_str, of(&["build"])));
     assert_eq!((10, 1, none.clone()), counted(&proj_str, of(&["g.rs"])), "a file left out was not counted as excluded");
     assert_eq!((12, 0, vec![format!("{proj_str}/nowhere")]), counted(&proj_str, of(&[&format!("{proj_str}/nowhere")])),

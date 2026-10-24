@@ -66,7 +66,7 @@ pub const SHOW_LANGUAGES     :&str   = "show-languages";
 pub const SHOW_CONFIGS       :&str   = "show-configs";
 pub const SHOW_THEMES        :&str   = "show-themes";
 pub const SHOW_PRESETS       :&str   = "show-presets";
-pub const THEME_EDITOR      :&str   = "theme-editor";
+pub const THEME_EDITOR       :&str   = "theme-editor";
 pub const RESTORE            :&str   = "restore";
 
 pub const MIN_COMPARE_LEVEL   : usize = 0;

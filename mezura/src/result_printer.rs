@@ -477,6 +477,29 @@ pub(crate) fn is_inside(path: &str, directory: &str) -> bool {
     path == directory || path.strip_prefix(directory).is_some_and(|rest| rest.starts_with('/'))
 }
 
+// What is too wide loses whole components out of its middle and never a piece of one. The file's own
+// name is what tells one row from another, so a name too wide on its own is the floor.
+pub(crate) fn elide_long_path(relative: &str) -> Cow<'_, str> {
+    if calculate_widest_visible_line(relative) <= SHOWN_PATH_WIDTH {
+        return Cow::Borrowed(relative);
+    }
+
+    let parts = relative.split('/').collect::<Vec<_>>();
+    for kept in (1..parts.len().saturating_sub(1)).rev() {
+        let shortened = format!("{}/{ELIDED}/{}", parts[0], parts[parts.len() - kept..].join("/"));
+        if calculate_widest_visible_line(&shortened) <= SHOWN_PATH_WIDTH {
+            return Cow::Owned(shortened);
+        }
+    }
+
+    let name_alone = format!("{ELIDED}/{}", parts[parts.len() - 1]);
+    if calculate_widest_visible_line(&name_alone) < calculate_widest_visible_line(relative) {
+        return Cow::Owned(name_alone);
+    }
+
+    Cow::Borrowed(relative)
+}
+
 fn shorten_path<'a>(path: &'a str, targets: &[mezura_core::Target], common_directory: &str) -> Cow<'a, str> {
     let relative = targets.iter().filter_map(|target| path.strip_prefix(&target.path))
             .map(|rest| rest.trim_start_matches('/'))
@@ -1350,29 +1373,6 @@ fn create_compared_file_rows(files: Vec<super::diff::FileStatsChange>, complete:
                 find_file_branch_marker(at + 1 == count && complete), elide_long_path(&file.path)),
         kind: RowKind::File, depth: 0, baseline: file.baseline, subject: file.subject
     }).collect()
-}
-
-// What is too wide loses whole components out of its middle and never a piece of one: the file's own
-// name is what tells one row from another, so a name too wide on its own is the floor
-pub(crate) fn elide_long_path(relative: &str) -> Cow<'_, str> {
-    if calculate_widest_visible_line(relative) <= SHOWN_PATH_WIDTH {
-        return Cow::Borrowed(relative);
-    }
-
-    let parts = relative.split('/').collect::<Vec<_>>();
-    for kept in (1..parts.len().saturating_sub(1)).rev() {
-        let shortened = format!("{}/{ELIDED}/{}", parts[0], parts[parts.len() - kept..].join("/"));
-        if calculate_widest_visible_line(&shortened) <= SHOWN_PATH_WIDTH {
-            return Cow::Owned(shortened);
-        }
-    }
-
-    let name_alone = format!("{ELIDED}/{}", parts[parts.len() - 1]);
-    if calculate_widest_visible_line(&name_alone) < calculate_widest_visible_line(relative) {
-        return Cow::Owned(name_alone);
-    }
-
-    Cow::Borrowed(relative)
 }
 
 // A part only one reading holds still gets a row, so a section or tests that came or went are visible

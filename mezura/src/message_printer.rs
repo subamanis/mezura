@@ -6,7 +6,8 @@ use mezura_core::language_file::{ConflictRules, FaultyLanguageFile, LanguageDirP
 
 use super::config_manager::*;
 use crate::paths::PERSISTENT_APP_PATHS;
-use crate::test_presets::{PRESET_SIGIL, PresetError, collect_user_preset_names, is_a_shipped_name, read_user_preset};
+use crate::test_presets::{PresetError, collect_user_preset_names, is_a_shipped_name, read_user_preset};
+use crate::test_presets::PRESET_SIGIL;
 
 static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
 pub(crate) const MESSAGE_WIDTH : usize = 110;

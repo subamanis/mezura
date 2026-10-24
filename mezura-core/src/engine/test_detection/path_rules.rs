@@ -91,8 +91,8 @@ pub struct TestPreset {
     pub trigger_files: &'static [&'static str],
     /// A file that has to sit beside the trigger for it to count, the `Gemfile` beside `.rspec`.
     pub companion_file: Option<&'static str>,
-    /// The patterns, in the shape [`crate::EngineConfig::test_patterns`] takes: `*.test.ts` is a
-    /// file name, `__tests__/` a directory name, both matched at any depth under the trigger.
+    /// The patterns, in the shape [`crate::EngineConfig::test_patterns`] takes. `*.test.ts` is a
+    /// file name and `__tests__/` a directory name, both matched at any depth under the trigger.
     pub patterns: &'static [&'static str],
 }
 
@@ -208,10 +208,8 @@ pub(crate) enum OwnListing {
     Unread,
 }
 
-// A build file in the target's own listing is the walk's to read, so it is not asked for here. A
-// typed pattern is written after every preset and overrules one through 'decided_by' as it
-// overrules a build tool. A preset counts as matched when a counted file is judged through it,
-// so the presets whose folder pattern made the scope 'Tests' ride down to the files below.
+// A typed pattern is written after every preset and overrules one through 'decided_by', as it
+// overrules a build tool
 #[derive(Debug, Clone, Default)]
 pub(crate) struct DirectoryScope {
     pub scope: TestScope,
@@ -220,6 +218,7 @@ pub(crate) struct DirectoryScope {
     // The offset into the absolute path that a name pattern reads from
     pub names_root: usize,
     pub presets: Option<Arc<[Arc<ActivePreset>]>>,
+    // Each counted file below marks them matched, since their folder pattern decided it
     pub decided_by_presets: Option<Arc<[Arc<ActivePreset>]>>,
 }
 
@@ -370,6 +369,7 @@ pub(crate) struct PresetClimb {
 
 impl PresetClimb {
     pub(crate) fn find_presets_above(&self, path: &Path, own_listing: OwnListing) -> Option<Arc<[Arc<ActivePreset>]>> {
+        // The walk reads a directory target's own listing, so the climb starts above it
         let mut directories = path.ancestors().skip(usize::from(own_listing == OwnListing::ReadByTheWalk)).collect::<Vec<_>>();
         directories.reverse();
         let mut presets = Vec::new();

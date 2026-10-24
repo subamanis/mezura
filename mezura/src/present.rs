@@ -2,7 +2,8 @@ use std::collections::BTreeMap;
 
 use mezura_core::{FaultyFileDetails, RunResult, ScanSkip, Target, UnreadableDirDetails};
 
-use super::config_manager::{Configuration, HIDE, TESTS};
+use super::config_manager::Configuration;
+use super::config_manager::{HIDE, TESTS};
 use crate::message_printer::MESSAGE_WIDTH;
 use crate::paths::PERSISTENT_APP_PATHS;
 use crate::test_presets::PRESET_SIGIL;
@@ -244,11 +245,11 @@ fn format_preset_directory(directory: &str, targets: &[Target]) -> String {
 
 fn find_presets_to_suggest(result: &RunResult) -> Vec<&'static [&'static str]> {
     GENERIC_PROJECT_FILES.iter().filter(|(file, presets, languages)| {
-        let in_a_target = result.targets.iter().any(|target| std::path::Path::new(&target.path).join(file).is_file());
         let counted = languages.iter().any(|language| result.per_language.contains_key(*language));
         let tests_found = languages.iter().any(|language| result.tests.get(*language).is_some_and(|x| x.stats.lines > 0))
                 || result.applied_presets.iter().any(|preset| preset.matched && presets.contains(&preset.name.as_str()));
-        in_a_target && counted && !tests_found
+        counted && !tests_found
+                && result.targets.iter().any(|target| std::path::Path::new(&target.path).join(file).is_file())
     }).map(|(_, presets, _)| *presets).collect()
 }
 
