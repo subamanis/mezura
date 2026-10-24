@@ -107,7 +107,14 @@ pub struct Comparison {
 
 impl Comparison {
     // 'notes_so_far' is the notes the acquisition already gathered, and they read first
-    pub fn of(baseline: Reading, subject: Reading, config: &Configuration, notes_so_far: Vec<Note>) -> Self {
+    pub fn of(mut baseline: Reading, mut subject: Reading, config: &Configuration, mut notes_so_far: Vec<Note>) -> Self {
+        // A side read without detection has nothing the other side's tests can be held against, so
+        // the comparison runs without them, the way a counted side adopts the setting
+        if baseline.scope.tests_detected != subject.scope.tests_detected {
+            let from = if baseline.scope.tests_detected { &subject } else { &baseline }.determine_display_name();
+            forget_tests_of(if baseline.scope.tests_detected { &mut baseline } else { &mut subject });
+            notes_so_far.push(Note::SettingsAdopted { from, settings: vec![HIDE_TESTS], naming_nothing: Vec::new() });
+        }
         let unpaired = pair_modules(&baseline.result, &subject.result).is_none();
         let notes = determine_comparison_notes(&baseline, &subject, config, notes_so_far, unpaired);
 
@@ -511,8 +518,9 @@ pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::Count
 pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'static str> {
     let mut differ = Vec::new();
     if !hold_the_same_values(&baseline.exclude, &subject.exclude) {differ.push(EXCLUDE)}
-    // In order, since the last pattern to match is the one that decides
-    if baseline.tests != subject.tests {differ.push(TESTS)}
+    // In order, since the last pattern to match is the one that decides. Without detection on
+    // either side the patterns reached nothing, so they are no difference.
+    if (baseline.tests_detected || subject.tests_detected) && baseline.tests != subject.tests {differ.push(TESTS)}
     if !hold_the_same_values(&baseline.languages, &subject.languages) {differ.push(LANGUAGES)}
     if !hold_the_same_values(&baseline.excluded_languages, &subject.excluded_languages) {differ.push(EXCLUDE_LANGUAGES)}
     if baseline.forced_languages != subject.forced_languages {differ.push(FORCE_LANGUAGE)}
@@ -673,6 +681,17 @@ fn prepare_sides<const N: usize>(sides: [DiffSide; N], engine: &EngineConfig)
         DiffSide::GitRevision(_) => PreparedSide::Revision(acquiring.next()
                 .expect("a resolution for every revision side"))
     }))
+}
+
+fn forget_tests_of(reading: &mut Reading) {
+    reading.scope.tests_detected = false;
+    reading.result.tests.clear();
+    for module in &mut reading.result.modules {
+        module.tests.clear();
+        for entry in module.files.values_mut().flatten() {
+            entry.tests = None;
+        }
+    }
 }
 
 fn adopt_settings_from(document: &Reading, config: &mut Configuration) -> Option<Note> {
@@ -1095,6 +1114,56 @@ mod tests {
         let mut unrecorded = reading("a.json", "3.0.0", Vec::new());
         unrecorded.files_recorded = false;
         assert!(determine_comparison_notes(&unrecorded, &reading("b.json", "3.0.0", Vec::new()), &config, Vec::new(), true).is_empty());
+    }
+
+    #[test]
+    fn a_side_read_without_detection_takes_the_tests_out_of_the_other_side() {
+        use mezura_core::TestCode;
+        let tests = || hashmap!["Rust".to_owned() => TestCode { stats: stats(40, 30, 1), whole_files: 1 }];
+        let reading = |name: &str, detected: bool, tests: HashMap<String, TestCode>| {
+            let per_language = hashmap!["Rust".to_owned() => stats(100, 70, 2)];
+            let mut file = FileEntry { path: "D:/p/src/a.rs".to_owned(), stats: stats(100, 70, 1),
+                    nested_languages: HashMap::new(), tests: None };
+            if detected { file.tests = Some(stats(40, 30, 1)); }
+            let module = ModuleResult { name: None, total: Stats::total_of(&per_language), per_language: per_language.clone(),
+                    nested_languages: HashMap::new(), tests: tests.clone(),
+                    files: hashmap!["Rust".to_owned() => vec![file]] };
+            let mut result = crate::test_support::plain_result_of(per_language, vec![module], Vec::new());
+            result.tests = tests;
+            let mut scope = scope_of(&mezura_core::EngineConfig::default(), mezura_core::CountingModel::Content);
+            scope.tests_detected = detected;
+            Reading { source: Source::Document { path: name.to_owned() }, taken: "2026-08-07T10:00:00+03:00".to_owned(),
+                    version: "3.3.0".to_owned(), scope, warnings: Vec::new(), faulty_files_count: 0,
+                    skipped_counts: crate::json_reader::SkippedCounts::default(), unreadable_dirs_count: 0,
+                    files_recorded: true, files_hidden: 0, result }
+        };
+        let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
+        let has_no_tests = |side: &Reading| !side.scope.tests_detected && side.result.tests.is_empty()
+                && side.result.modules.iter().all(|module| module.tests.is_empty()
+                        && module.files.values().flatten().all(|file| file.tests.is_none()));
+
+        let compared = Comparison::of(reading("old.json", false, HashMap::new()), reading("new.json", true, tests()), &config, Vec::new());
+        assert!(has_no_tests(&compared.baseline) && has_no_tests(&compared.subject), "the subject kept tests the baseline never measured");
+        assert_eq!(vec![Note::SettingsAdopted { from: "old.json".to_owned(), settings: vec![HIDE_TESTS], naming_nothing: Vec::new() }],
+                compared.notes);
+
+        let compared = Comparison::of(reading("old.json", true, tests()), reading("new.json", false, HashMap::new()), &config, Vec::new());
+        assert!(has_no_tests(&compared.baseline) && has_no_tests(&compared.subject));
+        assert_eq!(vec![Note::SettingsAdopted { from: "new.json".to_owned(), settings: vec![HIDE_TESTS], naming_nothing: Vec::new() }],
+                compared.notes);
+
+        let compared = Comparison::of(reading("old.json", true, tests()), reading("new.json", true, tests()), &config, Vec::new());
+        assert!(compared.baseline.scope.tests_detected && !compared.subject.result.tests.is_empty() && compared.notes.is_empty());
+
+        // Patterns that reached nothing are no difference, and ones that did are
+        let mut patterned = scope_of(&mezura_core::EngineConfig::default(), mezura_core::CountingModel::Content);
+        patterned.tests = vec!["spec/".to_owned()];
+        let mut plain = patterned.clone();
+        plain.tests.clear();
+        assert_eq!(vec![TESTS], find_settings_that_differ(&patterned, &plain));
+        patterned.tests_detected = false;
+        plain.tests_detected = false;
+        assert!(find_settings_that_differ(&patterned, &plain).is_empty());
     }
 
     // Every combination is written out because the answer is a guard over an or-pattern, where the
