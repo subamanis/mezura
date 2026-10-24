@@ -108,8 +108,8 @@ is tests only if `D:/Cargo.toml` exists.
 The one exception is a file another file declares as a module under a marker. The declaring file
 has to be in the same count, so counting a folder below it, naming the declared file alone, or
 leaving the declarer out with `--exclude`, a `.gitignore` or as generated leaves the declared file
-production, while `--explain` reads the declaring files from disk and answers as a count of the
-whole project does.
+production, while `--explain` reads the declaring files from disk, whatever `--exclude` or a
+`.gitignore` says of them, and answers as a count of the whole project does.
 
 
 ## Declaring the rest with `--tests`
@@ -442,7 +442,7 @@ that is a layout rule the parser has no business guessing. Refused.
   language carries, `keywords` when they are counted, and `whole_files`, the files that are test
   code from their first line to their last, then `total.tests`, `modules[].total.tests` and
   `languages[].by_file[].tests`, the last without keywords. A comparison carries the compared pair
-  under each of those.
+  under each of those, the file rows aside, which carry their figures alone.
 - **`--diff`** against a document written without detection, or by an earlier version, runs
   without it, so no row appears on either side, and says so.
 - **`--explain`.** Every line of test code is marked `test code`, the totals say how many, and a

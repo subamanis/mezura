@@ -1221,9 +1221,10 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     'spans', byte offsets into its line. It always answers for the whole file, because a program
     reading it is written against one entry per line, so a run asking for lines and for the
     document at once is refused. '--counting' picks the buckets, and the commands choosing what is
-    counted ('--languages', '--force-language' and the rest) apply as in a run. The commands that
-    belong to a report over a whole scan ('--diff', '--log', '--compare', '--sort', '--top',
-    '--by-file') are refused beside it.
+    counted ('--languages', '--force-language' and the rest) apply as in a run. A name pattern of
+    '--tests' is read the way a run on '.' typed from the same directory reads it, so it sees that
+    directory's name and everything below it. The commands that belong to a report over a whole
+    scan ('--diff', '--log', '--compare', '--sort', '--top', '--by-file') are refused beside it.
 ```
 
 ### <a id="cmd-threads" name="cmd-threads"></a>--threads

@@ -1,4 +1,4 @@
-files=89 lines=1226 code=665 comments=281
+files=89 lines=1227 code=666 comments=281
 
 Ada
   files=1 lines=8 code=5 comments=2
@@ -321,6 +321,6 @@ WGSL
   words_in_code=3 string_content=0 comment_words_beside_code=0 words_in_comment=3 punctuation_in_code=1 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   structs=1
 Zig
-  files=1 lines=7 code=4 comments=2
-  words_in_code=4 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
+  files=1 lines=8 code=5 comments=2
+  words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   enums=1 structs=1

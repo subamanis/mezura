@@ -333,12 +333,14 @@ fn join_place_and_rest(place: &str, rest: &str) -> String {
     }
 }
 
-// A '..' left in the glob matches no path the walk builds, and a root or a drive is never stepped over
+// A '..' or a doubled separator left in the glob matches no path the walk builds, and a root or a
+// drive is never stepped over. The two leading empties of a UNC path are its share and stay.
 fn remove_parent_steps(path: &str) -> String {
     let mut kept: Vec<&str> = Vec::new();
     for component in path.split('/') {
         match component {
             "." => {},
+            "" if kept.len() >= 2 => {},
             ".." => match kept.last() {
                 Some(last) if !last.is_empty() && !last.ends_with(':') && *last != ".." => { kept.pop(); },
                 _ => kept.push(component)
@@ -511,6 +513,9 @@ mod tests {
         assert_eq!("/../x", remove_parent_steps("/../x"));
         assert_eq!("//server/share/x", remove_parent_steps("//server/share/a/../x"));
         assert_eq!("D:/a", remove_parent_steps("D:/a/b/.."));
+        assert_eq!("D:/a/b/c", remove_parent_steps("D:/a//b///c"), "a doubled separator was kept");
+        assert_eq!("/a/b", remove_parent_steps("/a//b"));
+        assert_eq!("//server/share/x", remove_parent_steps("//server/share//x"));
     }
 
     #[test]
