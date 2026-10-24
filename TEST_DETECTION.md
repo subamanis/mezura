@@ -188,7 +188,8 @@ project included. Where a project has a production folder of that name, write th
 - `#[cfg_attr(predicate, attribute)]` only when the predicate says test and the attribute applied
   holds `test` in its name: `#[cfg_attr(test, test)]` is a marker, while
   `#[cfg_attr(test, derive(Debug))]` and `#![cfg_attr(test, allow(deref_nullptr))]` are settings.
-- `#![cfg(test)]`: the rest of its scope, which is the whole file at the top of one and the module
+- `#![cfg(test)]`: the rest of its scope, which is the whole file at the top of one, the comments
+  and the other `#![...]` lines above it included since nothing else can stand there, and the module
   it sits in.
 - `#[cfg(test)] mod tests;`, whose body is another file: that file is test code whole, and so is
   every file it declares in turn, whatever attribute those declarations carry, since everything
@@ -447,8 +448,8 @@ that is a layout rule the parser has no business guessing. Refused.
   without it, so no row appears on either side, and says so.
 - **`--explain`.** Every line of test code is marked `test code`, the totals say how many, and a
   file that is test code whole names the rule that decided it: the test directory with its build
-  file, the name, the pattern, the file that declares it as a module under a marker, or the
-  annotation in its code with its line. The document carries `in_test` on those lines and the rule
-  under `test_file`.
+  file, the name, the pattern, the file that declares it as a module under a marker, the
+  annotation in its code with its line, or the `#![cfg(test)]` at its top. The document carries
+  `in_test` on those lines and the rule under `test_file`.
 - **Keywords** are counted over the whole language, its test code included, and shown once under
   it. The ones found inside the test code are counted apart as well.

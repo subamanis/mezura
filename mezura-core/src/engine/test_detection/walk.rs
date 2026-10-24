@@ -30,6 +30,7 @@ pub(crate) struct TestWalk<'a> {
     else_continues: bool,
     // The offset and the index of the first file marker found in code
     file_marker: Option<(usize, usize)>,
+    whole_file_attribute: Option<(usize, usize)>,
     looks_ahead: bool,
     next_brace: usize,
 }
@@ -53,7 +54,7 @@ impl<'a> TestWalk<'a> {
 
         let mut walk = TestWalk { contents: bytes, markers, file_markers, candidates: Vec::new(), next: 0, state: State::Idle,
                 cursor: 0, held: Vec::new(), test_spans: Vec::new(), else_continues: false, file_marker: None,
-                looks_ahead: language.nested_languages.is_empty(), next_brace: 0 };
+                whole_file_attribute: None, looks_ahead: language.nested_languages.is_empty(), next_brace: 0 };
         candidates.retain(|&(at, index)| walk.could_be_counted(at, index as usize));
         walk.candidates = candidates;
         Some(walk)
@@ -120,6 +121,9 @@ impl<'a> TestWalk<'a> {
                         // A depth of one is the block around the marker, so a file with no such
                         // block runs to its end
                         Marker::RestOfScope { after } => {
+                            if under_an_attribute && is_before_every_item(self.contents, at) {
+                                self.whole_file_attribute = Some((at, after));
+                            }
                             self.cursor = after;
                             self.state = State::Inside { depth: 1 };
                         },
@@ -171,6 +175,10 @@ impl<'a> TestWalk<'a> {
 
     pub(crate) fn get_file_marker(&self) -> Option<(usize, usize)> {
         self.file_marker
+    }
+
+    pub(crate) fn get_whole_file_attribute(&self) -> Option<(usize, usize)> {
+        self.whole_file_attribute
     }
 
     pub(crate) fn get_test_spans(&self) -> &[(usize, usize)] {
@@ -406,6 +414,22 @@ fn find_candidates(bytes: &[u8], markers: &[String], first_index: usize, into: &
     }
 }
 
+// An inner attribute is allowed before the items of a module alone, so one with nothing but other
+// inner attributes, comments and a shebang in front of it covers the whole file
+fn is_before_every_item(bytes: &[u8], at: usize) -> bool {
+    let mut pos = if bytes.starts_with(BYTE_ORDER_MARK) { BYTE_ORDER_MARK.len() } else { 0 };
+    if bytes[pos..].starts_with(b"#!") && !bytes[pos..].starts_with(b"#![") {
+        pos = memchr::memchr(b'\n', &bytes[pos..]).map_or(bytes.len(), |end| pos + end);
+    }
+    loop {
+        pos = attribute::skip_whitespace_and_comments(bytes, pos);
+        if pos >= at { return pos == at; }
+        if !bytes[pos..].starts_with(b"#![") { return false; }
+        let Some(close) = attribute::find_matching_bracket(bytes, pos + 2, b']') else { return false };
+        pos = close + 1;
+    }
+}
+
 // D's 'version(unittest)' with a colon after it, which covers the rest of its scope
 fn find_scope_colon(bytes: &[u8], from: usize) -> Option<usize> {
     let at = skip_whitespace(bytes, from);
@@ -574,6 +598,35 @@ mod tests {
         assert_eq!(vec![vec![(0, 21), (22, 30)]], spans_of("#[cfg(test)] if a { } else { } x;"));
         assert_eq!(vec![vec![(0, usize::MAX)], vec![(13, usize::MAX)], vec![(25, usize::MAX)], vec![(40, 41)], vec![]],
                 spans_of("#[cfg(test)]\nmod tests {\n    mod cases;\n}\nmod y;\n"));
+    }
+
+    #[test]
+    fn an_inner_cfg_test_before_every_item_covers_the_whole_file_and_one_inside_a_module_its_module() {
+        let language = Language::new("Rust", ["rs"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
+                .with_test_markers(["#[", "#!["]);
+        let whole_file_attribute_of = |source: &str| {
+            let mut walk = TestWalk::of(&language, source, true, TestsByPath::Nothing).unwrap();
+            let mut line_start = 0;
+            for line in source.split_inclusive('\n') {
+                let raw_line = line.trim_end_matches('\n');
+                let trimmed = raw_line.trim_ascii();
+                let lead = raw_line.len() - raw_line.trim_ascii_start().len();
+                let is_comment = trimmed.starts_with("//");
+                let code = if is_comment || trimmed.is_empty() { Vec::new() } else { vec![(0, trimmed.len())] };
+                walk.observe_line(line_start, raw_line, !code.is_empty(), lead, &code,
+                        if is_comment { LineClass::WordsInComment } else { LineClass::WordsInCode }, raw_line.len());
+                line_start += line.len();
+            }
+            walk.get_whole_file_attribute()
+        };
+        assert_eq!(Some((0, 13)), whole_file_attribute_of("#![cfg(test)]\nuse a;\n"));
+        assert_eq!(Some((39, 52)), whole_file_attribute_of("// Copyright\n//! The crate\n\n#![no_std]\n#![cfg(test)]\nuse a;\n"));
+        assert_eq!(Some((19, 32)), whole_file_attribute_of("#!/usr/bin/env run\n#![cfg(test)]\nfn main() {}\n"));
+        assert_eq!(Some((3, 16)), whole_file_attribute_of("\u{feff}#![cfg(test)]\nuse a;\n"));
+        assert_eq!(None, whole_file_attribute_of("mod checks {\n    #![cfg(test)]\n    use a;\n}\n"), "a module's inner attribute took the file");
+        assert_eq!(None, whole_file_attribute_of("use a;\n#![cfg(test)]\nuse b;\n"));
+        assert_eq!(None, whole_file_attribute_of("#![cfg(not(test))]\nuse a;\n"));
+        assert_eq!(None, whole_file_attribute_of("#[cfg(test)]\nmod tests {}\n"), "an outer attribute is no inner one");
     }
 
     #[test]

@@ -1335,6 +1335,7 @@ pub(crate) struct ExplainLog {
     languages: Vec<String>,
     // The offset and the index of the file marker that made the whole file test code
     file_marker: Option<(usize, usize)>,
+    whole_file_attribute: Option<(usize, usize)>,
 }
 
 pub(crate) struct LineRecord {
@@ -1372,8 +1373,16 @@ impl ExplainLog {
         self.file_marker = Some(found);
     }
 
+    fn note_whole_file_attribute(&mut self, found: (usize, usize)) {
+        self.whole_file_attribute = Some(found);
+    }
+
     pub(crate) fn get_file_marker(&self) -> Option<(usize, usize)> {
         self.file_marker
+    }
+
+    pub(crate) fn get_whole_file_attribute(&self) -> Option<(usize, usize)> {
+        self.whole_file_attribute
     }
 
     pub(crate) fn into_parts(self) -> (Vec<LineRecord>, Vec<String>) {
@@ -1614,7 +1623,8 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
 
     // The rows under a language add up to it, so a section's line in a test file goes to the tests alone
     let file_marker = test_walk.as_ref().and_then(TestWalk::get_file_marker);
-    if whole_file_is_tests || file_marker.is_some() {
+    let whole_file_attribute = test_walk.as_ref().and_then(TestWalk::get_whole_file_attribute);
+    if whole_file_is_tests || file_marker.is_some() || whole_file_attribute.is_some() {
         for bucket in buckets.drain(..) {
             shell_stats.lines += bucket.stats.lines;
             shell_stats.classes.add(&bucket.stats.classes);
@@ -1623,6 +1633,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
         if EXPLAIN {
             log.mark_last_lines_as_test(tests.stats.lines);
             if let Some(found) = file_marker { log.note_file_marker(found); }
+            if let Some(found) = whole_file_attribute { log.note_whole_file_attribute(found); }
         }
     }
 
@@ -6125,14 +6136,14 @@ mod tests {
     }
 
     #[test]
-    fn the_inner_attribute_makes_the_rest_of_the_file_test_code() {
+    fn the_inner_attribute_at_the_top_makes_the_whole_file_test_code() {
         let source = concat!(
             "//! helpers for the tests\n",
             "#![cfg(test)]\n",
             "\n",
             "pub fn helper() {}\n",
             "pub fn other() {}\n");
-        assert_eq!(find_rust_test_lines(source), vec![2, 3, 4, 5]);
+        assert_eq!(find_rust_test_lines(source), vec![1, 2, 3, 4, 5]);
     }
 
     #[test]
@@ -6303,6 +6314,24 @@ mod tests {
         assert!(report.tests.is_none());
         let (report, log) = parse(only_text, TestsByPath::Nothing, &EngineConfig::default());
         assert!(report.tests.is_none() && log.get_file_marker().is_none(), "a marker in a comment or a string was read");
+    }
+
+    #[test]
+    fn an_inner_cfg_test_before_every_item_makes_the_file_test_code_whole_header_included() {
+        let language = LANGUAGE_MAP_REF.get("Rust").unwrap();
+        let parse = |source: &str| parse_lines_explained(source, language, &empty_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
+        let whole = "// Copyright\n//! Checks.\n\n#![cfg(test)]\n\nuse super::*;\n\n#[test]\nfn t() {}\n";
+        let (report, log) = parse(whole);
+        let tests = report.tests.as_ref().unwrap();
+        assert_eq!((9, whole.len()), (tests.stats.lines, tests.bytes));
+        assert_eq!(&report.shell.classes, &tests.stats.classes);
+        assert!(log.records().iter().all(|record| record.in_test), "the header above the attribute stayed production");
+        assert_eq!(Some((26, 39)), log.get_whole_file_attribute());
+
+        let in_a_module = "fn f() {}\nmod checks {\n    #![cfg(test)]\n    fn t() {}\n}\n";
+        let (report, log) = parse(in_a_module);
+        assert_eq!(3, report.tests.as_ref().unwrap().stats.lines, "a module's inner attribute took the file");
+        assert!(log.get_whole_file_attribute().is_none());
     }
 
     #[test]

@@ -71,7 +71,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     1..n paths to directories or files, separated by commas:
     '--targets <path1>, <path2>'
 
-    A path can be a glob pattern (* ? [..] {..}), so 'services/*/src' is a target. A path that
+    A path can be a glob pattern (* ? [..]), so 'services/*/src' is a target. A path that
     exists exactly as written is taken literally, so a directory named with one of those characters
     is still a directory. A target inside another target is dropped, so nothing is counted twice.
 
@@ -1206,8 +1206,8 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     test code is marked 'test code' and counted below the totals, and a file that is test code as a
     whole, or that a '!' pattern of '--tests' took back, names the rule that decided it: a build
     tool's test directory, its name, the pattern, the file that declares it as a module under a
-    marker, or the annotation in its code with its line. The document carries 'in_test' on those
-    lines and the rule under 'test_file'.
+    marker, the annotation in its code with its line, or the '#![cfg(test)]' at its top. The
+    document carries 'in_test' on those lines and the rule under 'test_file'.
 
       mezura src/main.rs --explain
       mezura src/page.vue --explain --counting region

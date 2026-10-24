@@ -73,6 +73,14 @@ pub enum TestFileRule {
         /// The line it was found on, counted from 1.
         line: usize
     },
+    /// An inner attribute saying test stands before every item of the file, `#![cfg(test)]` in
+    /// Rust, so what it covers is the whole file.
+    InnerAttribute {
+        /// The attribute as the file spells it.
+        attribute: String,
+        /// The line it was found on, counted from 1.
+        line: usize
+    },
 }
 
 /// What one line of the file came to.
@@ -202,6 +210,10 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     if let Some((at, index)) = log.get_file_marker() {
         test_file_rule = Some(TestFileRule::FileMarker {
                 marker: by_name.get(lang_name.as_ref()).unwrap().test_file_markers[index].clone(),
+                line: contents[..at].matches('\n').count() + 1 });
+    }
+    if let Some((at, after)) = log.get_whole_file_attribute() {
+        test_file_rule = Some(TestFileRule::InnerAttribute { attribute: contents[at..after].to_owned(),
                 line: contents[..at].matches('\n').count() + 1 });
     }
 
@@ -519,6 +531,8 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         for (file, contents) in [("proj/Cargo.toml", ""),
                 ("proj/src/lib.rs", "fn f() {}\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n"),
+                ("proj/src/checks.rs", "// Copyright\n#![cfg(test)]\nfn t() {}\n"),
+                ("proj/vendor/checks.rs", "// vendored\n#![cfg(test)]\nfn t() {}\n"),
                 ("proj/tests/a.rs", "fn t() {}\n"),
                 ("proj/spec/b.rs", "fn t() {}\n"),
                 ("proj/spec/unit/spec/d.rs", "fn t() {}\n"),
@@ -563,6 +577,12 @@ mod tests {
         assert_eq!((Some(TestFileRule::DeclaredNotTests { pattern: "!spec/fixtures/".to_owned(),
                 matched_folder: Some(at("proj/spec/fixtures")) }), vec![false, true, true]), explain("proj/spec/fixtures/c.rs", &declared));
         assert_eq!((None, vec![false]), explain("proj/tests/a.rs", &detection_off));
+
+        assert_eq!((Some(TestFileRule::InnerAttribute { attribute: "#![cfg(test)]".to_owned(), line: 2 }), vec![true, true, true]),
+                explain("proj/src/checks.rs", &default));
+        assert_eq!((None, vec![false, false, false]), explain("proj/src/checks.rs", &detection_off));
+        assert_eq!((Some(TestFileRule::InnerAttribute { attribute: "#![cfg(test)]".to_owned(), line: 2 }), vec![true, true, true]),
+                explain("proj/vendor/checks.rs", &declared), "a '!' pattern switched a marker that opens lines off");
 
         let marked = Some(TestFileRule::FileMarker { marker: "@Test".to_owned(), line: 2 });
         assert_eq!((marked.clone(), vec![true, true, true, true]), explain("proj/src/Marked.java", &default));

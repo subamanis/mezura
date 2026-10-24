@@ -331,6 +331,8 @@ fn describe_test_file_rule(rule: &TestFileRule, language: &str) -> Option<String
         },
         TestFileRule::FileMarker { marker, line } => Some(format!("The whole file is test code: '{marker}' on line {line} \
                 is one of the names a test runner collects tests by, and a file of {language} holding one is test code whole.")),
+        TestFileRule::InnerAttribute { attribute, line } => Some(format!("The whole file is test code: '{attribute}' on \
+                line {line} stands before every item of the file, so the whole of it is what the attribute covers.")),
         _ => None
     }
 }
@@ -352,6 +354,8 @@ fn build_test_file_entry(rule: &TestFileRule) -> Option<String> {
                 create_string_array(declared_by))),
         TestFileRule::FileMarker { marker, line } => Some(format!("{{\"rule\":\"file_marker\",\"marker\":\"{}\",\"line\":{line}}}",
                 escape(marker))),
+        TestFileRule::InnerAttribute { attribute, line } => Some(format!(
+                "{{\"rule\":\"inner_attribute\",\"attribute\":\"{}\",\"line\":{line}}}", escape(attribute))),
         _ => None
     }
 }
@@ -457,6 +461,9 @@ mod tests {
         assert_eq!(Some("The whole file is test code: '[Fact' on line 7 is one of the names a test runner collects tests by, \
                 and a file of C# holding one is test code whole.".to_owned()),
                 describe_test_file_rule(&TestFileRule::FileMarker { marker: "[Fact".to_owned(), line: 7 }, "C#"));
+        assert_eq!(Some("The whole file is test code: '#![cfg(test)]' on line 3 stands before every item of the file, so \
+                the whole of it is what the attribute covers.".to_owned()),
+                describe_test_file_rule(&TestFileRule::InnerAttribute { attribute: "#![cfg(test)]".to_owned(), line: 3 }, "Rust"));
 
         assert_eq!(None, format_test_count(0));
         assert_eq!(Some("1 of them is test code".to_owned()), format_test_count(1));
@@ -495,5 +502,7 @@ mod tests {
                         "D:/proj/src/lib.rs".to_owned()] }));
         assert_eq!(Some(r#"{"rule":"file_marker","marker":"@Test","line":12}"#.to_owned()),
                 build_test_file_entry(&TestFileRule::FileMarker { marker: "@Test".to_owned(), line: 12 }));
+        assert_eq!(Some(r##"{"rule":"inner_attribute","attribute":"#![cfg(test)]","line":3}"##.to_owned()),
+                build_test_file_entry(&TestFileRule::InnerAttribute { attribute: "#![cfg(test)]".to_owned(), line: 3 }));
     }
 }

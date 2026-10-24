@@ -34,8 +34,8 @@ New:
 - `FileExplanation::test_file_rule` names the rule that made a whole file test code, or the `!`
   pattern that took it back, as a `TestFileRule`, and `ExplainedLine::in_test` marks each line of
   test code. `TestFileRule::DeclaredModule` names the files that declare it as a module, the one
-  holding the marker last, and `TestFileRule::FileMarker` the annotation found in its code with its
-  line.
+  holding the marker last, `TestFileRule::FileMarker` the annotation found in its code with its
+  line, and `TestFileRule::InnerAttribute` the `#![cfg(test)]` standing before every item of it.
 - `.t` files are counted as Perl.
 - `MultilineString::escapes_by_doubling` and `StringRules::with_string_pairs_escaped_by_doubling`,
   read from `Paired strings escaped by doubling`, for a pair whose closer written twice is one quote
