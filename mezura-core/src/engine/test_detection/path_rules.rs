@@ -46,16 +46,18 @@ const JEST_PATTERNS : [&str; 17] = ["__tests__/", "*.test.js", "*.test.jsx", "*.
 const VITEST_PATTERNS : [&str; 16] = ["*.test.js", "*.test.jsx", "*.test.ts", "*.test.tsx", "*.test.mjs", "*.test.cjs",
         "*.test.mts", "*.test.cts", "*.spec.js", "*.spec.jsx", "*.spec.ts", "*.spec.tsx", "*.spec.mjs", "*.spec.cjs",
         "*.spec.mts", "*.spec.cts"];
-// A trigger belongs to one test tool. A 'package.json' or a 'pytest.ini' says nothing about where
-// the tests are without being read, and the walk reads listings only. '.rspec' needs the 'Gemfile'
-// beside it, or the one in a home directory makes every 'spec' under it test code.
+// A trigger belongs to one test tool, except 'vite.config.*', which is vite's and which vitest
+// reads. A 'package.json' or a 'pytest.ini' says nothing about where the tests are without being
+// read, and the walk reads listings only. '.rspec' needs the 'Gemfile' beside it, or the one in a
+// home directory makes every 'spec' under it test code.
 pub(crate) const TEST_PRESETS : [TestPreset; 13] = [
     TestPreset { name: "jest", trigger_files: &["jest.config.js", "jest.config.ts", "jest.config.mjs", "jest.config.mts",
             "jest.config.cjs", "jest.config.cts", "jest.config.json"], companion_file: None, patterns: &JEST_PATTERNS },
     TestPreset { name: "vitest", trigger_files: &["vitest.config.js", "vitest.config.mjs", "vitest.config.cjs",
             "vitest.config.ts", "vitest.config.mts", "vitest.config.cts", "vitest.workspace.js", "vitest.workspace.mjs",
             "vitest.workspace.cjs", "vitest.workspace.ts", "vitest.workspace.mts", "vitest.workspace.cts",
-            "vitest.workspace.json"], companion_file: None, patterns: &VITEST_PATTERNS },
+            "vitest.workspace.json", "vite.config.js", "vite.config.mjs", "vite.config.cjs", "vite.config.ts",
+            "vite.config.mts", "vite.config.cts"], companion_file: None, patterns: &VITEST_PATTERNS },
     TestPreset { name: "mocha", trigger_files: &[".mocharc.cjs", ".mocharc.js", ".mocharc.mjs", ".mocharc.yaml",
             ".mocharc.yml", ".mocharc.jsonc", ".mocharc.json"], companion_file: None, patterns: &["test/"] },
     TestPreset { name: "pytest", trigger_files: &["conftest.py"], companion_file: None,
@@ -230,18 +232,12 @@ impl DirectoryScope {
         found.names_root = names_root;
         found.presets = climb.find_presets_above(path, own_listing, checkout);
         let Some(absolute) = path.to_str() else { return found };
-        let mut scratch = Vec::new();
         if !patterns.is_empty() {
-            let declared = patterns.find_last_match_along(absolute, names_root, false, &mut scratch);
+            let declared = patterns.find_last_match_along(absolute, names_root, false, &mut Vec::new());
             (found.scope, found.decided_by) = found.scope.overruled_by(None, declared);
         }
         if found.scope.is_undecided() {
-            let mut deciding = Vec::new();
-            for preset in found.presets.as_deref().unwrap_or_default() {
-                if preset.matches_along(absolute, &mut scratch) {
-                    deciding.push(preset.clone());
-                }
-            }
+            let deciding = found.find_presets_deciding(absolute, false).into_iter().map(|hit| hit.preset).collect::<Vec<_>>();
             if !deciding.is_empty() {
                 found.scope = TestScope::Tests;
                 found.decided_by_presets = Some(Arc::from(deciding));
@@ -293,11 +289,14 @@ impl DirectoryScope {
                 presets: Some(Arc::from(presets)), decided_by_presets: self.decided_by_presets.clone() }
     }
 
-    // The earliest place along the path is where the walk decided
-    pub(crate) fn find_preset_match(&self, absolute: &str, ends_with_a_file: bool) -> Option<PresetMatch> {
-        self.presets.as_deref()?.iter().filter_map(|preset| preset.find_first_match_along(absolute, ends_with_a_file)
+    // The earliest place along the path is where the walk decided, and every preset matching there decided
+    pub(crate) fn find_presets_deciding(&self, absolute: &str, ends_with_a_file: bool) -> Vec<PresetMatch> {
+        let hits = self.presets.as_deref().unwrap_or_default().iter().filter_map(|preset|
+                preset.find_first_match_along(absolute, ends_with_a_file)
                 .map(|(at, place)| PresetMatch { preset: preset.clone(), pattern: preset.preset.patterns[at], place }))
-                .min_by_key(|hit| hit.place.len())
+                .collect::<Vec<_>>();
+        let Some(earliest) = hits.iter().map(|hit| hit.place.len()).min() else { return hits };
+        hits.into_iter().filter(|hit| hit.place.len() == earliest).collect()
     }
 
     fn find_presets_matching(&self, path: &Path, is_folder: bool, found: &mut Vec<usize>, mut each: impl FnMut(&Arc<ActivePreset>)) -> bool {
@@ -335,10 +334,6 @@ impl ActivePreset {
 
     fn matches(&self, path: &Path, is_folder: bool, found: &mut Vec<usize>) -> bool {
         self.matcher.matches(path, self.names_root, is_folder, found)
-    }
-
-    fn matches_along(&self, absolute: &str, found: &mut Vec<usize>) -> bool {
-        self.matcher.find_last_match_along(absolute, self.names_root, false, found).is_some()
     }
 
     fn find_first_match_along(&self, absolute: &str, ends_with_a_file: bool) -> Option<(usize, String)> {

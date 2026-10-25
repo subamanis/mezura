@@ -48,14 +48,8 @@ pub enum TestFileRule {
     /// A test tool's own file turned the tool's default names on under its directory, and one of
     /// them matches it.
     Preset {
-        /// The preset's name, `jest`.
-        name: String,
-        /// The directory holding the tool's file, `/proj/frontend`.
-        directory: String,
-        /// The tool's file, `jest.config.ts`.
-        trigger_file: String,
-        /// The pattern that matched, as the preset spells it.
-        pattern: String,
+        /// Every preset that has a name for it at the place that decided.
+        presets: Vec<MatchedPreset>,
         /// The folder above the file that the pattern matched. None where it matched the file itself.
         matched_folder: Option<String>
     },
@@ -112,6 +106,27 @@ impl TestFileRule {
             Self::FileMarker { .. } => "file_marker",
             Self::InnerAttribute { .. } => "inner_attribute"
         }
+    }
+}
+
+/// One tool's part in a [`TestFileRule::Preset`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MatchedPreset {
+    /// The preset's name, `jest`.
+    pub name: String,
+    /// The directory holding the tool's file, `/proj/frontend`.
+    pub directory: String,
+    /// The tool's file, `jest.config.ts`.
+    pub trigger_file: String,
+    /// The pattern that matched, as the preset spells it.
+    pub pattern: String
+}
+
+impl MatchedPreset {
+    /// The type is non-exhaustive, so this is how a crate outside this one builds it.
+    pub fn new(name: String, directory: String, trigger_file: String, pattern: String) -> Self {
+        MatchedPreset { name, directory, trigger_file, pattern }
     }
 }
 
@@ -312,13 +327,15 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
         (None, TestScope::Tests) => find_test_directory_along(folder, checkout.as_ref()).0.map(|found| TestFileRule::TestDirectory {
             directory: spell_out(found.directory),
             build_files: found.build_files.iter().map(|file| spell_out(file)).collect()
-        }).or_else(|| holder.find_preset_match(&absolute, true).map(|hit| TestFileRule::Preset {
-            name: hit.preset.preset.name.to_owned(),
-            directory: hit.preset.directory.clone(),
-            trigger_file: hit.preset.trigger_file.to_owned(),
-            pattern: hit.pattern.to_owned(),
-            matched_folder: Some(hit.place).filter(|place| *place != absolute)
-        })),
+        }).or_else(|| {
+            let hits = holder.find_presets_deciding(&absolute, true);
+            let matched_folder = hits.first().map(|hit| hit.place.clone()).filter(|place| *place != absolute);
+            (!hits.is_empty()).then(|| TestFileRule::Preset {
+                presets: hits.into_iter().map(|hit| MatchedPreset::new(hit.preset.preset.name.to_owned(),
+                        hit.preset.directory.clone(), hit.preset.trigger_file.to_owned(), hit.pattern.to_owned())).collect(),
+                matched_folder
+            })
+        }),
         (None, _) => {
             let name = file.file_name().and_then(|name| name.to_str()).unwrap_or_default();
             language.test_file_names.iter().find(|shape| shape.matches(name)).cloned().map(TestFileRule::FileName)
@@ -639,13 +656,17 @@ mod tests {
     }
 
     #[test]
-    fn a_file_a_tools_own_file_turned_on_names_the_preset_the_file_and_the_pattern() {
+    fn a_file_a_tools_own_file_turned_on_names_every_preset_that_decided_it() {
         let root = std::env::temp_dir().join("mezura-explain-presets");
         let _ = fs::remove_dir_all(&root);
         for (file, contents) in [("proj/app/jest.config.ts", "export default {};\n"), ("proj/app/src/a.test.ts", "test('a', () => {});\n"),
                 ("proj/app/src/__tests__/b.ts", "test('b', () => {});\n"), ("proj/app/src/c.ts", "export {};\n"),
                 ("proj/lib/d.test.ts", "test('d', () => {});\n"), ("proj/rails/.rspec", ""), ("proj/rails/Gemfile", ""),
-                ("proj/rails/jest.config.js", "module.exports = {};\n"), ("proj/rails/spec/javascript/cart.test.js", "test('c', () => {});\n")] {
+                ("proj/rails/jest.config.js", "module.exports = {};\n"), ("proj/rails/spec/javascript/cart.test.js", "test('c', () => {});\n"),
+                ("proj/both/jest.config.js", "module.exports = {};\n"), ("proj/both/vite.config.ts", "export default {};\n"),
+                ("proj/both/src/a.test.ts", "test('a', () => {});\n"), ("proj/both/src/__tests__/b.ts", "test('b', () => {});\n"),
+                ("proj/nest/jest.config.js", "module.exports = {};\n"), ("proj/nest/app/vite.config.ts", "export default {};\n"),
+                ("proj/nest/app/x.test.ts", "test('x', () => {});\n")] {
             let path = root.join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, contents).unwrap();
@@ -656,9 +677,10 @@ mod tests {
             let explained = explain_file(&root.join(file), config, resolved_languages(config)).unwrap();
             (explained.test_file_rule, explained.lines.iter().map(|line| line.in_test).collect::<Vec<_>>())
         };
-        let preset = |pattern: &str, matched_folder: Option<&str>| Some(TestFileRule::Preset { name: "jest".to_owned(),
-                directory: at("proj/app"), trigger_file: "jest.config.ts".to_owned(), pattern: pattern.to_owned(),
-                matched_folder: matched_folder.map(at) });
+        let matched = |name: &str, directory: &str, trigger_file: &str, pattern: &str| MatchedPreset::new(name.to_owned(), at(directory),
+                trigger_file.to_owned(), pattern.to_owned());
+        let preset = |pattern: &str, matched_folder: Option<&str>| Some(TestFileRule::Preset {
+                presets: vec![matched("jest", "proj/app", "jest.config.ts", pattern)], matched_folder: matched_folder.map(at) });
         let default = EngineConfig::default();
         let taken_back = EngineConfig { test_patterns: crate::PathPatterns::of(["!*.test.ts"]), ..EngineConfig::default() };
         let detection_off = EngineConfig { detect_tests: false, ..EngineConfig::default() };
@@ -667,10 +689,19 @@ mod tests {
         assert_eq!((preset("__tests__/", Some("proj/app/src/__tests__")), vec![true]), explain("proj/app/src/__tests__/b.ts", &default));
         assert_eq!((None, vec![false]), explain("proj/app/src/c.ts", &default));
         assert_eq!((None, vec![false]), explain("proj/lib/d.test.ts", &default), "the names reached outside the directory holding the file");
-        assert_eq!(Some(TestFileRule::Preset { name: "rspec".to_owned(), directory: at("proj/rails"), trigger_file: ".rspec".to_owned(),
-                pattern: "spec/".to_owned(), matched_folder: Some(at("proj/rails/spec")) }),
+        assert_eq!(Some(TestFileRule::Preset { presets: vec![matched("rspec", "proj/rails", ".rspec", "spec/")],
+                matched_folder: Some(at("proj/rails/spec")) }),
                 explain("proj/rails/spec/javascript/cart.test.js", &default).0,
-                "the preset named is the first of the list, where the walk decided at the folder of the other one");
+                "a tool with a name for the file was named where the folder of the other one decided");
+        assert_eq!(Some(TestFileRule::Preset { presets: vec![matched("jest", "proj/both", "jest.config.js", "*.test.ts"),
+                matched("vitest", "proj/both", "vite.config.ts", "*.test.ts")], matched_folder: None }),
+                explain("proj/both/src/a.test.ts", &default).0, "both tools have a name for the file and one was left out");
+        assert_eq!(Some(TestFileRule::Preset { presets: vec![matched("jest", "proj/both", "jest.config.js", "__tests__/")],
+                matched_folder: Some(at("proj/both/src/__tests__")) }),
+                explain("proj/both/src/__tests__/b.ts", &default).0, "a tool with a name only for the file was named over the folder");
+        assert_eq!(Some(TestFileRule::Preset { presets: vec![matched("jest", "proj/nest", "jest.config.js", "*.test.ts"),
+                matched("vitest", "proj/nest/app", "vite.config.ts", "*.test.ts")], matched_folder: None }),
+                explain("proj/nest/app/x.test.ts", &default).0, "a tool whose file sits in another folder above was left out");
         assert_eq!((Some(TestFileRule::DeclaredNotTests { pattern: "!*.test.ts".to_owned(), matched_folder: None }), vec![false]),
                 explain("proj/app/src/a.test.ts", &taken_back));
         assert_eq!((None, vec![false]), explain("proj/app/src/a.test.ts", &detection_off));

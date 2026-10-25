@@ -61,7 +61,7 @@ pub use engine::identity::{Claim, ClaimKind, SettledBy};
 pub use engine::path_patterns::{PatternError, validate_exclude_patterns, validate_test_patterns};
 pub use engine::targets::TargetError;
 pub use engine::test_detection::TestPreset;
-pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, TestFileRule, explain_file};
+pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, MatchedPreset, TestFileRule, explain_file};
 pub use languages::{LanguageClaims, Languages};
 pub use progress::ScanProgress;
 pub use result::{AppliedPreset, FaultyFileDetails, FileEntry, FilesPresent, ModuleResult, Performance, RunError,

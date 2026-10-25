@@ -1455,6 +1455,21 @@ fn a_tools_own_file_turns_its_names_on_under_its_directory_and_the_run_lists_wha
 }
 
 #[test]
+fn a_target_inside_a_folder_one_preset_decided_credits_the_presets_the_scan_from_above_credits() {
+    let root = write_tree("mezura-presets-target-inside", &[("rails/.rspec", ""), ("rails/Gemfile", ""),
+            ("rails/jest.config.js", "module.exports = {};\n"), ("rails/spec/__tests__/cart.js", "test('c', () => {});\n")]);
+    let root_str = root.to_string_lossy().replace('\\', "/");
+    let credited = |target: &str| count_with_shipped_languages(&EngineConfig { threads: Threads::new(1, 2),
+            ..EngineConfig::new([format!("{root_str}/{target}")]) }).applied_presets.iter()
+            .map(|x| (x.name.clone(), x.matched)).collect::<Vec<_>>();
+    let from_above = credited("rails");
+    let from_inside = credited("rails/spec/__tests__");
+    std::fs::remove_dir_all(&root).unwrap();
+    assert_eq!(vec![("jest".to_owned(), false), ("rspec".to_owned(), true)], from_above);
+    assert_eq!(from_above, from_inside, "a preset with a name only further down the target's path was credited");
+}
+
+#[test]
 fn an_exclusion_never_reaches_above_the_target_and_one_naming_a_path_that_changes_nothing_is_reported() {
     let root = write_tree("mezura-exclude-patterns", &[("tests/proj/src/lib.rs", "pub fn a() {}\n"),
             ("tests/proj/src/gen/g.rs", "pub fn g() {}\npub fn h() {}\n"),

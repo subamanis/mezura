@@ -9,13 +9,20 @@ use crate::message_printer::MESSAGE_WIDTH;
 use crate::paths::PERSISTENT_APP_PATHS;
 use crate::result_printer::{find_outermost_directories, format_cut_list, format_preset_directory};
 
-// A file that says which ecosystem a project is in without saying where its tests are, the presets
-// that ecosystem's test tools have, and the languages those tests are written in
-const GENERIC_PROJECT_FILES : [(&str, &[&str], &[&str]); 4] = [
-    ("package.json", &["jest", "vitest", "mocha"], &["JavaScript", "TypeScript", "JSX", "TSX"]),
-    ("pyproject.toml", &["pytest", "unittest"], &["Python"]),
-    ("Gemfile", &["rspec", "minitest"], &["Ruby"]),
-    ("composer.json", &["phpunit"], &["PHP"]),
+// A file that says which ecosystem a project is in without saying where its tests are. A framework
+// that bundles a tool names it too, since a Rails Gemfile never says minitest.
+const GENERIC_PROJECT_FILES : [GenericProjectFile; 4] = [
+    GenericProjectFile { file_name: "package.json",
+            words_by_name_of_preset: &[("jest", &["jest", "react-scripts"]), ("vitest", &["vitest"]), ("mocha", &["mocha"])],
+            names_of_languages: &["JavaScript", "TypeScript", "JSX", "TSX"] },
+    GenericProjectFile { file_name: "pyproject.toml",
+            words_by_name_of_preset: &[("pytest", &["pytest"]), ("unittest", &["unittest", "django"])],
+            names_of_languages: &["Python"] },
+    GenericProjectFile { file_name: "Gemfile",
+            words_by_name_of_preset: &[("rspec", &["rspec"]), ("minitest", &["minitest", "rails"])],
+            names_of_languages: &["Ruby"] },
+    GenericProjectFile { file_name: "composer.json", words_by_name_of_preset: &[("phpunit", &["phpunit"])],
+            names_of_languages: &["PHP"] },
 ];
 
 pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>, config: &Configuration) {
@@ -256,15 +263,32 @@ fn find_most_shown_that_fit(opening: &str, count: usize, format_rest: impl Fn(us
             .unwrap_or(1)
 }
 
-fn find_names_of_presets_to_suggest(result: &RunResult) -> Vec<&'static [&'static str]> {
-    GENERIC_PROJECT_FILES.iter().filter(|(file, names_of_presets, names_of_languages)| {
-        let counted = names_of_languages.iter().any(|name_of_language| result.per_language.contains_key(*name_of_language));
-        let tests_found = names_of_languages.iter()
+struct GenericProjectFile {
+    file_name: &'static str,
+    words_by_name_of_preset: &'static [(&'static str, &'static [&'static str])],
+    names_of_languages: &'static [&'static str]
+}
+
+// The file is read last, so a run that would print no hint reads nothing
+fn find_names_of_presets_to_suggest(result: &RunResult) -> Vec<Vec<&'static str>> {
+    GENERIC_PROJECT_FILES.iter().filter_map(|generic| {
+        let counted = generic.names_of_languages.iter()
+                .any(|name_of_language| result.per_language.contains_key(*name_of_language));
+        let tests_found = generic.names_of_languages.iter()
                 .any(|name_of_language| result.tests.get(*name_of_language).is_some_and(|x| x.stats.lines > 0))
-                || result.applied_presets.iter().any(|preset| preset.matched && names_of_presets.contains(&preset.name.as_str()));
-        counted && !tests_found
-                && result.targets.iter().any(|target| std::path::Path::new(&target.path).join(file).is_file())
-    }).map(|(_, names_of_presets, _)| *names_of_presets).collect()
+                || result.applied_presets.iter().any(|preset| preset.matched
+                        && generic.words_by_name_of_preset.iter().any(|(name, _)| *name == preset.name.as_str()));
+        if !counted || tests_found {
+            return None;
+        }
+        let contents = result.targets.iter()
+                .filter_map(|target| std::fs::read(std::path::Path::new(&target.path).join(generic.file_name)).ok())
+                .collect::<Vec<_>>();
+        let named = generic.words_by_name_of_preset.iter()
+                .filter(|(_, words)| words.iter().any(|word| contents.iter().any(|text| contains_word(text, word))))
+                .map(|(name, _)| *name).collect::<Vec<_>>();
+        (!named.is_empty()).then_some(named)
+    }).collect()
 }
 
 fn format_preset_suggestion(names: &[&str]) -> String {
@@ -283,6 +307,15 @@ fn join_with_or(items: &[impl AsRef<str>]) -> String {
         [first @ .., last] => format!("{} or {}", first.iter().map(|item| item.as_ref()).collect::<Vec<&str>>().join(", "),
                 last.as_ref())
     }
+}
+
+// '-' and '_' join a word, so 'eslint-plugin-jest' and '@testing-library/jest-dom' do not name jest
+fn contains_word(text: &[u8], word: &str) -> bool {
+    let word = word.as_bytes();
+    let is_word_byte = |byte: &u8| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'-';
+    text.windows(word.len()).enumerate().any(|(at, window)| window.eq_ignore_ascii_case(word)
+            && !text[..at].last().is_some_and(is_word_byte)
+            && !text.get(at + word.len()).is_some_and(is_word_byte))
 }
 
 // In the error color, since everything under an unreadable directory appears in no total at all,
@@ -440,18 +473,19 @@ mod tests {
     }
 
     #[test]
-    fn a_generic_project_file_names_the_presets_of_its_ecosystem_until_a_test_of_it_is_found() {
+    fn a_generic_project_file_names_the_presets_it_mentions_until_a_test_of_it_is_found() {
         let root = std::env::temp_dir().join("mezura-preset-suggestion");
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("package.json"), "{}").unwrap();
+        std::fs::write(root.join("package.json"),
+                r#"{"devDependencies": {"jest": "^29", "vitest": "^2", "eslint-plugin-mocha": "^10"}}"#).unwrap();
         let mut result = result_with(0, 0);
         result.targets = vec![Target::of(crate::paths::normalise_separators(&root.to_string_lossy()))];
         result.per_language.insert("TypeScript".to_owned(), result.total.clone());
 
         let suggested = find_names_of_presets_to_suggest(&result).iter().map(|names| format_preset_suggestion(names)).collect::<Vec<_>>();
-        assert_eq!(vec![format!("jest, vitest or mocha tests are declared with {}, {} or {}.", format_tests_command("@jest"),
-                quote_for_the_shell("@vitest"), quote_for_the_shell("@mocha"))], suggested);
+        assert_eq!(vec![format!("jest or vitest tests are declared with {} or {}.", format_tests_command("@jest"),
+                quote_for_the_shell("@vitest"))], suggested);
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         assert_eq!(suggested, collect_test_preset_notes(&result, &config));
         config.typed_explicitly.tests = true;
@@ -459,7 +493,24 @@ mod tests {
         result.applied_presets = vec![AppliedPreset::new("vitest".to_owned(), "D:/".to_owned(), "vitest.config.ts".to_owned(), true)];
         assert!(find_names_of_presets_to_suggest(&result).is_empty(), "a preset that found the tests was suggested again");
 
+        result.applied_presets = Vec::new();
+        std::fs::write(root.join("package.json"), r#"{"devDependencies": {"eslint": "^9", "prettier": "^3"}}"#).unwrap();
+        assert!(find_names_of_presets_to_suggest(&result).is_empty(), "a package.json kept for tooling named a test tool");
+
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_tool_is_named_only_by_a_whole_word_with_hyphens_and_underscores_inside_words() {
+        assert!(contains_word(br#""jest": "^29""#, "jest"));
+        assert!(contains_word(b"jest", "jest"), "a word filling the whole text was missed at an edge");
+        assert!(contains_word(br#""@vitest/ui""#, "vitest"));
+        assert!(contains_word(b"[tool.pytest.ini_options]", "pytest"));
+        assert!(contains_word(br#""Django>=5""#, "django"), "the comparison was case sensitive");
+        assert!(!contains_word(br#""eslint-plugin-jest": "^28""#, "jest"));
+        assert!(!contains_word(br#""@testing-library/jest-dom""#, "jest"));
+        assert!(!contains_word(br#"gem "rspec-rails""#, "rails"));
+        assert!(!contains_word(b"pytest_asyncio", "pytest"));
     }
 
     #[test]

@@ -4,3 +4,6 @@ app/src/parser.test.ts whole
 app/src/parser.ts none
 app/src/__tests__/render.ts none # vitest's default has no '__tests__' folder
 lib/format.test.ts none # outside the directory holding the vitest.config.ts
+vite/vite.config.ts none
+vite/src/sum.test.ts whole
+vite/src/sum.ts none

@@ -4,10 +4,10 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use mezura_core::{Bucket, Carried, CountingModel, EngineConfig, ExplainError, FileExplanation, Languages,
-        LineClasses, ScanSkip, Span, SpanKind, TestFileRule};
+        LineClasses, MatchedPreset, ScanSkip, Span, SpanKind, TestFileRule};
 
 use crate::config_manager::{Configuration, ExplainedLines, get_command_that_counts};
-use crate::json_printer::{create_string_array, escape};
+use crate::json_printer::{create_array, create_string_array, escape};
 use crate::message_printer::wrap_message;
 use crate::theme::get_active;
 
@@ -314,9 +314,9 @@ fn describe_test_file_rule(rule: &TestFileRule, language: &str) -> Option<String
                 build_files.iter().map(|file| format!("'{file}'")).collect::<Vec<_>>().join(" and "))),
         TestFileRule::FileName(shape) => Some(format!("The whole file is test code: {language} names its test \
                 files '{shape}'.")),
-        TestFileRule::Preset { name, directory, trigger_file, pattern, matched_folder } => Some(format!("The whole \
-                file is test code: '{trigger_file}' in '{directory}' turns on the test names of {name}, and '{pattern}' \
-                matches {}.", matched_folder.as_ref().map_or_else(|| "it".to_owned(), |folder| format!("the folder '{folder}'")))),
+        TestFileRule::Preset { presets, matched_folder } => Some(format!("The whole file is test code: {}, and {} {}.",
+                describe_presets_turned_on(presets), describe_preset_patterns(presets),
+                matched_folder.as_ref().map_or_else(|| "it".to_owned(), |folder| format!("the folder '{folder}'")))),
         TestFileRule::Declared { pattern, matched_folder: Some(folder) } => Some(format!("The whole file is test \
                 code: the '--tests' pattern '{pattern}' matches the folder '{folder}'.")),
         TestFileRule::Declared { pattern, matched_folder: None } => Some(format!("The whole file is test code: the \
@@ -340,6 +340,42 @@ fn describe_test_file_rule(rule: &TestFileRule, language: &str) -> Option<String
     }
 }
 
+fn describe_presets_turned_on(presets: &[MatchedPreset]) -> String {
+    let mut directories: Vec<&str> = Vec::new();
+    for preset in presets {
+        if !directories.contains(&preset.directory.as_str()) {
+            directories.push(&preset.directory);
+        }
+    }
+    directories.iter().map(|directory| {
+        let here = presets.iter().filter(|preset| preset.directory == *directory).collect::<Vec<_>>();
+        let files = here.iter().map(|preset| format!("'{}'", preset.trigger_file)).collect::<Vec<_>>();
+        let names = here.iter().map(|preset| preset.name.as_str()).collect::<Vec<_>>();
+        format!("{} in '{directory}' {} on the test names of {}", join_with_and(&files),
+                if here.len() == 1 { "turns" } else { "turn" }, join_with_and(&names))
+    }).collect::<Vec<_>>().join(" and ")
+}
+
+fn describe_preset_patterns(presets: &[MatchedPreset]) -> String {
+    let mut patterns: Vec<String> = Vec::new();
+    for preset in presets {
+        if !patterns.contains(&preset.pattern) {
+            patterns.push(preset.pattern.clone());
+        }
+    }
+    let quoted = patterns.iter().map(|pattern| format!("'{pattern}'")).collect::<Vec<_>>();
+    format!("{} {}", join_with_and(&quoted), if quoted.len() == 1 { "matches" } else { "match" })
+}
+
+fn join_with_and(items: &[impl AsRef<str>]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.as_ref().to_owned(),
+        [first @ .., last] => format!("{} and {}", first.iter().map(|item| item.as_ref()).collect::<Vec<&str>>().join(", "),
+                last.as_ref())
+    }
+}
+
 fn build_test_file_entry(rule: &TestFileRule) -> Option<String> {
     let matched = |folder: &Option<String>| folder.as_ref()
             .map(|folder| format!(",\"matched_folder\":\"{}\"", escape(folder))).unwrap_or_default();
@@ -347,9 +383,9 @@ fn build_test_file_entry(rule: &TestFileRule) -> Option<String> {
         TestFileRule::TestDirectory { directory, build_files } => format!(",\"directory\":\"{}\",\"build_files\":{}",
                 escape(directory), create_string_array(build_files)),
         TestFileRule::FileName(shape) => format!(",\"shape\":\"{}\"", escape(&shape.to_string())),
-        TestFileRule::Preset { name, directory, trigger_file, pattern, matched_folder } => format!(
-                ",\"name\":\"{}\",\"directory\":\"{}\",\"trigger_file\":\"{}\",\"pattern\":\"{}\"{}",
-                escape(name), escape(directory), escape(trigger_file), escape(pattern), matched(matched_folder)),
+        TestFileRule::Preset { presets, matched_folder } => format!(",\"presets\":{}{}", create_array(presets.iter().map(|preset|
+                format!("{{\"name\":\"{}\",\"directory\":\"{}\",\"trigger_file\":\"{}\",\"pattern\":\"{}\"}}", escape(&preset.name),
+                escape(&preset.directory), escape(&preset.trigger_file), escape(&preset.pattern)))), matched(matched_folder)),
         TestFileRule::Declared { pattern, matched_folder } | TestFileRule::DeclaredNotTests { pattern, matched_folder } =>
                 format!(",\"pattern\":\"{}\"{}", escape(pattern), matched(matched_folder)),
         TestFileRule::DeclaredModule { declared_by } => format!(",\"declared_by\":{}", create_string_array(declared_by)),
@@ -436,13 +472,23 @@ mod tests {
                         build_files: owned(&["D:/proj/DESCRIPTION", "D:/proj/NAMESPACE"]) }, "R"));
         assert_eq!(Some("The whole file is test code: Go names its test files '*_test.go'.".to_owned()),
                 describe_test_file_rule(&TestFileRule::FileName(TestFileName::EndsWith("_test.go".to_owned())), "Go"));
-        let jest = |matched_folder: Option<&str>| TestFileRule::Preset { name: "jest".to_owned(), directory: "D:/web".to_owned(),
-                trigger_file: "jest.config.ts".to_owned(), pattern: "__tests__/".to_owned(), matched_folder: matched_folder.map(str::to_owned) };
+        let matched = |name: &str, directory: &str, trigger_file: &str, pattern: &str| MatchedPreset::new(name.to_owned(),
+                directory.to_owned(), trigger_file.to_owned(), pattern.to_owned());
+        let jest = |matched_folder: Option<&str>| TestFileRule::Preset { presets: vec![matched("jest", "D:/web", "jest.config.ts",
+                "__tests__/")], matched_folder: matched_folder.map(str::to_owned) };
         assert_eq!(Some("The whole file is test code: 'jest.config.ts' in 'D:/web' turns on the test names of jest, and \
                 '__tests__/' matches the folder 'D:/web/src/__tests__'.".to_owned()),
                 describe_test_file_rule(&jest(Some("D:/web/src/__tests__")), "JavaScript"));
         assert_eq!(Some("The whole file is test code: 'jest.config.ts' in 'D:/web' turns on the test names of jest, and \
                 '__tests__/' matches it.".to_owned()), describe_test_file_rule(&jest(None), "JavaScript"));
+        assert_eq!(Some("The whole file is test code: 'jest.config.js' and 'vite.config.ts' in 'D:/web' turn on the test names \
+                of jest and vitest, and '*.test.ts' matches it.".to_owned()),
+                describe_test_file_rule(&TestFileRule::Preset { presets: vec![matched("jest", "D:/web", "jest.config.js", "*.test.ts"),
+                        matched("vitest", "D:/web", "vite.config.ts", "*.test.ts")], matched_folder: None }, "TypeScript"));
+        assert_eq!(Some("The whole file is test code: 'jest.config.js' in 'D:/web' turns on the test names of jest and \
+                'vite.config.ts' in 'D:/web/app' turns on the test names of vitest, and '*.test.ts' matches it.".to_owned()),
+                describe_test_file_rule(&TestFileRule::Preset { presets: vec![matched("jest", "D:/web", "jest.config.js", "*.test.ts"),
+                        matched("vitest", "D:/web/app", "vite.config.ts", "*.test.ts")], matched_folder: None }, "TypeScript"));
         assert_eq!(Some("The whole file is test code: the '--tests' pattern 'spec/' matches the folder 'D:/dev/proj/spec'.".to_owned()),
                 describe_test_file_rule(&TestFileRule::Declared { pattern: "spec/".to_owned(),
                         matched_folder: Some("D:/dev/proj/spec".to_owned()) }, "Rust"));
@@ -505,9 +551,9 @@ mod tests {
                 build_test_file_entry(&TestFileRule::FileName(TestFileName::EndsWith(".t".to_owned()))));
         assert_eq!(Some(r#"{"rule":"declared","pattern":"*.spec.rs"}"#.to_owned()),
                 build_test_file_entry(&TestFileRule::Declared { pattern: "*.spec.rs".to_owned(), matched_folder: None }));
-        assert_eq!(Some(r#"{"rule":"preset","name":"pytest","directory":"D:/proj","trigger_file":"conftest.py","pattern":"test_*.py"}"#.to_owned()),
-                build_test_file_entry(&TestFileRule::Preset { name: "pytest".to_owned(), directory: "D:/proj".to_owned(),
-                        trigger_file: "conftest.py".to_owned(), pattern: "test_*.py".to_owned(), matched_folder: None }));
+        assert_eq!(Some(r#"{"rule":"preset","presets":[{"name":"pytest","directory":"D:/proj","trigger_file":"conftest.py","pattern":"test_*.py"}]}"#.to_owned()),
+                build_test_file_entry(&TestFileRule::Preset { presets: vec![MatchedPreset::new("pytest".to_owned(), "D:/proj".to_owned(),
+                        "conftest.py".to_owned(), "test_*.py".to_owned())], matched_folder: None }));
         assert_eq!(Some(r#"{"rule":"declared_module","declared_by":["D:/proj/src/tests.rs","D:/proj/src/lib.rs"]}"#.to_owned()),
                 build_test_file_entry(&TestFileRule::DeclaredModule { declared_by: vec!["D:/proj/src/tests.rs".to_owned(),
                         "D:/proj/src/lib.rs".to_owned()] }));
