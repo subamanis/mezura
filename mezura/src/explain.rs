@@ -8,7 +8,7 @@ use mezura_core::{Bucket, Carried, CountingModel, EngineConfig, ExplainError, Fi
 
 use crate::config_manager::{Configuration, ExplainedLines, get_command_that_counts};
 use crate::json_printer::{create_array, create_string_array, escape};
-use crate::message_printer::{join_with, wrap_message};
+use crate::message_printer::{collect_distinct, join_with, wrap_message};
 use crate::theme::get_active;
 
 pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
@@ -341,13 +341,7 @@ fn describe_test_file_rule(rule: &TestFileRule, language: &str) -> Option<String
 }
 
 fn describe_presets_turned_on(presets: &[MatchedPreset]) -> String {
-    let mut directories: Vec<&str> = Vec::new();
-    for preset in presets {
-        if !directories.contains(&preset.directory.as_str()) {
-            directories.push(&preset.directory);
-        }
-    }
-    directories.iter().map(|directory| {
+    collect_distinct(presets.iter().map(|preset| preset.directory.as_str())).iter().map(|directory| {
         let here = presets.iter().filter(|preset| preset.directory == *directory).collect::<Vec<_>>();
         let files = here.iter().map(|preset| format!("'{}'", preset.trigger_file)).collect::<Vec<_>>();
         let names = here.iter().map(|preset| preset.name.as_str()).collect::<Vec<_>>();
@@ -357,13 +351,8 @@ fn describe_presets_turned_on(presets: &[MatchedPreset]) -> String {
 }
 
 fn describe_preset_patterns(presets: &[MatchedPreset]) -> String {
-    let mut patterns: Vec<String> = Vec::new();
-    for preset in presets {
-        if !patterns.contains(&preset.pattern) {
-            patterns.push(preset.pattern.clone());
-        }
-    }
-    let quoted = patterns.iter().map(|pattern| format!("'{pattern}'")).collect::<Vec<_>>();
+    let quoted = collect_distinct(presets.iter().map(|preset| preset.pattern.as_str())).iter()
+            .map(|pattern| format!("'{pattern}'")).collect::<Vec<_>>();
     format!("{} {}", join_with(&quoted, "and"), if quoted.len() == 1 { "matches" } else { "match" })
 }
 
@@ -407,8 +396,8 @@ mod tests {
                 read_from: Some("D:/proj".to_owned()), ..Default::default() }, ..engine.clone() };
         assert_eq!(of_a_project, read_names_as_a_run_from_here_would(&of_a_project));
 
-        let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
-        let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
+        let parsed = mezura_core::language_file::parse_languages_in_dir(crate::paths::test_paths::CORE_LANGUAGES_DIR)
+                .unwrap().0;
         let explain = |engine: &EngineConfig| {
             let languages = Languages::resolve(engine, parsed.clone(), &Default::default()).0;
             mezura_core::explain_file(Path::new("src/main.rs"), engine, languages).unwrap()

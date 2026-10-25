@@ -28,6 +28,7 @@ mod migration;
 mod number_formatter;
 mod paths;
 mod present;
+mod preset_hint;
 mod result_printer;
 mod sources;
 mod startup_timing;
@@ -430,16 +431,17 @@ fn report_languages_that_lost_every_claim(lost: Vec<mezura_core::warnings::Warni
     for warning in lost {
         crate::warning_collector::keep(warning);
     }
-    let Some((last, first)) = names.split_last() else { return };
-    let (named, they) = match first {
-        [] => (last.clone(), "it claims belongs to another language, so no file can be counted as it"),
-        _ => (crate::message_printer::join_with(&names, "and"),
-                "they claim belongs to another language, so no file can be counted as them")
+    if names.is_empty() {
+        return;
+    }
+    let (is, they) = match names.len() {
+        1 => ("is", "it claims belongs to another language, so no file can be counted as it"),
+        _ => ("are", "they claim belongs to another language, so no file can be counted as them")
     };
 
     eprintln!("\n{}", crate::theme::get_active().warning.paint(&crate::message_printer::wrap_message(
-            &format!("{named} {} installed, and every extension and name {they}. A line in '{}' hands an \
-                    extension back, to whichever name it puts first.", if first.is_empty() {"is"} else {"are"},
+            &format!("{} {is} installed, and every extension and name {they}. A line in '{}' hands an \
+                    extension back, to whichever name it puts first.", crate::message_printer::join_with(&names, "and"),
             mezura_core::LANGUAGE_CONFLICTS_FILE_NAME))));
 }
 

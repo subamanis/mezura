@@ -4,9 +4,9 @@ use crate::{EngineConfig, Language, LineClass, LineClasses, ScanSkip, Span, Test
 use crate::domain::CommentPair;
 use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file, find_scan_skip, judge_tests_by_path};
 use crate::engine::path_patterns::{PathPatternMatcher, TakingBack};
-use crate::engine::targets::{find_names_root_of_path, spell_out};
-use crate::engine::test_detection::{DirectoryScope, FilesOnDisk, OwnListing, PresetClimb, TestScope, TestsByPath,
-        find_declaring_chain, find_test_directory_along};
+use crate::engine::targets::{convert_to_absolute, find_names_root_of_path, spell_out};
+use crate::engine::test_detection::{DirectoryScope, FilesOnDisk, OwnListing, PresetClimb, PresetsTakenBack, TestScope,
+        TestsByPath, find_declaring_chain, find_test_directory_along};
 use crate::languages::Languages;
 
 /// One file read line by line, as [`explain_file`] answers it.
@@ -291,14 +291,14 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
 {
     let patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed)
             .map_err(ExplainError::InvalidTestPattern)?;
-    let absolute = spell_out(&std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf()));
+    let absolute = convert_to_absolute(&path.to_string_lossy());
     let names_root = crate::find_names_root_of_target(&config.test_patterns, &absolute, find_names_root_of_path(&absolute, true));
     let file = Path::new(&absolute);
     let folder = file.parent().unwrap_or(file);
-    let climb = PresetClimb::default();
+    let climb = PresetClimb::new(PresetsTakenBack::of(&config.test_patterns.patterns));
     let checkout = config.checkout.as_ref().map(crate::engine::targets::resolve_checkout);
     let holder = DirectoryScope::of_target(folder, names_root, &patterns, &climb, OwnListing::Unread, checkout.as_ref());
-    let (scope, decided_by) = holder.of_file(file, &patterns, &mut Vec::new());
+    let (scope, decided_by, decided_by_presets) = holder.of_file(file, &patterns, &mut Vec::new());
     // Read the way a run reads it, so a file a pattern took back is still declared under the marker
     // and a declarer a pattern made whole seeds nothing of its own
     let is_whole = |candidate: &Path| {
@@ -325,18 +325,21 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
                 _ => TestFileRule::Declared { pattern, matched_folder }
             })
         },
-        (None, TestScope::Tests) => find_test_directory_along(folder, checkout.as_ref()).0.map(|found| TestFileRule::TestDirectory {
-            directory: spell_out(found.directory),
-            build_files: found.build_files.iter().map(|file| spell_out(file)).collect()
-        }).or_else(|| {
-            let hits = holder.find_presets_deciding(&absolute, true);
-            let matched_folder = hits.first().map(|hit| hit.place.clone()).filter(|place| *place != absolute);
-            (!hits.is_empty()).then(|| TestFileRule::Preset {
-                presets: hits.into_iter().map(|hit| MatchedPreset::new(hit.preset.preset.name.to_owned(),
-                        hit.preset.directory.clone(), hit.preset.trigger_file.to_owned(), hit.pattern.to_owned())).collect(),
-                matched_folder
-            })
-        }),
+        (None, TestScope::Tests) => match (decided_by_presets, find_test_directory_along(folder, checkout.as_ref()).0) {
+            (None, Some(found)) => Some(TestFileRule::TestDirectory {
+                directory: spell_out(found.directory),
+                build_files: found.build_files.iter().map(|file| spell_out(file)).collect()
+            }),
+            _ => {
+                let hits = holder.find_presets_deciding(&absolute, true);
+                let matched_folder = hits.first().map(|hit| hit.place.clone()).filter(|place| *place != absolute);
+                (!hits.is_empty()).then(|| TestFileRule::Preset {
+                    presets: hits.into_iter().map(|hit| MatchedPreset::new(hit.preset.preset.name.to_owned(),
+                            hit.preset.directory.clone(), hit.preset.trigger_file.to_owned(), hit.pattern.to_owned())).collect(),
+                    matched_folder
+                })
+            }
+        },
         (None, _) => {
             let name = file.file_name().and_then(|name| name.to_str()).unwrap_or_default();
             language.test_file_names.iter().find(|shape| shape.matches(name)).cloned().map(TestFileRule::FileName)
@@ -667,7 +670,8 @@ mod tests {
                 ("proj/both/jest.config.js", "module.exports = {};\n"), ("proj/both/vite.config.ts", "export default {};\n"),
                 ("proj/both/src/a.test.ts", "test('a', () => {});\n"), ("proj/both/src/__tests__/b.test.ts", "test('b', () => {});\n"),
                 ("proj/nest/jest.config.js", "module.exports = {};\n"), ("proj/nest/app/vite.config.ts", "export default {};\n"),
-                ("proj/nest/app/x.test.ts", "test('x', () => {});\n")] {
+                ("proj/nest/app/x.test.ts", "test('x', () => {});\n"), ("proj/go/go.mod", "module x\n"),
+                ("proj/go/web/.mocharc.json", "{}\n"), ("proj/go/web/test/testdata/input.js", "let x = 1;\n")] {
             let path = root.join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, contents).unwrap();
@@ -690,6 +694,8 @@ mod tests {
         assert_eq!((preset("__tests__/", Some("proj/app/src/__tests__")), vec![true]), explain("proj/app/src/__tests__/b.ts", &default));
         assert_eq!((None, vec![false]), explain("proj/app/src/c.ts", &default));
         assert_eq!((None, vec![false]), explain("proj/lib/d.test.ts", &default), "the names reached outside the directory holding the file");
+        assert_eq!((None, vec![false]), explain("proj/app/../lib/d.test.ts", &default),
+                "a '..' in the path was climbed through a folder that does not hold the file");
         assert_eq!(Some(TestFileRule::Preset { presets: vec![matched("rspec", "proj/rails", ".rspec", "spec/")],
                 matched_folder: Some(at("proj/rails/spec")) }),
                 explain("proj/rails/spec/javascript/cart.test.js", &default).0,
@@ -703,6 +709,10 @@ mod tests {
         assert_eq!(Some(TestFileRule::Preset { presets: vec![matched("jest", "proj/nest", "jest.config.js", "*.test.ts"),
                 matched("vitest", "proj/nest/app", "vite.config.ts", "*.test.ts")], matched_folder: None }),
                 explain("proj/nest/app/x.test.ts", &default).0, "a tool whose file sits in another folder above was left out");
+        assert_eq!(Some(TestFileRule::Preset { presets: vec![matched("mocha", "proj/go/web", ".mocharc.json", "test/")],
+                matched_folder: Some(at("proj/go/web/test")) }),
+                explain("proj/go/web/test/testdata/input.js", &default).0,
+                "a build's test directory below the folder a preset took was named for the file");
         assert_eq!((Some(TestFileRule::DeclaredNotTests { pattern: "!*.test.ts".to_owned(), matched_folder: None }), vec![false]),
                 explain("proj/app/src/a.test.ts", &taken_back));
         assert_eq!((None, vec![false]), explain("proj/app/src/a.test.ts", &detection_off));

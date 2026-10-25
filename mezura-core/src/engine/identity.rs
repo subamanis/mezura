@@ -30,7 +30,7 @@ pub enum ClaimKind {
 }
 
 impl ClaimKind {
-    pub(crate) fn name(&self) -> &'static str {
+    pub(crate) fn as_str(&self) -> &'static str {
         match self {
             Self::Extension => "extension",
             Self::Filename => "filename",
@@ -110,7 +110,7 @@ impl IdentityReport {
             reported.push(warnings::Warning::new(warnings::Code::LanguageTiebreak, &contested.claimed,
                     format!("The {} '{}' is claimed by {} and {}. It was given to {} only because that name comes first \
                             alphabetically, so the files of the rest are counted with the wrong comment and string symbols.",
-                    contested.kind.name(), contested.claimed, contested.owner, contested.losers.join(", "),
+                    contested.kind.as_str(), contested.claimed, contested.owner, contested.losers.join(", "),
                     contested.owner)));
         }
 

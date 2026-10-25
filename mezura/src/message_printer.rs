@@ -1707,6 +1707,17 @@ pub fn format_tests_command(argument: &str) -> String {
     }
 }
 
+pub fn collect_distinct<T: PartialEq>(items: impl IntoIterator<Item = T>) -> Vec<T> {
+    let mut distinct = Vec::new();
+    for item in items {
+        if !distinct.contains(&item) {
+            distinct.push(item);
+        }
+    }
+
+    distinct
+}
+
 pub fn join_with(items: &[impl AsRef<str>], conjunction: &str) -> String {
     match items {
         [] => String::new(),

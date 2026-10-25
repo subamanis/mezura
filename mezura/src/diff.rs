@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use mezura_core::{EngineConfig, FileEntry, ForcedLanguages, Language, LanguageNames, Languages,
@@ -11,7 +12,7 @@ use super::config_manager::{COUNTING, COUNT_GENERATED, COUNT_MINIFIED, COUNT_NOT
         EXCLUDE_LANGUAGES, FORCE_LANGUAGE, LANGUAGES, NO_GITIGNORE, NO_HEURISTICS, NO_IGNORE_FILES,
         NO_SHEBANG, SEARCH_IN_DOTTED, TESTS};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
-use super::paths::fold_path;
+use super::paths::{find_outermost_directories, fold_ascii_case, is_inside};
 use super::sources::RevisionSide;
 
 // The half of a document's warnings that says the numbers themselves may be wrong, as the document
@@ -30,7 +31,7 @@ pub enum Source {
     Document { path: String },
     // Both halves, because neither derives from the other: the hash is what was really measured,
     // 'asked_for' is what makes it readable six months later, 'v2.0.1' over '030e6e72a1'.
-    GitRevision { commit: String, asked_for: String }
+    GitRevision { commit: String, asked_for: String, repository: String }
 }
 
 pub struct Reading {
@@ -55,9 +56,9 @@ pub struct Reading {
 }
 
 impl Reading {
-    pub fn of_git_revision(asked_for: &str, commit: String, taken: String, result: RunResult,
+    pub fn of_git_revision(asked_for: &str, commit: String, repository: String, taken: String, result: RunResult,
             config: &Configuration) -> Self {
-        Reading::of_a_counted_run(Source::GitRevision { commit, asked_for: asked_for.to_owned() },
+        Reading::of_a_counted_run(Source::GitRevision { commit, asked_for: asked_for.to_owned(), repository },
                 taken, result, config)
     }
 
@@ -455,13 +456,13 @@ pub fn determine_file_bases(baseline: &RunResult, subject: &RunResult) -> (Strin
     let of_subject = super::result_printer::find_common_directory_of(&subject.targets);
 
     let paths_of = |result: &RunResult| result.targets.iter()
-            .map(|x| fold_path(&x.path).into_owned()).collect::<HashSet<_>>();
+            .map(|x| fold_ascii_case(&x.path).into_owned()).collect::<HashSet<_>>();
     let (baseline_targets, subject_targets) = (paths_of(baseline), paths_of(subject));
     let one_holds_the_other = !baseline_targets.is_empty() && !subject_targets.is_empty()
             && (baseline_targets.is_subset(&subject_targets) || subject_targets.is_subset(&baseline_targets));
 
     if one_holds_the_other {
-        let outer = if super::result_printer::is_inside(&fold_path(of_subject), &fold_path(of_baseline))
+        let outer = if is_inside(&fold_ascii_case(of_subject), &fold_ascii_case(of_baseline))
                 {of_baseline} else {of_subject};
         (outer.to_owned(), outer.to_owned())
     } else {
@@ -818,7 +819,7 @@ fn determine_comparison_notes(baseline: &Reading, subject: &Reading, config: &Co
 }
 
 // A preset that decided files on one side is one-sided where the other side never turned it on,
-// whether or not it found a file there
+// whether or not it found a file there, and held files there at all
 fn find_presets_on_one_side(baseline: &Reading, subject: &Reading) -> Vec<Note> {
     let (base_before, base_now) = determine_file_bases(&baseline.result, &subject.result);
     let sides = [(baseline, base_before.as_str(), subject, base_now.as_str()), (subject, base_now.as_str(), baseline, base_before.as_str())];
@@ -826,10 +827,13 @@ fn find_presets_on_one_side(baseline: &Reading, subject: &Reading) -> Vec<Note> 
     let mut notes = Vec::new();
     for (applied_in, own_base, not_in, other_base) in sides {
         let elsewhere = collect_outermost_preset_directories(not_in, false);
+        let folders_of_not_in = OnceCell::new();
         for (name, directories) in collect_outermost_preset_directories(applied_in, true) {
             let others = elsewhere.get(name).map(Vec::as_slice).unwrap_or_default();
             let one_sided = directories.iter()
                     .filter(|directory| !others.iter().any(|other| is_held_by(directory, own_base, other, other_base)))
+                    .filter(|directory| holds_files_under(not_in, &move_to_other_side(directory, own_base, other_base),
+                            &folders_of_not_in))
                     .map(|directory| (*directory).to_owned()).collect::<Vec<_>>();
             if !one_sided.is_empty() {
                 notes.push(Note::PresetOnOneSide { name: name.to_owned(), directories: one_sided,
@@ -846,49 +850,68 @@ fn collect_outermost_preset_directories(reading: &Reading, matched_only: bool) -
     for preset in reading.result.applied_presets.iter().filter(|preset| preset.matched || !matched_only) {
         by_name.entry(preset.name.as_str()).or_default().push(preset.directory.as_str());
     }
-    by_name.into_iter().map(|(name, directories)| (name, super::result_printer::find_outermost_directories(&directories)))
+    by_name.into_iter().map(|(name, directories)| (name, find_outermost_directories(&directories)))
             .collect()
 }
 
 // Two checkouts of one project spell every folder differently, so the place below each side's own
 // base counts too
 fn is_held_by(directory: &str, own_base: &str, other: &str, other_base: &str) -> bool {
-    let is_inside = super::result_printer::is_inside;
-    if is_inside(&fold_path(directory), &fold_path(other)) {
+    if is_inside(&fold_ascii_case(directory), &fold_ascii_case(other)) {
         return true;
     }
     match (find_path_below(directory, own_base), find_path_below(other, other_base)) {
-        (Some(directory), Some(other)) => other.is_empty() || is_inside(&fold_path(directory), &fold_path(other)),
+        (Some(directory), Some(other)) => other.is_empty() || is_inside(&fold_ascii_case(directory), &fold_ascii_case(other)),
         _ => false
     }
 }
 
+// Windows spells one path in several cases, so the matching folds. The ASCII fold never moves a
+// byte, so the cut lands on the unfolded original.
 fn find_path_below<'a>(path: &'a str, base: &str) -> Option<&'a str> {
     if base.is_empty() {
         return None;
     }
-    let (folded_path, folded_base) = (fold_path(path), fold_path(base));
+    let (folded_path, folded_base) = (fold_ascii_case(path), fold_ascii_case(base));
     if folded_path == folded_base {
         return Some("");
     }
     folded_path.strip_prefix(folded_base.as_ref()).filter(|rest| rest.starts_with('/')).map(|_| &path[base.len() + 1..])
 }
 
+fn move_to_other_side(directory: &str, own_base: &str, other_base: &str) -> String {
+    match find_path_below(directory, own_base) {
+        Some(_) if other_base.is_empty() => directory.to_owned(),
+        Some("") => other_base.to_owned(),
+        Some(rest) => format!("{other_base}/{rest}"),
+        None => directory.to_owned()
+    }
+}
+
+// A side that cannot tell, a document short of rows or a folder outside the repository, keeps the note
+fn holds_files_under(reading: &Reading, directory: &str, folders: &OnceCell<Option<HashSet<String>>>) -> bool {
+    match &reading.source {
+        Source::Run => std::path::Path::new(directory).exists(),
+        Source::GitRevision { commit, repository, .. } => match find_path_below(directory, repository) {
+            Some(inside) if !inside.is_empty() => folders.get_or_init(|| super::git::collect_folders_at(repository, commit))
+                    .as_ref().is_none_or(|known| known.contains(fold_ascii_case(inside).as_ref())),
+            _ => true
+        },
+        Source::Document { .. } => {
+            let mut rows = reading.result.modules.iter().flat_map(|module| module.files.values().flatten()).peekable();
+            !reading.can_pair_files() || rows.peek().is_none()
+                    || rows.any(|row| is_inside(&fold_ascii_case(&row.path), &fold_ascii_case(directory)))
+        }
+    }
+}
+
 // A path the base does not hold keeps its absolute form, which pairs with nothing and is honest
-// about it. Windows spells one path in several cases, so the matching folds the way
-// 'move_excludes_into_checkout' does; the ASCII fold never moves a byte, so the cut lands on the
-// unfolded original.
+// about it
 fn relativise(path: &str, base: &str) -> String {
-    if base.is_empty() {
-        return path.to_owned();
-    }
-    let (folded_path, folded_base) = (fold_path(path), fold_path(base));
-    if folded_path == folded_base {
-        return path.rsplit('/').next().unwrap_or(path).to_owned();
-    }
-    match folded_path.strip_prefix(folded_base.as_ref()) {
-        Some(rest) if rest.starts_with('/') => path[base.len() + 1..].to_owned(),
-        _ => path.to_owned()
+    match find_path_below(path, base) {
+        Some("") => path.rsplit('/').next().unwrap_or(path).to_owned(),
+        Some(below) => below.to_owned(),
+        None => path.to_owned()
     }
 }
 
@@ -1087,6 +1110,48 @@ mod tests {
 
         assert_eq!(Some("'core', 'cli', '(unnamed)'".to_owned()), format_module_names(&now));
         assert_eq!(None, format_module_names(&plain));
+    }
+
+    #[test]
+    fn a_preset_on_one_side_is_said_only_where_the_other_side_held_files() {
+        let root = std::env::temp_dir().join("mezura-preset-on-one-side");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("kept")).unwrap();
+        let root_str = crate::paths::normalise_separators(&root.to_string_lossy()).into_owned();
+        let jest = |directory: &str| mezura_core::AppliedPreset::new("jest".to_owned(), directory.to_owned(),
+                "jest.config.js".to_owned(), true);
+        let reading = |source: Source, base: &str, rows: &[&str], presets: Vec<mezura_core::AppliedPreset>| {
+            let files = rows.iter().map(|path| FileEntry { path: (*path).to_owned(), stats: Stats::default(),
+                    nested_languages: HashMap::new(), tests: None }).collect::<Vec<_>>();
+            let module = ModuleResult { name: None, per_language: HashMap::new(), nested_languages: HashMap::new(),
+                    tests: HashMap::new(), total: Stats::default(), files: hashmap!["TypeScript".to_owned() => files] };
+            let mut result = crate::test_support::plain_result_of(HashMap::new(), vec![module], vec![mezura_core::Target::of(base)]);
+            result.applied_presets = presets;
+            Reading { source, taken: String::new(), version: "3.3.0".to_owned(),
+                    scope: scope_of(&mezura_core::EngineConfig::default(), mezura_core::CountingModel::Content),
+                    warnings: Vec::new(), faulty_files_count: 0, skipped_counts: crate::json_reader::SkippedCounts::default(),
+                    unreadable_dirs_count: 0, files_recorded: true, files_hidden: 0, result }
+        };
+        let said_under = |notes: Vec<Note>| notes.into_iter().flat_map(|note| match note {
+            Note::PresetOnOneSide { directories, .. } => directories,
+            _ => Vec::new()
+        }).collect::<Vec<_>>();
+
+        let old = reading(Source::Document { path: "old.json".to_owned() }, "D:/p", &["D:/p/web/a.ts"], Vec::new());
+        let new = reading(Source::Document { path: "new.json".to_owned() }, "D:/p", &[], vec![jest("D:/p/web"), jest("D:/p/new")]);
+        assert_eq!(vec!["D:/p/web".to_owned()], said_under(find_presets_on_one_side(&old, &new)),
+                "a package the older document never held was said to have its preset on one side");
+        let mut capped = reading(Source::Document { path: "old.json".to_owned() }, "D:/p", &["D:/p/web/a.ts"], Vec::new());
+        capped.files_hidden = 3;
+        assert_eq!(vec!["D:/p/web".to_owned(), "D:/p/new".to_owned()], said_under(find_presets_on_one_side(&capped, &new)),
+                "a document missing rows was taken to answer for a folder");
+
+        let before = reading(Source::Document { path: "old.json".to_owned() }, &root_str, &[],
+                vec![jest(&format!("{root_str}/kept")), jest(&format!("{root_str}/gone"))]);
+        let now = reading(Source::Run, &root_str, &[], Vec::new());
+        let said = said_under(find_presets_on_one_side(&before, &now));
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(vec![format!("{root_str}/kept")], said, "a folder deleted from the working tree was said to have lost its preset");
     }
 
     // Every kind of note at once, so that the order they are read in is pinned here

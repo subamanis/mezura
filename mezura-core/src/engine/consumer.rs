@@ -102,6 +102,9 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
                         &config, parsable_file.written_by_hand, parsable_file.test_scope,
                         parsable_file.extension_rules.as_deref(), shebang_map) {
                     Ok(file_parser::FileOutcome::Counted(mut report, resolved)) => {
+                        for preset in parsable_file.decided_by_presets.iter().flat_map(|presets| presets.iter()) {
+                            preset.record_match();
+                        }
                         let lang_name = resolved.as_deref().unwrap_or(lang_name);
                         progress.record_file_parsed(report.total_lines());
                         let language = language_map.get(lang_name).unwrap();

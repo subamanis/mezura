@@ -49,10 +49,22 @@ pub enum UnreadableCause {
 // result looks, plus the sections nobody asked for, and they are always just said out loud.
 #[derive(Debug, Default)]
 pub struct ConfigFileIssues {
-    pub invalid_fields: Vec<(&'static str, Option<String>)>,
+    pub invalid_fields: Vec<InvalidField>,
     // The code travels with the message from where the kind is known, so nothing downstream has to
     // recover it by looking for a phrase inside the English.
     pub warnings: Vec<(mezura_core::warnings::Code, String)>
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct InvalidField {
+    pub command: &'static str,
+    pub reason: Option<String>
+}
+
+impl InvalidField {
+    pub fn of(command: &'static str) -> Self {
+        InvalidField { command, reason: None }
+    }
 }
 
 pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String>) -> Result<(ConfigurationBuilder, ConfigFileIssues),ConfigFileParseError> {
@@ -88,7 +100,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                         Ok(parsed) if !parsed.is_empty() => builder.targets = Some(parsed.into_iter()
                                 .map(|(module, path)| Target { module, path }).collect()),
                         Ok(_) => {},
-                        Err(_) => issues.invalid_fields.push((config_manager::TARGETS, None))
+                        Err(_) => issues.invalid_fields.push(InvalidField::of(config_manager::TARGETS))
                     }
                 },
                 config_manager::EXCLUDE => read_patterns_value(&mut builder.exclude_patterns, &mut reader, &mut buf,
@@ -123,7 +135,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     if declared.split(',').any(|pair| !pair.trim().is_empty()) {
                         match super::args::parse_forced_languages(&declared) {
                             Some(x) => builder.forced_languages = Some(x),
-                            None => issues.invalid_fields.push((config_manager::FORCE_LANGUAGE, None))
+                            None => issues.invalid_fields.push(InvalidField::of(config_manager::FORCE_LANGUAGE))
                         }
                     }
                 },
@@ -410,7 +422,7 @@ fn read_parsed_value<T>(into: &mut Option<T>, reader: &mut CountingReader, buf: 
     let _ = reader.read_line(buf);
     match parse(buf) {
         Some(x) => *into = Some(x),
-        None => issues.invalid_fields.push((field, None))
+        None => issues.invalid_fields.push(InvalidField::of(field))
     }
 }
 
@@ -420,7 +432,7 @@ fn read_flag_value(into: &mut Option<bool>, reader: &mut CountingReader, buf: &m
 {
     match read_bool_value_from_file(reader, buf) {
         Ok(x) => *into = x,
-        Err(()) => issues.invalid_fields.push((field, None))
+        Err(()) => issues.invalid_fields.push(InvalidField::of(field))
     }
 }
 
@@ -433,7 +445,7 @@ fn read_patterns_value(into: &mut Option<PathPatterns>, reader: &mut CountingRea
     }
     match check(written) {
         Ok(patterns) => *into = Some(PathPatterns::of(patterns)),
-        Err(why) => issues.invalid_fields.push((field, Some(why)))
+        Err(why) => issues.invalid_fields.push(InvalidField { command: field, reason: Some(why) })
     }
 }
 
@@ -569,7 +581,7 @@ mod tests {
         std::fs::write(&path, "===> tests\n@nope\n").unwrap();
         let (_, issues) = parse_config_file(Some("with-a-preset"), Some(SCRATCH_CONFIG_DIR.to_owned())).unwrap();
         let _ = std::fs::remove_file(&path);
-        assert_eq!(vec![config_manager::TESTS], issues.invalid_fields.iter().map(|(field, _)| *field).collect::<Vec<_>>(),
+        assert_eq!(vec![config_manager::TESTS], issues.invalid_fields.iter().map(|field| field.command).collect::<Vec<_>>(),
                 "a preset that names nothing was dropped and the run would count without it");
     }
 
@@ -731,7 +743,7 @@ mod tests {
 
         std::fs::write(&path, "===> targets\nfrontend=\n")?;
         let (options, issues) = parse_config_file(Some("targets-block"), Some(dir)).unwrap();
-        assert_eq!(vec![(config_manager::TARGETS, None)], issues.invalid_fields);
+        assert_eq!(vec![InvalidField::of(config_manager::TARGETS)], issues.invalid_fields);
         assert_eq!(None, options.targets);
 
         std::fs::remove_file(&path)
@@ -786,8 +798,8 @@ mod tests {
                 "===> threads\n3343 45534\n\n===> counting\nmitsos\n\n===> compare\n99\n\n===> hide\nkeywords\n\n===> sort\nnope\n").unwrap();
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("badcfg"), Some(dir_str)).unwrap();
-        assert_eq!(issues.invalid_fields, vec![(config_manager::THREADS, None), (config_manager::COUNTING, None),
-                (config_manager::COMPARE_LEVEL, None), (config_manager::SORT, None)]);
+        assert_eq!(issues.invalid_fields, vec![InvalidField::of(config_manager::THREADS), InvalidField::of(config_manager::COUNTING),
+                InvalidField::of(config_manager::COMPARE_LEVEL), InvalidField::of(config_manager::SORT)]);
         assert!(issues.warnings.is_empty());
         assert_eq!(options.threads, None);
         assert_eq!(options.counting, None);

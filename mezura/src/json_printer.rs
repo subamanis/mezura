@@ -306,7 +306,7 @@ fn create_side_object(reading: &super::diff::Reading) -> String {
         super::diff::Source::Run => String::from("\"source\":\"run\""),
         super::diff::Source::Document { path } =>
             format!("\"source\":\"document\",\"path\":\"{}\"", escape(path)),
-        super::diff::Source::GitRevision { commit, asked_for } =>
+        super::diff::Source::GitRevision { commit, asked_for, .. } =>
             format!("\"source\":\"revision\",\"commit\":\"{}\",\"asked_for\":\"{}\"",
                     escape(commit), escape(asked_for))
     }];
@@ -1086,7 +1086,8 @@ mod tests {
         let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let datetime = DateTime::parse_from_rfc3339("2026-08-06T15:00:00+03:00").unwrap().with_timezone(&Local);
         let mut from = reading_of(crate::diff::Source::GitRevision {
-                commit: "030e6e72a1b4c9d8e7f6a5b4c3d2e1f0a9b8c7d6".to_owned(), asked_for: "v2.0.1".to_owned() },
+                commit: "030e6e72a1b4c9d8e7f6a5b4c3d2e1f0a9b8c7d6".to_owned(), asked_for: "v2.0.1".to_owned(),
+                repository: "D:/proj".to_owned() },
                 hashmap!["Rust".to_owned() => stats_of(2, 3000, 100, 70, 10, hashmap!["structs".to_owned() => 3]),
                          "Java".to_owned() => stats_of(1, 400, 40, 30, 0, HashMap::new())]);
         from.result.targets = vec![mezura_core::Target::named("core", "D:/proj/src")];

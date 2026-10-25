@@ -123,8 +123,18 @@ pub fn fold_for_comparison(path: &str) -> Cow<'_, str> {
 }
 
 // ASCII only, so a byte offset into the folded path is one into the path as it was spelled
-pub fn fold_path(path: &str) -> Cow<'_, str> {
+pub fn fold_ascii_case(path: &str) -> Cow<'_, str> {
     if cfg!(windows) {Cow::Owned(path.to_ascii_lowercase())} else {Cow::Borrowed(path)}
+}
+
+// Compared by whole components, or '/home/repository' counts as being inside '/home/repo'
+pub fn is_inside(path: &str, directory: &str) -> bool {
+    path == directory || path.strip_prefix(directory).is_some_and(|rest| rest.starts_with('/'))
+}
+
+pub fn find_outermost_directories<'a>(directories: &[&'a str]) -> Vec<&'a str> {
+    directories.iter().copied().filter(|directory| !directories.iter()
+            .any(|other| other != directory && is_inside(directory, other))).collect()
 }
 
 pub fn find_working_directory() -> Option<String> {
@@ -241,6 +251,7 @@ fn may_be_searched(directory: &Path) -> bool {
 // its directory then passes only because a checked-in fixture happened to be sitting in it.
 #[cfg(test)]
 pub mod test_paths {
+    pub const CORE_LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
     pub const FIXTURES_DIR       : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
     pub const SCRATCH_DIR        : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/");
     pub const SCRATCH_CONFIG_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/test_dir/config/");

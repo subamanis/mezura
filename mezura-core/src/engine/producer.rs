@@ -16,7 +16,7 @@ use crate::engine::is_the_same_name;
 use crate::engine::modules::{ModuleId, Modules};
 use crate::engine::path_patterns::PathPatternMatcher;
 use crate::engine::targets::spell_out;
-use crate::engine::test_detection::{ActivePreset, BuildFilesSeen, DirectoryScope, TestScope, TriggerFilesSeen};
+use crate::engine::test_detection::{ActivePreset, BuildFilesSeen, DirectoryScope, PresetsTakenBack, TestScope, TriggerFilesSeen};
 
 // A panic is caught here rather than read back from 'join', because these threads stop by counting
 // how many of them have gone idle against how many started: one that dies without ever going idle
@@ -64,6 +64,7 @@ fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs
     let mut unreadable_dirs = Vec::new();
     let mut should_terminate = false;
     let mut patterns_found = Vec::new();
+    let presets_taken_back = PresetsTakenBack::of(&config.test_patterns.patterns);
 
     loop {
         // Newest of its own subdirectories first, so a thread finishes the branch it is in before it
@@ -94,7 +95,7 @@ fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs
                             ObeyedIgnoreFiles::of(&config), config.detect_tests);
                     let gitignore_stack = GitignoreStack::extend_with_ignore_files(&dir.path,
                             dir.gitignore_stack.clone(), &present);
-                    let with_presets = turn_on_presets(&dir.scope, trigger_files, &dir.path, applied_presets);
+                    let with_presets = turn_on_presets(&dir.scope, trigger_files, &dir.path, presets_taken_back, applied_presets);
                     traverse_dir(&files_injector, entries, &worker, &language_lookups, &exclude_patterns, dir.exclude_root,
                             &test_patterns, &mut patterns_found, &gitignore_stack, &config, &modules, dir.module,
                             with_presets.as_ref().unwrap_or(&dir.scope), build_files, &dir.path, &mut files_present, progress)
@@ -185,10 +186,10 @@ fn find_ignore_build_and_trigger_files_among(entries: &[DirEntry], obeyed: Obeye
 }
 
 // Before the listing is walked, so that a test file beside the tool's own file is taken as one
-fn turn_on_presets(scope: &DirectoryScope, trigger_files: TriggerFilesSeen, directory: &Path,
+fn turn_on_presets(scope: &DirectoryScope, trigger_files: TriggerFilesSeen, directory: &Path, taken_back: PresetsTakenBack,
         applied_presets: &Mutex<Vec<Arc<ActivePreset>>>) -> Option<DirectoryScope>
 {
-    let turned_on = trigger_files.turn_on(directory);
+    let turned_on = trigger_files.turn_on(directory, taken_back);
     if turned_on.is_empty() {
         return None;
     }
@@ -257,13 +258,13 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                 // Free on Windows, where the directory listing carries it. Elsewhere it would be one
                 // call per file, and the consumer learns the size from the read itself.
                 let size = if cfg!(windows) { e.metadata().map_or(0, |m| m.len()) } else { 0 };
-                let test_scope = match config.detect_tests {
-                    true => scope.of_file(&path_buf, test_patterns, patterns_found).0,
-                    false => TestScope::Ordinary
+                let (test_scope, _, decided_by_presets) = match config.detect_tests {
+                    true => scope.of_file(&path_buf, test_patterns, patterns_found),
+                    false => (TestScope::Ordinary, None, None)
                 };
                 files_injector.push(ParsableFile::new(path_buf, lang_name, module, size)
                         .with_extension_rules(language_lookup.find_extension_rules(name))
-                        .with_test_scope(test_scope));
+                        .with_test_scope(test_scope, decided_by_presets));
                 progress.record_file_found();
             } else {
                 // Read lossily, and only to ask whether it is dotted, which a lossy reading answers

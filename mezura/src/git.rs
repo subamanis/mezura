@@ -1,11 +1,12 @@
 // Everything a comparison against a git commit needs: the repository a target belongs to, the
 // worktree the commit is written out to, and the removal of it afterwards.
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
 
-use super::paths::{fold_for_comparison, normalise_separators};
+use super::paths::{fold_ascii_case, fold_for_comparison, normalise_separators};
 
 // The path built from this also carries the process id, since a worktree cannot be added twice at
 // one place and two runs of one revision can overlap
@@ -106,6 +107,12 @@ pub fn resolve_revision(repository: &str, revision: &str) -> Result<ResolvedRevi
 
     Ok(ResolvedRevision { repository: repository.to_owned(), revision: revision.to_owned(),
             commit: commit.trim().to_owned(), taken_at: taken_at.trim().to_owned() })
+}
+
+// git keeps no empty folder, so every folder listed holds a tracked file
+pub fn collect_folders_at(repository: &str, commit: &str) -> Option<HashSet<String>> {
+    let listed = ask(repository, &["ls-tree", "-r", "-d", "-z", "--name-only", commit]).ok()??;
+    Some(listed.split('\0').filter(|folder| !folder.is_empty()).map(|folder| fold_ascii_case(folder).into_owned()).collect())
 }
 
 // The tree of a commit, written out where mezura can count it. Removed when this goes out of scope,
@@ -329,5 +336,14 @@ mod tests {
 
         assert!(matches!(resolve_revision(&root, "no-such-branch-anywhere"),
                 Err(GitError::NoSuchRevision { .. })));
+    }
+
+    #[test]
+    fn the_folders_of_a_commit_are_listed_whole_and_folded() {
+        let (root, _) = find_repository_of(PACKAGE).unwrap();
+        let folders = collect_folders_at(&root, &resolve_revision(&root, "HEAD").unwrap().commit).unwrap();
+        assert!(folders.contains("mezura/src") && folders.contains("mezura-core/src/engine/test_detection"), "{folders:?}");
+        assert!(!folders.contains("mezura/src/main.rs"), "a file was listed among the folders");
+        assert_eq!(None, collect_folders_at(&root, "no-such-branch-anywhere"));
     }
 }

@@ -891,7 +891,7 @@ mod tests {
                 (ClaimKind::Filename, &conflicts.by_filename)] {
             let (_, report) = crate::engine::identity::build_language_map_by(identified_by, &by_name, rules, &HashMap::new());
             unsettled.extend(report.contested.iter().filter(|x| x.is_a_tiebreak())
-                    .map(|x| format!("the {} '{}' between {} and {}", x.kind.name(), x.claimed, x.owner,
+                    .map(|x| format!("the {} '{}' between {} and {}", x.kind.as_str(), x.claimed, x.owner,
                             x.losers.join(", "))));
         }
 

@@ -8,6 +8,7 @@ use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, P
 use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
 use mezura_core::engine::path_patterns::{absolutize_path_pattern, is_a_path_pattern, split_negation};
 
+use super::config_files::InvalidField;
 use super::message_printer::{Formatted, wrap_message};
 use super::paths::LocalDir;
 use super::test_presets::{ExpandedPatterns, can_name_a_preset, expand_presets, is_a_shipped_name, write_user_preset};
@@ -1459,10 +1460,12 @@ fn save_the_test_preset(name: &str, patterns: &[String]) {
                 patterns.")).yellow());
         return;
     }
-    match write_user_preset(presets_dir, name, patterns) {
+    let written = format_patterns_inside(crate::paths::find_working_directory().as_deref(), patterns);
+    match write_user_preset(presets_dir, name, &written) {
         Err(error) => eprintln!("\n{}", wrap_message(&format!(
                 "Test preset '{name}' could not be written to '{presets_dir}': {error}")).yellow()),
-        Ok(path) => eprintln!("\nTest preset '{name}' saved in '{path}'. Use it with '--{TESTS} \"@{name}\"'.")
+        Ok(path) => eprintln!("\nTest preset '{name}' saved in '{path}'. Use it with {}.",
+                message_printer::format_tests_command(&format!("@{name}")))
     }
 }
 
@@ -1504,9 +1507,9 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
     // A bad value here is skipped when it decides how the report looks and stops the run when it
     // decides what gets counted.
     let (changes_the_numbers, presentation) : (Vec<_>, Vec<_>) = issues.invalid_fields.into_iter()
-            .partition(|(field, _)| CHANGES_THE_NUMBERS.contains(field));
-    for (field, why) in &presentation {
-        report_ignored_config_value(field, why.as_deref(), &label);
+            .partition(|field| CHANGES_THE_NUMBERS.contains(&field.command));
+    for field in &presentation {
+        report_ignored_config_value(field.command, field.reason.as_deref(), &label);
     }
     resolve_invalid_config_fields(config_builder, &changes_the_numbers, &label)?;
 
@@ -1539,7 +1542,7 @@ fn apply_default_configuration(config_builder: &mut ConfigurationBuilder)
     let (default_config, invalid_fields) = if under_a_project {
         (default_config.forget_what_changes_the_numbers(),
                 issues.invalid_fields.into_iter()
-                        .filter(|(field, _)| !CHANGES_THE_NUMBERS.contains(field)).collect())
+                        .filter(|field| !CHANGES_THE_NUMBERS.contains(&field.command)).collect())
     } else {
         (default_config, issues.invalid_fields)
     };
@@ -1630,7 +1633,7 @@ fn print_config_file_warnings(issues: &[(mezura_core::warnings::Code, String)], 
 
 // Every command that can end up in 'invalid_fields' belongs here. One that is missing is treated as
 // never overridden, so giving it correctly on the command line would still not rescue the run.
-fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_fields: &[(&str, Option<String>)],
+fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_fields: &[InvalidField],
         config_name: &str)
 -> Result<(), ArgParsingError>
 {
@@ -1654,8 +1657,8 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             // still applies, so these warn instead of reaching here
             styles: _, config_styles: _, theme_styles: _ } = config_builder;
 
-    for (field, why) in invalid_fields {
-        let is_overridden = match *field {
+    for InvalidField { command, reason } in invalid_fields {
+        let is_overridden = match *command {
             TARGETS => targets.is_some(),
             THREADS => threads.is_some(),
             COMPARE_LEVEL => compare_level.is_some(),
@@ -1688,13 +1691,13 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
         };
 
         if is_overridden {
-            report_ignored_config_value(field, why.as_deref(), config_name);
+            report_ignored_config_value(command, reason.as_deref(), config_name);
         } else {
-            if let Some(why) = why {
+            if let Some(why) = reason {
                 eprintln!("\n{}", wrap_message(&format!("In config '{config_name}': {why}")).red());
             }
-            message_printer::print_help_message_for_command(field);
-            return Err(ArgParsingError::InvalidValueInConfig(field.to_string(), config_name.to_owned()));
+            message_printer::print_help_message_for_command(command);
+            return Err(ArgParsingError::InvalidValueInConfig(command.to_string(), config_name.to_owned()));
         }
     }
 
@@ -1796,8 +1799,8 @@ mod tests {
 
     // The counting driven the way 'main' drives it, with the language files read from the checkout
     fn counted(config: &Configuration) -> mezura_core::RunResult {
-        let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
-        let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
+        let parsed = mezura_core::language_file::parse_languages_in_dir(crate::paths::test_paths::CORE_LANGUAGES_DIR)
+                .unwrap().0;
         let (languages, _) = mezura_core::Languages::resolve(&config.engine, parsed, &Default::default());
         mezura_core::run(&config.engine, languages).unwrap()
     }
@@ -2084,8 +2087,8 @@ mod tests {
         assert_eq!(Some("a2resolve1".to_owned()), config.view.targets_source);
 
         // the error a real run returns, through the same join 'main' prints it with
-        let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
-        let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
+        let parsed = mezura_core::language_file::parse_languages_in_dir(crate::paths::test_paths::CORE_LANGUAGES_DIR)
+                .unwrap().0;
         let (languages, _) = mezura_core::Languages::resolve(&config.engine, parsed, &Default::default());
         let mezura_core::RunError::InvalidTargets(inner) = mezura_core::run(&config.engine, languages).unwrap_err()
                 else { panic!("the run did not refuse the config's targets") };
@@ -2267,6 +2270,19 @@ mod tests {
         assert_eq!(saved_config, loaded_config);
 
         std::fs::remove_file(test_file_path).unwrap();
+    }
+
+    #[test]
+    fn a_saved_test_preset_writes_a_place_inside_the_working_directory_from_there() {
+        let here = crate::paths::find_working_directory().unwrap();
+        let elsewhere = here.rsplit_once('/').unwrap().0.to_owned() + "/elsewhere/";
+        save_the_test_preset("zz-placed", &[format!("{here}/spec/"), format!("!{here}/spec/data/"), "conftest.py".to_owned(),
+                elsewhere.clone()]);
+        let presets_dir = &crate::paths::PERSISTENT_APP_PATHS.test_presets_dir;
+        let saved = crate::test_presets::read_user_preset(presets_dir, "zz-placed").map(|preset| preset.patterns);
+        std::fs::remove_file(Path::new(presets_dir).join("zz-placed.txt")).unwrap();
+        assert_eq!(Ok(vec!["./spec/".to_owned(), "!./spec/data/".to_owned(), "conftest.py".to_owned(), elsewhere]), saved,
+                "a preset saved with this project's paths in it works in no other project");
     }
 
     #[test]

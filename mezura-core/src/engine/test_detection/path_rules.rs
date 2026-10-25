@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{RepositoryCheckout, TestFileName};
 use crate::engine::is_the_same_name;
-use crate::engine::path_patterns::{PathPatternMatcher, PatternMatch, TakingBack};
+use crate::engine::path_patterns::{PathPatternMatcher, PatternMatch, TakingBack, split_negation};
 use crate::engine::targets::spell_out;
 
 // Every file of a row has to be present, since an Octave package carries a DESCRIPTION too.
@@ -146,17 +146,17 @@ impl TestScope {
         scope
     }
 
-    pub(crate) fn of_target(path: &Path, checkout: Option<&RepositoryCheckout>) -> DirectoryScope {
+    pub(crate) fn of_target<'a>(path: &'a Path, checkout: Option<&'a RepositoryCheckout>) -> (DirectoryScope, Option<&'a Path>) {
         let (test_directory, roots) = find_test_directory_along(path, checkout);
-        if test_directory.is_some() {
-            return DirectoryScope { scope: TestScope::Tests, roots, ..DirectoryScope::default() };
+        if let Some(found) = test_directory {
+            return (DirectoryScope { scope: TestScope::Tests, roots, ..DirectoryScope::default() }, Some(found.directory));
         }
         let is_jvm_sources = path.file_name().zip(find_parent_of(path, checkout)).is_some_and(|(name, parent)| {
             let name = name.as_encoded_bytes();
             (roots.jvm_build && is_the_jvm_sources_directory(name)) || is_jvm_sources(name, parent)
         });
         let scope = if is_jvm_sources { TestScope::JvmSources } else { TestScope::Ordinary };
-        DirectoryScope { scope, roots, ..DirectoryScope::default() }
+        (DirectoryScope { scope, roots, ..DirectoryScope::default() }, None)
     }
 
     // A pattern overrules a build tool, and among patterns the one written last does
@@ -219,16 +219,16 @@ pub(crate) struct DirectoryScope {
     pub decided_by: Option<usize>,
     // The offset into the absolute path that a name pattern reads from
     pub names_root: usize,
-    pub presets: Option<Arc<[Arc<ActivePreset>]>>,
+    pub presets: Option<ActivePresets>,
     // Each counted file below marks them matched, since their folder pattern decided it
-    pub decided_by_presets: Option<Arc<[Arc<ActivePreset>]>>,
+    pub decided_by_presets: Option<ActivePresets>,
 }
 
 impl DirectoryScope {
     pub(crate) fn of_target(path: &Path, names_root: usize, patterns: &PathPatternMatcher, climb: &PresetClimb,
             own_listing: OwnListing, checkout: Option<&RepositoryCheckout>) -> DirectoryScope
     {
-        let mut found = TestScope::of_target(path, checkout);
+        let (mut found, test_directory) = TestScope::of_target(path, checkout);
         found.names_root = names_root;
         found.presets = climb.find_presets_above(path, own_listing, checkout);
         let Some(absolute) = path.to_str() else { return found };
@@ -236,8 +236,11 @@ impl DirectoryScope {
             let declared = patterns.find_last_match_along(absolute, names_root, false);
             (found.scope, found.decided_by) = found.scope.overruled_by(None, declared);
         }
-        if found.scope.is_undecided() {
-            let deciding = found.find_presets_deciding(absolute, false).into_iter().map(|hit| hit.preset).collect::<Vec<_>>();
+        // The walk from above reaches a build's test directory through a folder a preset took first
+        if found.decided_by.is_none() {
+            let deciding = found.find_presets_deciding(absolute, false).into_iter()
+                    .filter(|hit| test_directory.is_none_or(|directory| hit.is_above(directory)))
+                    .map(|hit| hit.preset).collect::<Vec<_>>();
             if !deciding.is_empty() {
                 found.scope = TestScope::Tests;
                 found.decided_by_presets = Some(Arc::from(deciding));
@@ -268,19 +271,21 @@ impl DirectoryScope {
         DirectoryScope { scope, roots, decided_by, names_root: self.names_root, presets: self.presets.clone(), decided_by_presets }
     }
 
-    pub(crate) fn of_file(&self, file_path: &Path, patterns: &PathPatternMatcher, found: &mut Vec<usize>) -> (TestScope, Option<usize>) {
+    // The consumer marks the deciding presets matched once the file is counted, which a skipped file never is
+    pub(crate) fn of_file(&self, file_path: &Path, patterns: &PathPatternMatcher, found: &mut Vec<usize>)
+        -> (TestScope, Option<usize>, Option<ActivePresets>)
+    {
         let declared = patterns.find_last_match_of(file_path, self.names_root, false, found);
         let (scope, decided_by) = self.scope.overruled_by(self.decided_by, declared);
         if scope.is_undecided() {
-            if self.find_presets_matching(file_path, false, found, |preset| preset.record_match()) {
-                return (TestScope::Tests, decided_by);
+            let mut deciding = Vec::new();
+            if self.find_presets_matching(file_path, false, found, |preset| deciding.push(preset.clone())) {
+                return (TestScope::Tests, decided_by, Some(Arc::from(deciding)));
             }
-        } else if decided_by == self.decided_by && let Some(deciding) = &self.decided_by_presets {
-            for preset in deciding.iter() {
-                preset.record_match();
-            }
+        } else if decided_by == self.decided_by {
+            return (scope, decided_by, self.decided_by_presets.clone());
         }
-        (scope, decided_by)
+        (scope, decided_by, None)
     }
 
     pub(crate) fn with_presets_turned_on(&self, turned_on: &[Arc<ActivePreset>]) -> DirectoryScope {
@@ -311,6 +316,8 @@ impl DirectoryScope {
     }
 }
 
+pub(crate) type ActivePresets = Arc<[Arc<ActivePreset>]>;
+
 pub(crate) struct ActivePreset {
     pub preset: &'static TestPreset,
     pub trigger_file: &'static str,
@@ -326,7 +333,7 @@ impl ActivePreset {
         self.matched.load(Ordering::Relaxed)
     }
 
-    fn record_match(&self) {
+    pub(crate) fn record_match(&self) {
         if !self.has_matched() {
             self.matched.store(true, Ordering::Relaxed);
         }
@@ -354,18 +361,30 @@ pub(crate) struct PresetMatch {
     pub place: String,
 }
 
+impl PresetMatch {
+    fn is_above(&self, directory: &Path) -> bool {
+        let place = Path::new(&self.place);
+        directory != place && directory.starts_with(place)
+    }
+}
+
 // Each listing above a target is read once however many targets sit below it. A glob target is
 // one target per matched file, and every one of them climbs the same folders.
 #[derive(Default)]
 pub(crate) struct PresetClimb {
     by_directory: RefCell<HashMap<PathBuf, Vec<Arc<ActivePreset>>>>,
+    taken_back: PresetsTakenBack,
 }
 
 impl PresetClimb {
+    pub(crate) fn new(taken_back: PresetsTakenBack) -> PresetClimb {
+        PresetClimb { taken_back, ..PresetClimb::default() }
+    }
+
     // Above a checkout, a preset reads names from the checkout's own folder down, the most its paths
     // can spell, so a preset two folders above the repository never matches the folder between them.
     pub(crate) fn find_presets_above(&self, path: &Path, own_listing: OwnListing, checkout: Option<&RepositoryCheckout>)
-    -> Option<Arc<[Arc<ActivePreset>]>>
+    -> Option<ActivePresets>
     {
         let mut directories = collect_folders_up_from(path, checkout).into_iter()
                 .skip(usize::from(own_listing == OwnListing::ReadByTheWalk)).collect::<Vec<_>>();
@@ -390,7 +409,7 @@ impl PresetClimb {
         if let Some(known) = self.by_directory.borrow().get(directory) {
             return known.clone();
         }
-        let turned_on = read_trigger_files_of(directory).turn_on_reading_names_from(directory, names_root);
+        let turned_on = read_trigger_files_of(directory).turn_on_reading_names_from(directory, names_root, self.taken_back);
         self.by_directory.borrow_mut().insert(directory.to_path_buf(), turned_on.clone());
         turned_on
     }
@@ -446,18 +465,23 @@ impl TriggerFilesSeen {
         }
     }
 
-    pub(crate) fn turn_on(self, directory: &Path) -> Vec<Arc<ActivePreset>> {
+    pub(crate) fn turn_on(self, directory: &Path, taken_back: PresetsTakenBack) -> Vec<Arc<ActivePreset>> {
         if self.is_empty() {
             return Vec::new();
         }
-        self.turn_on_reading_names_from(directory, find_names_root_below(directory))
+        self.turn_on_reading_names_from(directory, find_names_root_below(directory), taken_back)
     }
 
-    fn turn_on_reading_names_from(self, directory: &Path, names_root: usize) -> Vec<Arc<ActivePreset>> {
+    fn turn_on_reading_names_from(self, directory: &Path, names_root: usize, taken_back: PresetsTakenBack)
+        -> Vec<Arc<ActivePreset>>
+    {
         if self.is_empty() {
             return Vec::new();
         }
         TEST_PRESETS.iter().enumerate().filter_map(|(at, preset)| {
+            if taken_back.holds(at) {
+                return None;
+            }
             let trigger_file = preset.trigger_files.iter().find(|file| self.holds(file))?;
             if preset.companion_file.is_some_and(|companion| !self.holds(companion)) {
                 return None;
@@ -481,6 +505,26 @@ impl TriggerFilesSeen {
     }
 }
 
+// A preset the list takes back whole, as '!@name' writes it, is never turned on, since a typed name never reaches above a target
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PresetsTakenBack(u32);
+
+impl PresetsTakenBack {
+    pub(crate) fn of(patterns: &[String]) -> PresetsTakenBack {
+        let taken_back = patterns.iter().filter_map(|pattern| match split_negation(pattern.trim()) {
+            ("", _) => None,
+            (_, rest) => Some(rest)
+        }).collect::<Vec<_>>();
+        PresetsTakenBack(TEST_PRESETS.iter().enumerate()
+                .filter(|(_, preset)| preset.patterns.iter().all(|pattern| taken_back.contains(pattern)))
+                .fold(0, |taken, (at, _)| taken | 1 << at))
+    }
+
+    fn holds(self, at: usize) -> bool {
+        self.0 & (1 << at) != 0
+    }
+}
+
 pub(crate) struct TestDirectory<'a> {
     pub directory: &'a Path,
     pub build_files: Vec<PathBuf>,
@@ -494,12 +538,14 @@ pub(crate) fn find_test_directory_along<'a>(path: &'a Path, checkout: Option<&'a
     let mut directories = collect_folders_up_from(path, checkout);
     directories.reverse();
     let mut jvm_build_root = None;
+    // The walk takes 'src' as the sources of a build rooted above it, so 'src/test' needs a root above 'src'
+    let mut jvm_build_root_above_parent = None;
     let mut go_module_root = None;
     for directory in directories {
         let roots = RootsAbove { jvm_build: jvm_build_root.is_some(), go_module: go_module_root.is_some() };
         if let (Some(name), Some(parent)) = (directory.file_name(), find_parent_of(directory, checkout)) {
             let name = name.as_encoded_bytes();
-            if let Some(root) = &jvm_build_root && is_the_jvm_test_directory(name)
+            if let Some(root) = &jvm_build_root_above_parent && is_the_jvm_test_directory(name)
                     && parent.file_name().is_some_and(|above| is_the_jvm_sources_directory(above.as_encoded_bytes())) {
                 return (Some(TestDirectory { directory, build_files: vec![PathBuf::clone(root)] }), roots);
             }
@@ -512,6 +558,7 @@ pub(crate) fn find_test_directory_along<'a>(path: &'a Path, checkout: Option<&'a
             }
         }
         if directory != path {
+            jvm_build_root_above_parent = jvm_build_root.clone();
             if let Some(file) = find_jvm_build_root(directory) {
                 jvm_build_root = Some(directory.join(file));
             }
@@ -782,11 +829,14 @@ mod tests {
         assert!(!TriggerFilesSeen::is_a_trigger_file(b"package.json"));
         assert!(!TriggerFilesSeen::is_a_trigger_file(b"jest.config.ts.bak"));
         assert!(!TriggerFilesSeen::is_a_trigger_file(b"conftest.pyc"));
-        let turned_on = triggers(&[".rspec", "Gemfile", "package.json"]).turn_on(Path::new("D:/proj/rails"));
+        let none_taken_back = PresetsTakenBack::default();
+        let turned_on = triggers(&[".rspec", "Gemfile", "package.json"]).turn_on(Path::new("D:/proj/rails"), none_taken_back);
         assert_eq!(vec![("rspec", ".rspec", "D:/proj/rails".to_owned())],
                 turned_on.iter().map(|x| (x.preset.name, x.trigger_file, x.directory.clone())).collect::<Vec<_>>());
-        assert!(triggers(&[".rspec"]).turn_on(Path::new("D:/proj/bare")).is_empty(), "a '.rspec' without its Gemfile turned the preset on");
-        assert!(triggers(&["Gemfile"]).turn_on(Path::new("D:/proj/gem")).is_empty(), "a companion alone turned the preset on");
+        assert!(triggers(&[".rspec"]).turn_on(Path::new("D:/proj/bare"), none_taken_back).is_empty(),
+                "a '.rspec' without its Gemfile turned the preset on");
+        assert!(triggers(&["Gemfile"]).turn_on(Path::new("D:/proj/gem"), none_taken_back).is_empty(),
+                "a companion alone turned the preset on");
     }
 
     #[test]
@@ -810,15 +860,15 @@ mod tests {
         for dir in ["cargo/tests/common", "cargo/src/tests", "bare/tests", "jvm/src/test/java", "jvm/src/main", "jvm/test",
                 "octave/tests", "r/tests", "outer/tests/app", "cased/Tests", "sbt/core/src/test/scala", "sbt/core/src/main",
                 "sbt/core/jvm/src/test", "sbt/api/test", "gradle/app/src/test", "gradle/app/src/main", "go/testdata",
-                "go/pkg/testdata/deep", "go/pkg/data", "loose/testdata"] {
+                "go/pkg/testdata/deep", "go/pkg/data", "loose/testdata", "rooted/src/test"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
         for file in ["cargo/Cargo.toml", "jvm/pom.xml", "octave/DESCRIPTION", "r/DESCRIPTION", "r/NAMESPACE", "cased/Cargo.toml",
-                "sbt/build.sbt", "gradle/settings.gradle.kts", "go/go.mod"] {
+                "sbt/build.sbt", "gradle/settings.gradle.kts", "go/go.mod", "rooted/src/settings.gradle"] {
             std::fs::write(root.join(file), "").unwrap();
         }
-        let of = |path: &str| TestScope::of_target(&root.join(path), None).scope;
-        let inside = |path: &str| TestScope::of_target(&root.join(path), None).roots.jvm_build;
+        let of = |path: &str| TestScope::of_target(&root.join(path), None).0.scope;
+        let inside = |path: &str| TestScope::of_target(&root.join(path), None).0.roots.jvm_build;
 
         assert_eq!(of("cargo/tests"), Tests);
         assert_eq!(of("cargo/tests/common"), Tests);
@@ -848,11 +898,12 @@ mod tests {
         assert_eq!(of("sbt/api/test"), Ordinary, "a 'test' with no 'src' above it");
         assert_eq!(of("gradle/app/src/test"), Tests);
         assert_eq!((of("gradle/app/src/main"), inside("gradle/app/src/main")), (Ordinary, true));
+        assert_eq!(of("rooted/src/test"), Ordinary, "a build rooted in 'src' itself took its 'test' for the source set");
 
         assert_eq!(of("go/testdata"), Tests);
         assert_eq!(of("go/pkg/testdata/deep"), Tests, "a 'testdata' deeper down the module");
-        assert_eq!((of("go/pkg/data"), TestScope::of_target(&root.join("go/pkg/data"), None).roots.go_module), (Ordinary, true));
-        assert_eq!((of("go"), TestScope::of_target(&root.join("go"), None).roots.go_module), (Ordinary, false));
+        assert_eq!((of("go/pkg/data"), TestScope::of_target(&root.join("go/pkg/data"), None).0.roots.go_module), (Ordinary, true));
+        assert_eq!((of("go"), TestScope::of_target(&root.join("go"), None).0.roots.go_module), (Ordinary, false));
         assert_eq!(of("loose/testdata"), Ordinary, "a 'testdata' with no go.mod above it");
         let deep = root.join("go/pkg/testdata/deep");
         let (found, _) = find_test_directory_along(&deep, None);
@@ -892,9 +943,9 @@ mod tests {
                 OwnListing::ReadByTheWalk, Some(&checkout));
         assert_eq!(TestScope::Tests, sources.of_file(&at("a/test/holder/web/src/a.test.ts"), &patterns, &mut Vec::new()).0);
 
-        assert_eq!(TestScope::Tests, TestScope::of_target(&at("a/test/holder/web/testdata"), Some(&checkout)).scope,
+        assert_eq!(TestScope::Tests, TestScope::of_target(&at("a/test/holder/web/testdata"), Some(&checkout)).0.scope,
                 "a 'go.mod' above the repository was not read for its checkout");
-        assert_eq!(TestScope::Ordinary, TestScope::of_target(&at("a/test/holder/web/testdata"), None).scope);
+        assert_eq!(TestScope::Ordinary, TestScope::of_target(&at("a/test/holder/web/testdata"), None).0.scope);
 
         std::fs::remove_dir_all(&root).unwrap();
     }

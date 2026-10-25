@@ -82,8 +82,8 @@ use crossbeam_deque::{Injector, Worker};
 use engine::file_parser::NestedLanguageLookup;
 use engine::modules::{ModuleId, Modules};
 use engine::path_patterns::{PathPatternMatcher, TakingBack, Unused, UnusedPattern};
-use engine::test_detection::{ActivePreset, DirectoryScope, FilesOnDisk, OwnListing, PresetClimb, TestScope,
-        promote_declared_test_modules};
+use engine::test_detection::{ActivePreset, ActivePresets, DirectoryScope, FilesOnDisk, OwnListing, PresetClimb, PresetsTakenBack,
+        TestScope, promote_declared_test_modules};
 use engine::test_detection::TEST_PRESETS;
 
 /// The name of the file that decides which language gets an extension or a file name two of them
@@ -429,7 +429,7 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
         progress: &ScanProgress) -> Vec<Arc<ActivePreset>>
 {
     let mut scopes_of_directories = HashMap::new();
-    let climb = PresetClimb::default();
+    let climb = PresetClimb::new(PresetsTakenBack::of(&config.test_patterns.patterns));
     let checkout = config.checkout.as_ref().map(engine::targets::resolve_checkout);
     for target in crate::engine::targets::topmost_targets(targets) {
         let dir_path = Path::new(&target.path);
@@ -449,12 +449,12 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
             };
             let holder = find_test_scope_of_target(config, test_patterns, dir_path.parent().unwrap_or(dir_path), names_root,
                     OwnListing::Unread, &climb, checkout.as_ref(), &mut scopes_of_directories);
-            let test_scope = match config.detect_tests {
-                true => holder.of_file(dir_path, test_patterns, &mut Vec::new()).0,
-                false => TestScope::Ordinary
+            let (test_scope, _, decided_by_presets) = match config.detect_tests {
+                true => holder.of_file(dir_path, test_patterns, &mut Vec::new()),
+                false => (TestScope::Ordinary, None, None)
             };
             files_injector.push(queued.with_extension_rules(lookup.find_extension_rules(dir_path))
-                    .with_test_scope(test_scope));
+                    .with_test_scope(test_scope, decided_by_presets));
             files_present.total_files += 1;
             files_present.relevant_files += 1;
             progress.record_file_found();
@@ -515,8 +515,8 @@ fn find_test_scope_of_target(config: &EngineConfig, test_patterns: &PathPatternM
             .clone()
 }
 
-// Sorted here, since the threads append in whichever order they reach a directory and two runs over
-// one tree must list one order
+// Sorted, since the threads append in whichever order they reach a directory. Folded by case, since
+// two targets on Windows can spell one folder in two cases.
 fn describe_applied_presets(turned_on: &[Arc<ActivePreset>]) -> Vec<AppliedPreset> {
     let mut described = turned_on.iter().map(|preset| AppliedPreset {
         name: preset.preset.name.to_owned(),
@@ -525,7 +525,20 @@ fn describe_applied_presets(turned_on: &[Arc<ActivePreset>]) -> Vec<AppliedPrese
         matched: preset.has_matched()
     }).collect::<Vec<_>>();
     described.sort_by(|a, b| (&a.directory, &a.name).cmp(&(&b.directory, &b.name)));
-    described
+
+    let mut kept_at : HashMap<(String, String), usize> = HashMap::new();
+    let mut kept : Vec<AppliedPreset> = Vec::with_capacity(described.len());
+    for preset in described {
+        let place = (engine::targets::path_comparison_key(&preset.directory), preset.name.clone());
+        match kept_at.get(&place) {
+            Some(&at) => kept[at].matched |= preset.matched,
+            None => {
+                kept_at.insert(place, kept.len());
+                kept.push(preset);
+            }
+        }
+    }
+    kept
 }
 
 // A language nobody wrote a file in would take a row in every report and add nothing to any figure.
@@ -553,7 +566,8 @@ pub(crate) struct ParsableFile {
     // that skips a file. The ignore files, the dotted names and the head checks all pass it through.
     pub written_by_hand: bool,
     pub extension_rules: Option<Arc<engine::identity::ExtensionRules>>,
-    pub test_scope: TestScope
+    pub test_scope: TestScope,
+    pub decided_by_presets: Option<ActivePresets>
 }
 
 impl ParsableFile {
@@ -565,7 +579,8 @@ impl ParsableFile {
             size,
             written_by_hand: false,
             extension_rules: None,
-            test_scope: TestScope::Ordinary
+            test_scope: TestScope::Ordinary,
+            decided_by_presets: None
         }
     }
 
@@ -578,8 +593,9 @@ impl ParsableFile {
         self
     }
 
-    pub(crate) fn with_test_scope(mut self, test_scope: TestScope) -> Self {
+    pub(crate) fn with_test_scope(mut self, test_scope: TestScope, decided_by_presets: Option<ActivePresets>) -> Self {
         self.test_scope = test_scope;
+        self.decided_by_presets = decided_by_presets;
         self
     }
 }

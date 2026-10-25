@@ -8,6 +8,7 @@ use mezura_core::{CountingModel, RunResult, Stats, TestCode, UNNAMED_MODULE_NAME
 use super::config_manager::{self, ByFile, Configuration, Layout, SortCriterion, TestsBreakdown};
 use super::message_printer::wrap_message;
 use super::number_formatter::format_with_separators;
+use super::paths::is_inside;
 use super::theme::{Style, Theme};
 
 const TOTAL_NAME : &str = "Total";
@@ -472,11 +473,6 @@ pub(crate) fn find_common_directory_of(targets: &[mezura_core::Target]) -> &str 
     common
 }
 
-// Compared by whole components, or 'D:/repository' counts as being inside 'D:/repo'
-pub(crate) fn is_inside(path: &str, directory: &str) -> bool {
-    path == directory || path.strip_prefix(directory).is_some_and(|rest| rest.starts_with('/'))
-}
-
 // What is too wide loses whole components out of its middle and never a piece of one. The file's own
 // name is what tells one row from another, so a name too wide on its own is the floor.
 pub(crate) fn elide_long_path(relative: &str) -> Cow<'_, str> {
@@ -500,15 +496,10 @@ pub(crate) fn elide_long_path(relative: &str) -> Cow<'_, str> {
     Cow::Borrowed(relative)
 }
 
-pub(crate) fn find_outermost_directories<'a>(directories: &[&'a str]) -> Vec<&'a str> {
-    directories.iter().copied().filter(|directory| !directories.iter()
-            .any(|other| other != directory && is_inside(directory, other))).collect()
-}
-
 // As it would be typed from the working directory, and whole when it is outside it. Folded, since
 // cmd.exe keeps the working directory in the case it was typed in.
 pub(crate) fn format_preset_directory(directory: &str, working_directory: Option<&str>) -> String {
-    let fold = crate::paths::fold_path;
+    let fold = crate::paths::fold_ascii_case;
     let relative = working_directory.filter(|from| is_inside(&fold(directory), &fold(from)))
             .map(|from| format!("./{}", directory[from.len()..].trim_start_matches('/')));
 

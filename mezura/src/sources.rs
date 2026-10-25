@@ -153,8 +153,8 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
         result
     };
 
-    Ok((Reading::of_git_revision(git_revision, resolved.commit.clone(), resolved.taken_at.clone(),
-            result, config), notes))
+    Ok((Reading::of_git_revision(git_revision, resolved.commit.clone(), resolved.repository.clone(),
+            resolved.taken_at.clone(), result, config), notes))
 }
 
 // The file rows still name the temporary checkout, which is a different directory on every run, so
@@ -172,7 +172,7 @@ fn move_file_paths_out_of_checkout(result: &mut mezura_core::RunResult,
     for files in result.modules.iter_mut().flat_map(|module| module.files.values_mut()) {
         for file in files {
             if let Some((counted, declared)) = pairs.iter().find(|(counted, _)|
-                    super::result_printer::is_inside(&file.path, counted)) {
+                    super::paths::is_inside(&file.path, counted)) {
                 file.path = declared.to_string() + &file.path[counted.len()..];
             }
         }
@@ -185,7 +185,7 @@ fn move_preset_directories_out_of_checkout(result: &mut mezura_core::RunResult, 
     let checkout = super::paths::normalise_separators(checkout).trim_end_matches('/').to_owned();
     let repository = super::paths::normalise_separators(repository).trim_end_matches('/').to_owned();
     for preset in &mut result.applied_presets {
-        if super::result_printer::is_inside(&preset.directory, &checkout) {
+        if super::paths::is_inside(&preset.directory, &checkout) {
             preset.directory = repository.clone() + &preset.directory[checkout.len()..];
         }
     }
@@ -194,12 +194,7 @@ fn move_preset_directories_out_of_checkout(result: &mut mezura_core::RunResult, 
 // The checkout is the same tree at another root, so a place inside the repository moves with it, and
 // so does the project folder the names are read from, or a pattern would apply on one side only
 fn move_patterns_into_checkout(checkout: &str, repository: &str, patterns: &PathPatterns) -> PathPatterns {
-    // ASCII folding only, so that folding never moves a byte and the remainder can be cut off the
-    // unfolded pattern at the root's own length
-    let key = |path: &str| {
-        let path = super::paths::normalise_separators(path).into_owned();
-        if cfg!(windows) {path.to_ascii_lowercase()} else {path}
-    };
+    let key = |path: &str| super::paths::fold_ascii_case(&super::paths::normalise_separators(path)).into_owned();
     let root = repository.trim_end_matches('/');
     let folded_root = key(root);
     let moved = |place: &str| {
@@ -226,7 +221,7 @@ fn move_patterns_into_checkout(checkout: &str, repository: &str, patterns: &Path
 
 #[cfg(test)]
 mod tests {
-    use crate::paths::test_paths::SCRATCH_DIR;
+    use crate::paths::test_paths::{CORE_LANGUAGES_DIR, SCRATCH_DIR};
 
     use super::*;
 
@@ -271,17 +266,10 @@ mod tests {
         std::fs::write(root.join("src/b.rs"), "fn c() {}\n").unwrap();
         std::fs::write(root.join("api/src/c.rs"), "fn d() {}\n").unwrap();
         std::fs::write(root.join("api/src/gen/g.rs"), "fn e() {}\n").unwrap();
-        let git = |arguments: &[&str]| {
-            let outcome = std::process::Command::new("git").arg("-C").arg(&root).args(arguments).output().unwrap();
-            assert!(outcome.status.success(), "git {arguments:?}: {}", String::from_utf8_lossy(&outcome.stderr));
-        };
-        git(&["init", "-q"]);
-        git(&["add", "."]);
-        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]);
+        commit_everything_in(&root);
 
         let repository = crate::paths::normalise_separators(&root.to_string_lossy()).into_owned();
-        let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
-        let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
+        let parsed = mezura_core::language_file::parse_languages_in_dir(CORE_LANGUAGES_DIR).unwrap().0;
         let both_sides = |config: &Configuration| {
             let resolved = prepare_revisions(&["HEAD"], &config.engine).unwrap();
             let side = start_acquiring_revisions(resolved).into_iter().next().unwrap();
@@ -336,16 +324,9 @@ mod tests {
         std::fs::write(holder.join("jest.config.js"), "module.exports = {};\n").unwrap();
         std::fs::write(root.join("ui/a.test.ts"), "test('a', () => {});\n").unwrap();
         std::fs::write(root.join("ui/a.ts"), "export const a = 1;\n").unwrap();
-        let git = |arguments: &[&str]| {
-            let outcome = std::process::Command::new("git").arg("-C").arg(&root).args(arguments).output().unwrap();
-            assert!(outcome.status.success(), "git {arguments:?}: {}", String::from_utf8_lossy(&outcome.stderr));
-        };
-        git(&["init", "-q"]);
-        git(&["add", "."]);
-        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]);
+        commit_everything_in(&root);
 
-        let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
-        let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
+        let parsed = mezura_core::language_file::parse_languages_in_dir(CORE_LANGUAGES_DIR).unwrap().0;
         let config = Configuration::new(vec![crate::paths::normalise_separators(&root.to_string_lossy()).into_owned()]);
         let side = start_acquiring_revisions(prepare_revisions(&["HEAD"], &config.engine).unwrap()).into_iter().next().unwrap();
         let (revision, _) = count_git_revision(side, &config, parsed.clone(), &Default::default()).unwrap();
@@ -407,5 +388,15 @@ mod tests {
             assert_eq!(of(&["C:/tmp/chk/repo/target"]), move_patterns_into_checkout("C:/tmp/chk/repo", "D:/repo", &of(&["d:/REPO/target"])));
             assert_eq!(of(&["C:/tmp/chk/repo/a/b"]), move_patterns_into_checkout("C:/tmp/chk/repo", "D:/repo", &of(&["D:\\repo\\a\\b"])));
         }
+    }
+
+    fn commit_everything_in(root: &Path) {
+        let git = |arguments: &[&str]| {
+            let outcome = std::process::Command::new("git").arg("-C").arg(root).args(arguments).output().unwrap();
+            assert!(outcome.status.success(), "git {arguments:?}: {}", String::from_utf8_lossy(&outcome.stderr));
+        };
+        git(&["init", "-q"]);
+        git(&["add", "."]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]);
     }
 }
