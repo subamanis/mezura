@@ -1,0 +1,6 @@
+[Python]
+conftest.py whole
+tests/test_a.py whole
+tests/test_b/__init__.py whole
+tests/foo_test.py none # the declared names replace the shipped ones
+pkg/__init__.py none

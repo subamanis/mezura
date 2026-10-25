@@ -11,6 +11,8 @@ use crate::engine::is_the_same_name;
 use crate::engine::path_patterns::{PathPatternMatcher, PatternMatch, TakingBack, split_negation};
 use crate::engine::targets::spell_out;
 
+use super::tool_configuration::{CONFTEST, PYTEST_CONFIGURATION_FILE_NAMES, read_pytest_configuration};
+
 // Every file of a row has to be present, since an Octave package carries a DESCRIPTION too.
 // 'src/test' is the one directory two levels down, and the walk holds the 'src' as 'JvmSources'.
 // 'go.mod' names no directory beside it. 'testdata' is taken at every depth below it.
@@ -47,32 +49,36 @@ const VITEST_PATTERNS : [&str; 16] = ["*.test.js", "*.test.jsx", "*.test.ts", "*
         "*.test.mts", "*.test.cts", "*.spec.js", "*.spec.jsx", "*.spec.ts", "*.spec.tsx", "*.spec.mjs", "*.spec.cjs",
         "*.spec.mts", "*.spec.cts"];
 // A trigger names its tool without being read. It is the tool's own file, a gradle or Perl build
-// file, or vite's, which vitest reads. A 'package.json' or a 'pytest.ini' says nothing about where
-// the tests are without being read, and the walk reads listings only. '.rspec' needs the 'Gemfile'
-// beside it, or the one in a home directory makes every 'spec' under it test code.
+// file, or vite's, which vitest reads. A 'package.json' says nothing about where the tests are
+// without being read. Pytest's configuration files are the one kind read, and only for the folders
+// and names they declare. '.rspec' needs the 'Gemfile' beside it, or the one in a home directory
+// makes every 'spec' under it test code.
 pub(crate) const TEST_PRESETS : [TestPreset; 13] = [
     TestPreset { name: "jest", trigger_files: &["jest.config.js", "jest.config.ts", "jest.config.mjs", "jest.config.mts",
-            "jest.config.cjs", "jest.config.cts", "jest.config.json"], companion_file: None, patterns: &JEST_PATTERNS },
+            "jest.config.cjs", "jest.config.cts", "jest.config.json"], companion_file: None, files_declaring_tests: &[],
+            patterns: &JEST_PATTERNS },
     TestPreset { name: "vitest", trigger_files: &["vitest.config.js", "vitest.config.mjs", "vitest.config.cjs",
             "vitest.config.ts", "vitest.config.mts", "vitest.config.cts", "vitest.workspace.js", "vitest.workspace.mjs",
             "vitest.workspace.cjs", "vitest.workspace.ts", "vitest.workspace.mts", "vitest.workspace.cts",
             "vitest.workspace.json", "vite.config.js", "vite.config.mjs", "vite.config.cjs", "vite.config.ts",
-            "vite.config.mts", "vite.config.cts"], companion_file: None, patterns: &VITEST_PATTERNS },
+            "vite.config.mts", "vite.config.cts"], companion_file: None, files_declaring_tests: &[], patterns: &VITEST_PATTERNS },
     TestPreset { name: "mocha", trigger_files: &[".mocharc.cjs", ".mocharc.js", ".mocharc.mjs", ".mocharc.yaml",
-            ".mocharc.yml", ".mocharc.jsonc", ".mocharc.json"], companion_file: None, patterns: &["test/"] },
-    TestPreset { name: "pytest", trigger_files: &["conftest.py"], companion_file: None,
-            patterns: &["test_*.py", "*_test.py", "conftest.py"] },
-    TestPreset { name: "unittest", trigger_files: &[], companion_file: None, patterns: &["test*.py"] },
-    TestPreset { name: "rspec", trigger_files: &[".rspec"], companion_file: Some("Gemfile"), patterns: &["spec/"] },
-    TestPreset { name: "minitest", trigger_files: &[], companion_file: None, patterns: &["test/"] },
+            ".mocharc.yml", ".mocharc.jsonc", ".mocharc.json"], companion_file: None, files_declaring_tests: &[], patterns: &["test/"] },
+    TestPreset { name: "pytest", trigger_files: &[CONFTEST], companion_file: None, files_declaring_tests: &PYTEST_CONFIGURATION_FILE_NAMES,
+            patterns: &["test_*.py", "*_test.py", CONFTEST] },
+    TestPreset { name: "unittest", trigger_files: &[], companion_file: None, files_declaring_tests: &[], patterns: &["test*.py"] },
+    TestPreset { name: "rspec", trigger_files: &[".rspec"], companion_file: Some("Gemfile"), files_declaring_tests: &[],
+            patterns: &["spec/"] },
+    TestPreset { name: "minitest", trigger_files: &[], companion_file: None, files_declaring_tests: &[], patterns: &["test/"] },
     TestPreset { name: "phpunit", trigger_files: &["phpunit.xml", "phpunit.xml.dist", "phpunit.dist.xml"],
-            companion_file: None, patterns: &["tests/", "Tests/", "test/"] },
-    TestPreset { name: "dotnet", trigger_files: &[], companion_file: None, patterns: &["*Tests/", "*.Test/"] },
+            companion_file: None, files_declaring_tests: &[], patterns: &["tests/", "Tests/", "test/"] },
+    TestPreset { name: "dotnet", trigger_files: &[], companion_file: None, files_declaring_tests: &[], patterns: &["*Tests/", "*.Test/"] },
     TestPreset { name: "gradle", trigger_files: &["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
-            companion_file: None, patterns: &["src/*Test/", "src/testFixtures/"] },
-    TestPreset { name: "jvm", trigger_files: &[], companion_file: None, patterns: &["src/test/"] },
-    TestPreset { name: "xt", trigger_files: &["Makefile.PL", "Build.PL", "dist.ini"], companion_file: None, patterns: &["xt/"] },
-    TestPreset { name: "odin", trigger_files: &[], companion_file: None, patterns: &["*_test.odin"] },
+            companion_file: None, files_declaring_tests: &[], patterns: &["src/*Test/", "src/testFixtures/"] },
+    TestPreset { name: "jvm", trigger_files: &[], companion_file: None, files_declaring_tests: &[], patterns: &["src/test/"] },
+    TestPreset { name: "xt", trigger_files: &["Makefile.PL", "Build.PL", "dist.ini"], companion_file: None, files_declaring_tests: &[],
+            patterns: &["xt/"] },
+    TestPreset { name: "odin", trigger_files: &[], companion_file: None, files_declaring_tests: &[], patterns: &["*_test.odin"] },
 ];
 const TRIGGER_FIRST_BYTES : [bool; 256] = build_trigger_first_bytes();
 
@@ -88,11 +94,16 @@ const TRIGGER_FIRST_BYTES : [bool; 256] = build_trigger_first_bytes();
 pub struct TestPreset {
     /// The tool, `jest`.
     pub name: &'static str,
-    /// The files the tool keeps its configuration in, `jest.config.ts`. One of them in a directory
-    /// listing turns the preset on under that directory. Empty for a preset the walk never applies.
+    /// The files whose presence says the tool is in use, `jest.config.ts`, which are never read. One
+    /// of them in a directory listing turns the preset on under that directory. Empty for a preset
+    /// the walk never applies.
     pub trigger_files: &'static [&'static str],
     /// A file that has to sit beside the trigger for it to count, the `Gemfile` beside `.rspec`.
     pub companion_file: Option<&'static str>,
+    /// The files read for where the tests are and what they are named, `pytest.ini`. One declaring
+    /// the folders turns the preset on under them alone, and declared names take the place of
+    /// [`patterns`](Self::patterns). Only pytest's are read, so the field is empty for every other tool.
+    pub files_declaring_tests: &'static [&'static str],
     /// The patterns, in the shape [`crate::EngineConfig::test_patterns`] takes. `*.test.ts` is a
     /// file name and `__tests__/` a directory name, both matched at any depth under the trigger.
     pub patterns: &'static [&'static str],
@@ -298,7 +309,8 @@ impl DirectoryScope {
     pub(crate) fn find_presets_deciding(&self, absolute: &str, ends_with_a_file: bool) -> Vec<PresetMatch> {
         let hits = self.presets.as_deref().unwrap_or_default().iter().filter_map(|preset|
                 preset.find_first_match_along(absolute, ends_with_a_file)
-                .map(|(at, place)| PresetMatch { preset: preset.clone(), pattern: preset.preset.patterns[at], place }))
+                .map(|(at, place)| PresetMatch { preset: preset.clone(), pattern: preset.names.patterns[at].clone(),
+                        configured_by: preset.configured_by.filter(|_| at < preset.names.declared), place }))
                 .collect::<Vec<_>>();
         let Some(earliest) = hits.iter().map(|hit| hit.place.len()).min() else { return hits };
         hits.into_iter().filter(|hit| hit.place.len() == earliest).collect()
@@ -321,10 +333,13 @@ pub(crate) type ActivePresets = Arc<[Arc<ActivePreset>]>;
 pub(crate) struct ActivePreset {
     pub preset: &'static TestPreset,
     pub trigger_file: &'static str,
+    pub configured_by: Option<&'static str>,
     // Absolute, with forward slashes
     pub directory: String,
     names_root: usize,
-    matcher: &'static PathPatternMatcher,
+    // Empty where the preset takes the whole of its directory
+    scopes: Vec<String>,
+    names: Arc<PresetNames>,
     matched: AtomicBool,
 }
 
@@ -340,11 +355,33 @@ impl ActivePreset {
     }
 
     fn matches(&self, path: &Path, is_folder: bool, found: &mut Vec<usize>) -> bool {
-        self.matcher.matches(path, self.names_root, is_folder, found)
+        if !self.scopes.is_empty() && !path.to_str().is_some_and(|absolute| self.is_in_scope(absolute)) {
+            return false;
+        }
+        if self.configured_by.is_some() && (is_folder || !is_a_python_file(path)) {
+            return false;
+        }
+        self.names.matcher.matches(path, self.names_root, is_folder, found)
     }
 
+    // Pytest takes a declared name for '.py' files alone, so it never decides at a folder
     fn find_first_match_along(&self, absolute: &str, ends_with_a_file: bool) -> Option<(usize, String)> {
-        self.matcher.find_first_match_along(absolute, self.names_root, ends_with_a_file)
+        if !self.is_in_scope(absolute) {
+            return None;
+        }
+        if self.configured_by.is_some() {
+            if !ends_with_a_file || !is_a_python_file(Path::new(absolute)) {
+                return None;
+            }
+            return self.names.matcher.find_last_match(absolute, self.names_root, false, &mut Vec::new())
+                    .map(|found| (found.written_at, absolute.to_owned()));
+        }
+        self.names.matcher.find_first_match_along(absolute, self.names_root, ends_with_a_file)
+                .filter(|(_, place)| self.is_in_scope(place))
+    }
+
+    fn is_in_scope(&self, absolute: &str) -> bool {
+        self.scopes.is_empty() || self.scopes.iter().any(|scope| is_inside_scope(absolute, scope))
     }
 }
 
@@ -356,7 +393,9 @@ impl fmt::Debug for ActivePreset {
 
 pub(crate) struct PresetMatch {
     pub preset: Arc<ActivePreset>,
-    pub pattern: &'static str,
+    pub pattern: String,
+    // None where the pattern is one the configuration did not declare, the 'conftest.py' added beside its names
+    pub configured_by: Option<&'static str>,
     // The folder or the file itself, whichever the pattern matched first along the path
     pub place: String,
 }
@@ -391,12 +430,12 @@ impl PresetClimb {
         directories.reverse();
         let mut presets = Vec::new();
         for directory in directories {
-            let names_root = match checkout {
+            let (names_root, above_the_checkout) = match checkout {
                 Some(checkout) if !directory.starts_with(&checkout.root) =>
-                        Path::new(&checkout.root).parent().map_or(0, find_names_root_below),
-                _ => find_names_root_below(directory)
+                        (Path::new(&checkout.root).parent().map_or(0, find_names_root_below), Some(checkout)),
+                _ => (find_names_root_below(directory), None)
             };
-            presets.extend(self.read_presets_of(directory, names_root));
+            presets.extend(self.read_presets_of(directory, names_root, above_the_checkout));
         }
         (!presets.is_empty()).then(|| Arc::from(presets))
     }
@@ -405,11 +444,21 @@ impl PresetClimb {
         self.by_directory.into_inner().into_values().flatten().collect()
     }
 
-    fn read_presets_of(&self, directory: &Path, names_root: usize) -> Vec<Arc<ActivePreset>> {
+    // A folder above a checkout is the repository's, so what its configuration names moves into the checkout
+    fn read_presets_of(&self, directory: &Path, names_root: usize, above_the_checkout: Option<&RepositoryCheckout>)
+        -> Vec<Arc<ActivePreset>>
+    {
         if let Some(known) = self.by_directory.borrow().get(directory) {
             return known.clone();
         }
-        let turned_on = read_trigger_files_of(directory).turn_on_reading_names_from(directory, names_root, self.taken_back);
+        let mut turned_on = read_trigger_files_of(directory).turn_on_reading_names_from(directory, names_root, self.taken_back);
+        if let Some(checkout) = above_the_checkout {
+            for preset in &mut turned_on {
+                if let Some(preset) = Arc::get_mut(preset) {
+                    preset.scopes = preset.scopes.iter().map(|scope| move_into_checkout(scope, checkout)).collect();
+                }
+            }
+        }
         self.by_directory.borrow_mut().insert(directory.to_path_buf(), turned_on.clone());
         turned_on
     }
@@ -450,7 +499,7 @@ impl BuildFilesSeen {
     }
 }
 
-// The trigger files and the companions of every preset, one bit each in table order
+// The trigger, companion and configuration files of every preset, one bit each in table order
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct TriggerFilesSeen(u64);
 
@@ -478,17 +527,37 @@ impl TriggerFilesSeen {
         if self.is_empty() {
             return Vec::new();
         }
-        TEST_PRESETS.iter().enumerate().filter_map(|(at, preset)| {
+        let mut turned_on = Vec::new();
+        for (at, preset) in TEST_PRESETS.iter().enumerate() {
             if taken_back.holds(at) {
-                return None;
+                continue;
             }
-            let trigger_file = preset.trigger_files.iter().find(|file| self.holds(file))?;
+            let build_active_preset = |trigger_file, declared: Option<(Vec<String>, &'static str)>, scopes| {
+                let (names, configured_by) = match declared {
+                    Some((names, file)) => (Arc::new(PresetNames::of_declared(names)), Some(file)),
+                    None => (get_preset_names(at), None)
+                };
+                Arc::new(ActivePreset { preset, trigger_file, configured_by, directory: spell_out(directory), names_root, scopes,
+                        names, matched: AtomicBool::new(false) })
+            };
+            let configuration = match preset.files_declaring_tests.iter().any(|file| self.holds(file)) {
+                true => read_pytest_configuration(directory, |file| self.holds(file)),
+                false => None
+            };
+            // Pushed before the trigger beside it, since the report folds the two and keeps the first
+            if let Some(configuration) = &configuration && let Some(scopes) = &configuration.testpaths {
+                let declared = configuration.python_files.clone().map(|names| (names, configuration.file));
+                turned_on.push(build_active_preset(configuration.file, declared, scopes.clone()));
+            }
+            let Some(trigger_file) = preset.trigger_files.iter().find(|file| self.holds(file)) else { continue };
             if preset.companion_file.is_some_and(|companion| !self.holds(companion)) {
-                return None;
+                continue;
             }
-            Some(Arc::new(ActivePreset { preset, trigger_file, directory: spell_out(directory), names_root,
-                    matcher: get_preset_matcher(at), matched: AtomicBool::new(false) }))
-        }).collect()
+            let declared = configuration.as_ref()
+                    .and_then(|configuration| configuration.collect_test_shaped_names().map(|names| (names, configuration.file)));
+            turned_on.push(build_active_preset(trigger_file, declared, Vec::new()));
+        }
+        turned_on
     }
 
     fn is_empty(self) -> bool {
@@ -500,8 +569,7 @@ impl TriggerFilesSeen {
     }
 
     fn find_index_of(name: &[u8]) -> Option<usize> {
-        TEST_PRESETS.iter().flat_map(|preset| preset.trigger_files.iter().copied().chain(preset.companion_file))
-                .position(|file| is_the_same_name(name, file.as_bytes()))
+        collect_noted_files().position(|file| is_the_same_name(name, file.as_bytes()))
     }
 }
 
@@ -575,34 +643,86 @@ struct BuildTool {
     test_directories: &'static [&'static str],
 }
 
+struct PresetNames {
+    patterns: Vec<String>,
+    declared: usize,
+    matcher: PathPatternMatcher,
+}
+
+impl PresetNames {
+    // Pytest never collects 'conftest.py' as a test module, and it is test code all the same
+    fn of_declared(mut patterns: Vec<String>) -> PresetNames {
+        let declared = patterns.len();
+        if !patterns.iter().any(|pattern| pattern == CONFTEST) {
+            patterns.push(CONFTEST.to_owned());
+        }
+        PresetNames::compile(patterns, declared)
+    }
+
+    fn compile(patterns: Vec<String>, declared: usize) -> PresetNames {
+        let matcher = PathPatternMatcher::compile(&patterns, TakingBack::Refused).expect("the patterns of a preset compile");
+        PresetNames { patterns, declared, matcher }
+    }
+}
+
 const fn build_trigger_first_bytes() -> [bool; 256] {
     let mut table = [false; 256];
     let mut preset = 0;
     while preset < TEST_PRESETS.len() {
-        let files = TEST_PRESETS[preset].trigger_files;
-        let mut at = 0;
-        while at < files.len() {
-            let first = files[at].as_bytes()[0];
-            table[first.to_ascii_lowercase() as usize] = true;
-            table[first.to_ascii_uppercase() as usize] = true;
-            at += 1;
-        }
+        mark_first_bytes(&mut table, TEST_PRESETS[preset].trigger_files);
         if let Some(companion) = TEST_PRESETS[preset].companion_file {
-            let first = companion.as_bytes()[0];
-            table[first.to_ascii_lowercase() as usize] = true;
-            table[first.to_ascii_uppercase() as usize] = true;
+            mark_first_bytes(&mut table, &[companion]);
         }
+        mark_first_bytes(&mut table, TEST_PRESETS[preset].files_declaring_tests);
         preset += 1;
     }
     table
 }
 
+const fn mark_first_bytes(table: &mut [bool; 256], names: &[&str]) {
+    let mut at = 0;
+    while at < names.len() {
+        let first = names[at].as_bytes()[0];
+        table[first.to_ascii_lowercase() as usize] = true;
+        table[first.to_ascii_uppercase() as usize] = true;
+        at += 1;
+    }
+}
+
+fn collect_noted_files() -> impl Iterator<Item = &'static str> {
+    TEST_PRESETS.iter().flat_map(|preset| preset.trigger_files.iter().copied().chain(preset.companion_file)
+            .chain(preset.files_declaring_tests.iter().copied()))
+}
+
 // Compiled once, since a monorepo turns one preset on in many directories
-fn get_preset_matcher(at: usize) -> &'static PathPatternMatcher {
-    static MATCHERS : OnceLock<Vec<PathPatternMatcher>> = OnceLock::new();
-    &MATCHERS.get_or_init(|| TEST_PRESETS.iter().map(|preset|
-            PathPatternMatcher::compile(preset.patterns, TakingBack::Refused).expect("a shipped preset's patterns compile"))
-            .collect())[at]
+fn get_preset_names(at: usize) -> Arc<PresetNames> {
+    static NAMES : OnceLock<Vec<Arc<PresetNames>>> = OnceLock::new();
+    NAMES.get_or_init(|| TEST_PRESETS.iter().map(|preset| {
+        let patterns = preset.patterns.iter().map(|pattern| (*pattern).to_owned()).collect();
+        Arc::new(PresetNames::compile(patterns, 0))
+    }).collect())[at].clone()
+}
+
+fn move_into_checkout(scope: &str, checkout: &RepositoryCheckout) -> String {
+    let repository = checkout.repository.trim_end_matches('/');
+    match is_inside_scope(scope, repository) {
+        true => format!("{}{}", checkout.root.trim_end_matches('/'), &scope[repository.len()..]),
+        false => scope.to_owned()
+    }
+}
+
+fn is_a_python_file(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension == "py")
+}
+
+// The walk may join with a backslash
+fn is_inside_scope(absolute: &str, scope: &str) -> bool {
+    let is_separator = |byte: u8| byte == b'/' || byte == b'\\';
+    let folds_case = cfg!(any(windows, target_os = "macos"));
+    let (path, scope) = (absolute.as_bytes(), scope.as_bytes());
+    path.len() >= scope.len()
+            && path.iter().zip(scope).all(|(&a, &b)| a == b || (is_separator(a) && is_separator(b)) || (folds_case && a.eq_ignore_ascii_case(&b)))
+            && path.get(scope.len()).is_none_or(|&byte| is_separator(byte))
 }
 
 // A name read from under the directory never sees the directory's own name
@@ -847,9 +967,52 @@ mod tests {
                 panic!("{}: {error:?}", preset.name);
             }
             assert!(preset.companion_file.is_none() || !preset.trigger_files.is_empty(), "{}: a companion of nothing", preset.name);
+            assert!(preset.files_declaring_tests.is_empty() || preset.name == "pytest",
+                    "{}: its configuration files would be read as pytest's", preset.name);
         }
-        let names = TEST_PRESETS.iter().flat_map(|preset| preset.trigger_files.iter().copied().chain(preset.companion_file)).count();
-        assert!(names <= u64::BITS as usize, "{names} trigger files take more bits than the mask has");
+        let names = collect_noted_files().count();
+        assert!(names <= u64::BITS as usize, "{names} trigger, companion and configuration files take more bits than the mask has");
+    }
+
+    #[test]
+    fn a_pytest_configuration_naming_its_test_folders_turns_the_preset_on_under_them_alone() {
+        for name in ["tox.ini", "setup.cfg", "pyproject.toml", "pytest.ini", ".pytest.toml"] {
+            assert!(TriggerFilesSeen::is_a_trigger_file(name.as_bytes()), "{name}");
+        }
+        assert!(!TriggerFilesSeen::is_a_trigger_file(b"tox.ini.bak"));
+        let root = std::env::temp_dir().join("mezura_pytest_configuration_presets");
+        let _ = std::fs::remove_dir_all(&root);
+        for (file, contents) in [("alone/pytest.ini", "[pytest]\ntestpaths = tests\n"), ("beside/pytest.ini", "[pytest]\ntestpaths = tests\n"),
+                ("beside/conftest.py", "")] {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, contents).unwrap();
+        }
+        let none_taken_back = PresetsTakenBack::default();
+        let turned_on = |directory: &str, files: &[&str]| triggers(files).turn_on(&root.join(directory), none_taken_back).iter()
+                .map(|preset| (preset.preset.name, preset.trigger_file, preset.scopes.clone())).collect::<Vec<_>>();
+        let tests_of = |directory: &str| vec![format!("{}/tests", spell_out(&root.join(directory)))];
+
+        assert_eq!(vec![("pytest", "pytest.ini", tests_of("alone"))], turned_on("alone", &["pytest.ini"]));
+        let beside = turned_on("beside", &["pytest.ini", "conftest.py"]);
+        assert_eq!(vec!["pytest.ini", "conftest.py"], beside.iter().map(|(_, trigger_file, _)| *trigger_file).collect::<Vec<_>>(),
+                "the configuration's preset was not pushed first");
+        assert_eq!(vec![tests_of("beside"), Vec::new()], beside.into_iter().map(|(_, _, scopes)| scopes).collect::<Vec<_>>(),
+                "the conftest.py beside a configuration was narrowed by its testpaths");
+        let taken_back = PresetsTakenBack::of(&["!test_*.py".to_owned(), "!*_test.py".to_owned(), "!conftest.py".to_owned()]);
+        assert!(triggers(&["pytest.ini"]).turn_on(&root.join("alone"), taken_back).is_empty(), "'!@pytest' left the configuration's preset on");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_scope_holds_the_paths_below_it_whichever_separator_joined_them() {
+        assert!(is_inside_scope("D:/proj/tests/a.py", "D:/proj/tests"));
+        assert!(is_inside_scope("D:/proj/tests", "D:/proj/tests"));
+        assert!(is_inside_scope(r"D:/proj/tests\unit\a.py", "D:/proj/tests"), "a backslash the walk joined with broke the scope");
+        assert!(!is_inside_scope("D:/proj/tests2/a.py", "D:/proj/tests"));
+        assert!(!is_inside_scope("D:/proj", "D:/proj/tests"));
+        assert_eq!(cfg!(any(windows, target_os = "macos")), is_inside_scope("D:/proj/Tests/a.py", "D:/proj/tests"));
     }
 
     #[test]
@@ -946,6 +1109,29 @@ mod tests {
         assert_eq!(TestScope::Tests, TestScope::of_target(&at("a/test/holder/web/testdata"), Some(&checkout)).0.scope,
                 "a 'go.mod' above the repository was not read for its checkout");
         assert_eq!(TestScope::Ordinary, TestScope::of_target(&at("a/test/holder/web/testdata"), None).0.scope);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_configuration_above_a_checkout_names_its_folders_where_the_checkout_holds_them() {
+        let root = std::env::temp_dir().join("mezura_checkout_testpaths");
+        let _ = std::fs::remove_dir_all(&root);
+        for dir in ["w/web/tests", "c/web/tests"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        std::fs::write(root.join("w/pytest.ini"), "[pytest]\ntestpaths = web/tests\n").unwrap();
+        let at = |path: &str| PathBuf::from(spell_out(&root.join(path)));
+        let checkout = RepositoryCheckout { root: spell_out(&root.join("c/web")), repository: spell_out(&root.join("w/web")) };
+        let patterns = PathPatternMatcher::compile(&[] as &[String], TakingBack::Allowed).unwrap();
+        let names_root = spell_out(&root.join("c")).len() + 1;
+
+        let climb = PresetClimb::default();
+        let tests = DirectoryScope::of_target(&at("c/web/tests"), names_root, &patterns, &climb, OwnListing::ReadByTheWalk, Some(&checkout));
+        assert_eq!(TestScope::Tests, tests.of_file(&at("c/web/tests/test_a.py"), &patterns, &mut Vec::new()).0,
+                "the folder the configuration names was looked for outside the checkout");
+        let elsewhere = DirectoryScope::of_target(&at("c/web"), names_root, &patterns, &climb, OwnListing::ReadByTheWalk, Some(&checkout));
+        assert_eq!(TestScope::Ordinary, elsewhere.of_file(&at("c/web/test_b.py"), &patterns, &mut Vec::new()).0);
 
         std::fs::remove_dir_all(&root).unwrap();
     }

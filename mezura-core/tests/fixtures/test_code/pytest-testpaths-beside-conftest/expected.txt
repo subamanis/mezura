@@ -1,0 +1,5 @@
+[Python]
+conftest.py whole
+bin/test_script.py whole # the conftest.py beside the configuration keeps its whole folder
+sympy/tests/test_x.py whole
+sympy/core.py none

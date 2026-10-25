@@ -1,0 +1,7 @@
+[Python]
+tests/test_parser.py whole
+tests/helper.py none
+integration/test_flow.py whole
+src/test_utils.py none # outside testpaths
+other/tests/test_other.py none # outside testpaths
+plain/tests/test_plain.py none # a tox.ini without a pytest section turns nothing on

@@ -1,0 +1,13 @@
+[project]
+name = "pandas"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+minversion = "7.3.2"
+addopts = "--strict-markers --strict-config"
+xfail_strict = true
+testpaths = "pandas"
+filterwarnings = [
+  "error:::pandas",
+  "ignore:.*ssl.SSLSocket:pytest.PytestUnraisableExceptionWarning",
+]

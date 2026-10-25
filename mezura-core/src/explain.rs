@@ -120,14 +120,17 @@ pub struct MatchedPreset {
     pub directory: String,
     /// The tool's file, `jest.config.ts`.
     pub trigger_file: String,
-    /// The pattern that matched, as the preset spells it.
-    pub pattern: String
+    /// The pattern that matched, as the preset or the configuration file spells it.
+    pub pattern: String,
+    /// The tool's configuration file in `directory` that declared the names in force, `pyproject.toml`.
+    /// None where the preset's own names were.
+    pub configured_by: Option<String>
 }
 
 impl MatchedPreset {
     /// The type is non-exhaustive, so this is how a crate outside this one builds it.
-    pub fn new(name: String, directory: String, trigger_file: String, pattern: String) -> Self {
-        MatchedPreset { name, directory, trigger_file, pattern }
+    pub fn new(name: String, directory: String, trigger_file: String, pattern: String, configured_by: Option<String>) -> Self {
+        MatchedPreset { name, directory, trigger_file, pattern, configured_by }
     }
 }
 
@@ -335,7 +338,8 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
                 let matched_folder = hits.first().map(|hit| hit.place.clone()).filter(|place| *place != absolute);
                 (!hits.is_empty()).then(|| TestFileRule::Preset {
                     presets: hits.into_iter().map(|hit| MatchedPreset::new(hit.preset.preset.name.to_owned(),
-                            hit.preset.directory.clone(), hit.preset.trigger_file.to_owned(), hit.pattern.to_owned())).collect(),
+                            hit.preset.directory.clone(), hit.preset.trigger_file.to_owned(), hit.pattern,
+                            hit.configured_by.map(str::to_owned))).collect(),
                     matched_folder
                 })
             }
@@ -671,7 +675,9 @@ mod tests {
                 ("proj/both/src/a.test.ts", "test('a', () => {});\n"), ("proj/both/src/__tests__/b.test.ts", "test('b', () => {});\n"),
                 ("proj/nest/jest.config.js", "module.exports = {};\n"), ("proj/nest/app/vite.config.ts", "export default {};\n"),
                 ("proj/nest/app/x.test.ts", "test('x', () => {});\n"), ("proj/go/go.mod", "module x\n"),
-                ("proj/go/web/.mocharc.json", "{}\n"), ("proj/go/web/test/testdata/input.js", "let x = 1;\n")] {
+                ("proj/go/web/.mocharc.json", "{}\n"), ("proj/go/web/test/testdata/input.js", "let x = 1;\n"),
+                ("proj/py/conftest.py", "import pytest\n"), ("proj/py/tests/test_a/__init__.py", "def test_a(): pass\n"),
+                ("proj/py/pyproject.toml", "[tool.pytest.ini_options]\npython_files = [\"test_*.py\", \"test_*/__init__.py\"]\n")] {
             let path = root.join(file);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(&path, contents).unwrap();
@@ -683,7 +689,7 @@ mod tests {
             (explained.test_file_rule, explained.lines.iter().map(|line| line.in_test).collect::<Vec<_>>())
         };
         let matched = |name: &str, directory: &str, trigger_file: &str, pattern: &str| MatchedPreset::new(name.to_owned(), at(directory),
-                trigger_file.to_owned(), pattern.to_owned());
+                trigger_file.to_owned(), pattern.to_owned(), None);
         let preset = |pattern: &str, matched_folder: Option<&str>| Some(TestFileRule::Preset {
                 presets: vec![matched("jest", "proj/app", "jest.config.ts", pattern)], matched_folder: matched_folder.map(at) });
         let default = EngineConfig::default();
@@ -713,6 +719,12 @@ mod tests {
                 matched_folder: Some(at("proj/go/web/test")) }),
                 explain("proj/go/web/test/testdata/input.js", &default).0,
                 "a build's test directory below the folder a preset took was named for the file");
+        assert_eq!(Some(TestFileRule::Preset { presets: vec![MatchedPreset::new("pytest".to_owned(), at("proj/py"), "conftest.py".to_owned(),
+                "test_*/__init__.py".to_owned(), Some("pyproject.toml".to_owned()))], matched_folder: None }),
+                explain("proj/py/tests/test_a/__init__.py", &default).0, "the configuration that declared the name was not named");
+        assert_eq!(Some(TestFileRule::Preset { presets: vec![MatchedPreset::new("pytest".to_owned(), at("proj/py"), "conftest.py".to_owned(),
+                "conftest.py".to_owned(), None)], matched_folder: None }),
+                explain("proj/py/conftest.py", &default).0, "the configuration was named for the 'conftest.py' it never declared");
         assert_eq!((Some(TestFileRule::DeclaredNotTests { pattern: "!*.test.ts".to_owned(), matched_folder: None }), vec![false]),
                 explain("proj/app/src/a.test.ts", &taken_back));
         assert_eq!((None, vec![false]), explain("proj/app/src/a.test.ts", &detection_off));

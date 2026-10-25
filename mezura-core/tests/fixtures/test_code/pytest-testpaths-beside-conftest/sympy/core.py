@@ -1,0 +1,2 @@
+def symbol():
+    return "x"

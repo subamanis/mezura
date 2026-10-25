@@ -1,0 +1,4 @@
+[Python]
+tests/conftest.py whole
+tests/case_a/__init__.py none # wrong, pytest collects it, and a declared name without 'test' in it applies under testpaths alone
+tests/test_b.py whole

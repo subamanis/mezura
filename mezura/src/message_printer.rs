@@ -1861,6 +1861,10 @@ fn format_test_presets_message(presets_dir: &str) -> String {
             (files, None) => files.join(", "),
             (files, Some(companion)) => format!("{}, with a {companion} beside it", files.join(", "))
         };
+        let turned_on_by = match preset.files_declaring_tests {
+            [] => turned_on_by,
+            files => format!("{turned_on_by}, or {} declaring testpaths", files.join(", "))
+        };
         message.push_str(&format_entry(preset.name, &[("turned on by", turned_on_by),
                 ("patterns", preset.patterns.join(", "))]));
     }

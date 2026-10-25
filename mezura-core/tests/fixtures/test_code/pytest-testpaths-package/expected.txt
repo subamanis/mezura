@@ -1,0 +1,6 @@
+[Python]
+pandas/conftest.py whole
+pandas/core.py none # testpaths names the package, which is never taken whole
+pandas/__init__.py none
+pandas/tests/test_frame.py whole
+web/tests/test_web.py none # outside testpaths, as pytest leaves it

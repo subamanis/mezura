@@ -49,6 +49,10 @@ New:
   whether it decided any file. `TestFileRule::Preset` names every preset that decided a file, each
   as a `MatchedPreset` with the file that turned it on and the pattern that matched. The warning
   code `preset-file-shadowed` is for a caller's own preset carrying a shipped one's name.
+  Pytest's own configuration is read for `testpaths` and `python_files`: a file naming `testpaths`
+  turns the pytest preset on under those folders alone, and a declared `python_files` puts its
+  names in place of the preset's. `TestPreset::files_declaring_tests` lists the files read, and
+  `MatchedPreset::configured_by` names the one whose names matched.
 - A `testdata` directory at any depth below a `go.mod` is test code whole, as the go tool treats it.
 - `EngineConfig::checkout` takes a `RepositoryCheckout`, a checkout's root and the repository it
   was written from, for targets inside a revision written out to another place. The build files and

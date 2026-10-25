@@ -1,0 +1,7 @@
+[Python]
+tests/cases/__init__.py whole
+tests/check_io.py whole
+tests/check_data/loader.py none # a declared name takes .py files and never a folder
+tests/test_old.py none # the declared names replace the shipped ones
+src/__init__.py none
+src/test_utils.py none

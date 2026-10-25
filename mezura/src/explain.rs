@@ -344,7 +344,11 @@ fn describe_presets_turned_on(presets: &[MatchedPreset]) -> String {
     collect_distinct(presets.iter().map(|preset| preset.directory.as_str())).iter().map(|directory| {
         let here = presets.iter().filter(|preset| preset.directory == *directory).collect::<Vec<_>>();
         let files = here.iter().map(|preset| format!("'{}'", preset.trigger_file)).collect::<Vec<_>>();
-        let names = here.iter().map(|preset| preset.name.as_str()).collect::<Vec<_>>();
+        let names = here.iter().map(|preset| match &preset.configured_by {
+            Some(file) if *file != preset.trigger_file => format!("{}, as '{file}' beside it declares them", preset.name),
+            Some(_) => format!("{}, as it declares them", preset.name),
+            None => preset.name.clone()
+        }).collect::<Vec<_>>();
         format!("{} in '{directory}' {} on the test names of {}", join_with(&files, "and"),
                 if here.len() == 1 { "turns" } else { "turn" }, join_with(&names, "and"))
     }).collect::<Vec<_>>().join("; ")
@@ -364,8 +368,9 @@ fn build_test_file_entry(rule: &TestFileRule) -> Option<String> {
                 escape(directory), create_string_array(build_files)),
         TestFileRule::FileName(shape) => format!(",\"shape\":\"{}\"", escape(&shape.to_string())),
         TestFileRule::Preset { presets, matched_folder } => format!(",\"presets\":{}{}", create_array(presets.iter().map(|preset|
-                format!("{{\"name\":\"{}\",\"directory\":\"{}\",\"trigger_file\":\"{}\",\"pattern\":\"{}\"}}", escape(&preset.name),
-                escape(&preset.directory), escape(&preset.trigger_file), escape(&preset.pattern)))), matched(matched_folder)),
+                format!("{{\"name\":\"{}\",\"directory\":\"{}\",\"trigger_file\":\"{}\",\"pattern\":\"{}\"{}}}", escape(&preset.name),
+                escape(&preset.directory), escape(&preset.trigger_file), escape(&preset.pattern), preset.configured_by.as_ref()
+                        .map(|file| format!(",\"configured_by\":\"{}\"", escape(file))).unwrap_or_default()))), matched(matched_folder)),
         TestFileRule::Declared { pattern, matched_folder } | TestFileRule::DeclaredNotTests { pattern, matched_folder } =>
                 format!(",\"pattern\":\"{}\"{}", escape(pattern), matched(matched_folder)),
         TestFileRule::DeclaredModule { declared_by } => format!(",\"declared_by\":{}", create_string_array(declared_by)),
@@ -453,7 +458,7 @@ mod tests {
         assert_eq!(Some("The whole file is test code: Go names its test files '*_test.go'.".to_owned()),
                 describe_test_file_rule(&TestFileRule::FileName(TestFileName::EndsWith("_test.go".to_owned())), "Go"));
         let matched = |name: &str, directory: &str, trigger_file: &str, pattern: &str| MatchedPreset::new(name.to_owned(),
-                directory.to_owned(), trigger_file.to_owned(), pattern.to_owned());
+                directory.to_owned(), trigger_file.to_owned(), pattern.to_owned(), None);
         let jest = |matched_folder: Option<&str>| TestFileRule::Preset { presets: vec![matched("jest", "D:/web", "jest.config.ts",
                 "__tests__/")], matched_folder: matched_folder.map(str::to_owned) };
         assert_eq!(Some("The whole file is test code: 'jest.config.ts' in 'D:/web' turns on the test names of jest, and \
@@ -533,7 +538,10 @@ mod tests {
                 build_test_file_entry(&TestFileRule::Declared { pattern: "*.spec.rs".to_owned(), matched_folder: None }));
         assert_eq!(Some(r#"{"rule":"preset","presets":[{"name":"pytest","directory":"D:/proj","trigger_file":"conftest.py","pattern":"test_*.py"}]}"#.to_owned()),
                 build_test_file_entry(&TestFileRule::Preset { presets: vec![MatchedPreset::new("pytest".to_owned(), "D:/proj".to_owned(),
-                        "conftest.py".to_owned(), "test_*.py".to_owned())], matched_folder: None }));
+                        "conftest.py".to_owned(), "test_*.py".to_owned(), None)], matched_folder: None }));
+        assert_eq!(Some(r#"{"rule":"preset","presets":[{"name":"pytest","directory":"D:/proj","trigger_file":"pytest.ini","pattern":"__init__.py","configured_by":"pytest.ini"}]}"#.to_owned()),
+                build_test_file_entry(&TestFileRule::Preset { presets: vec![MatchedPreset::new("pytest".to_owned(), "D:/proj".to_owned(),
+                        "pytest.ini".to_owned(), "__init__.py".to_owned(), Some("pytest.ini".to_owned()))], matched_folder: None }));
         assert_eq!(Some(r#"{"rule":"declared_module","declared_by":["D:/proj/src/tests.rs","D:/proj/src/lib.rs"]}"#.to_owned()),
                 build_test_file_entry(&TestFileRule::DeclaredModule { declared_by: vec!["D:/proj/src/tests.rs".to_owned(),
                         "D:/proj/src/lib.rs".to_owned()] }));

@@ -1,6 +1,7 @@
 mod attribute;
 mod module_graph;
 mod path_rules;
+mod tool_configuration;
 mod walk;
 
 pub use path_rules::TestPreset;
