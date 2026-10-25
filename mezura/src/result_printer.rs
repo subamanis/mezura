@@ -126,7 +126,7 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
         };
         eprintln!("\n{}", super::theme::get_active().warning.paint(&format!(
                 "'--{} {}' {effect}, since '--hide tests' turned their detection off.",
-                config_manager::TESTS_BREAKDOWN, config.view.tests_breakdown.name())));
+                config_manager::TESTS_BREAKDOWN, config.view.tests_breakdown.as_str())));
     }
     let hidden_files = if files_are_shown {count_hidden_files(&groups)} else {0};
     let is_table = layout != Layout::List;
@@ -3970,7 +3970,7 @@ mod tests {
         for model in [CountingModel::Content, CountingModel::Region] {
             assert!(shell.calculate_code_lines(model) + shell.calculate_comment_lines(model) <= shell.lines,
                     "under {} the shell holds more code and comments than it has lines: {shell:?}",
-                    model.name());
+                    model.as_str());
         }
     }
 

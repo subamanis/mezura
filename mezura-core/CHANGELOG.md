@@ -38,7 +38,7 @@ New:
   test code. `TestFileRule::DeclaredModule` names the files that declare it as a module, the one
   holding the marker last, `TestFileRule::FileMarker` the annotation found in its code with its
   line, and `TestFileRule::InnerAttribute` the `#![cfg(test)]` standing before every item of it.
-  `TestFileRule::name` gives the rule as one word, `preset` or `declared_not_tests`.
+  `TestFileRule::get_name` gives the rule as one word, `preset` or `declared_not_tests`.
 - Test presets. A `TestPreset` is a test tool's default names for its test files, `*.test.ts` and
   `__tests__/` for jest, with the files the tool keeps its configuration in, and `get_test_presets`
   gives the shipped table: jest, vitest, mocha, pytest, unittest, rspec, minitest, phpunit, dotnet,
@@ -94,6 +94,9 @@ Changed:
 - `EngineConfig`, `Language`, `ExplainedLine`, `FileExplanation`, `RunResult`, `ModuleResult`,
   `FileEntry` and `MultilineString` gained public fields, so a struct literal of any of them
   written outside the crate stops compiling until it names them.
+- `name` is now `as_str` on `Code`, `Affects`, `CountingModel`, `SortCriterion`, `ScanSkip`,
+  `SpanKind`, `LineClass` and `ConflictBlock`, each giving its value as the text it is written
+  with.
 
 Fixes:
 

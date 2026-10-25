@@ -357,7 +357,7 @@ impl BarThickness {
         }
     }
 
-    pub fn name(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Slim => "slim",
             Self::Medium => "medium",
@@ -397,7 +397,7 @@ impl ProgressBarStyle {
         }
     }
 
-    pub fn name(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Smooth => "smooth",
             Self::Blocky => "blocky",
@@ -426,7 +426,7 @@ impl Layout {
         }
     }
 
-    pub fn name(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::List => "list",
             Self::Table => "table",
@@ -454,7 +454,7 @@ impl TestsBreakdown {
         }
     }
 
-    pub fn name(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Share => "share",
             Self::Split => "split",
@@ -567,7 +567,7 @@ impl NumberSeparator {
         }
     }
 
-    pub fn name(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Comma => "comma",
             Self::Underscore => "underscore",
@@ -602,7 +602,7 @@ impl DecimalSeparator {
         }
     }
 
-    pub fn name(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Dot => "dot",
             Self::Comma => "comma"
@@ -938,7 +938,7 @@ impl ConfigurationBuilder {
     fn report_a_word_of_the_other_model(command: &str, counting: CountingModel, result: &str) {
         let message = format!("'--{command} {}' names the third column of the other way of counting. \
                 This run counts by {}, where that column is '{}', so {result}.",
-                counting.get_other().get_third_quantity_name(), counting.name(),
+                counting.get_other().get_third_quantity_name(), counting.as_str(),
                 counting.get_third_quantity_name());
         eprintln!("\n{}", wrap_message(&message).yellow());
         super::warning_collector::keep(mezura_core::warnings::Warning::new(
@@ -973,7 +973,7 @@ impl ConfigurationBuilder {
         // carries every figure whatever is hidden, so there the order stands as asked.
         if hidden.hides_column_of(sort_by) && self.output.unwrap_or_default() != OutputFormat::Json {
             let message = format!("'--{SORT} {}' orders by a column '--{HIDE} {0}' takes out, so the report \
-                    is sorted by lines.", sort_by.name());
+                    is sorted by lines.", sort_by.as_str());
             eprintln!("\n{}", wrap_message(&message).yellow());
             super::warning_collector::keep(mezura_core::warnings::Warning::new(
                     mezura_core::warnings::Code::CommandIgnored, SORT, message));

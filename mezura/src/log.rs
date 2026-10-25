@@ -134,7 +134,7 @@ fn format_scope(config: &Configuration, targets: &[Target]) -> String {
             format_strings(&engine.languages_of_interest.to_written_form()),
             format_strings(&engine.excluded_languages.to_written_form()),
             format_forced_languages(&engine.forced_languages.to_written_form()),
-            config.view.counting.name(),
+            config.view.counting.as_str(),
             engine.should_search_in_dotted,
             !engine.no_gitignore,
             !engine.no_ignore_files,

@@ -282,7 +282,7 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
                 &format!("{} {}", threads.producers(), threads.consumers()))?;
     }
     if let Some(counting) = &config_builder.counting {
-        write_block(&mut writer, config_manager::COUNTING, counting.name())?;
+        write_block(&mut writer, config_manager::COUNTING, counting.as_str())?;
     }
     if let Some(should_search_in_dotted) = &config_builder.should_search_in_dotted {
         write_block(&mut writer, config_manager::SEARCH_IN_DOTTED, yes_or_no(*should_search_in_dotted))?;
@@ -318,7 +318,7 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         write_block(&mut writer, config_manager::NO_SHEBANG, yes_or_no(*no_shebang))?;
     }
     if let Some(sort_by) = &config_builder.sort_by {
-        write_block(&mut writer, config_manager::SORT, sort_by.name())?;
+        write_block(&mut writer, config_manager::SORT, sort_by.as_str())?;
     }
     if let Some(top_n) = &config_builder.top_n {
         write_block(&mut writer, config_manager::TOP, &top_n.to_string())?;
@@ -327,22 +327,22 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         write_block(&mut writer, config_manager::BY_FILE, &by_file.to_text())?;
     }
     if let Some(tests_breakdown) = &config_builder.tests_breakdown {
-        write_block(&mut writer, config_manager::TESTS_BREAKDOWN, tests_breakdown.name())?;
+        write_block(&mut writer, config_manager::TESTS_BREAKDOWN, tests_breakdown.as_str())?;
     }
     if let Some(bar_thickness) = &config_builder.bar_thickness {
-        write_block(&mut writer, config_manager::BAR_THICKNESS, bar_thickness.name())?;
+        write_block(&mut writer, config_manager::BAR_THICKNESS, bar_thickness.as_str())?;
     }
     if let Some(progress_bar) = &config_builder.progress_bar {
-        write_block(&mut writer, config_manager::PROGRESS_BAR, progress_bar.name())?;
+        write_block(&mut writer, config_manager::PROGRESS_BAR, progress_bar.as_str())?;
     }
     if let Some(number_separator) = &config_builder.number_separator {
-        write_block(&mut writer, config_manager::NUMBER_SEPARATOR, number_separator.name())?;
+        write_block(&mut writer, config_manager::NUMBER_SEPARATOR, number_separator.as_str())?;
     }
     if let Some(decimal_separator) = &config_builder.decimal_separator {
-        write_block(&mut writer, config_manager::DECIMAL_SEPARATOR, decimal_separator.name())?;
+        write_block(&mut writer, config_manager::DECIMAL_SEPARATOR, decimal_separator.as_str())?;
     }
     if let Some(layout) = &config_builder.layout {
-        write_block(&mut writer, config_manager::LAYOUT, layout.name())?;
+        write_block(&mut writer, config_manager::LAYOUT, layout.as_str())?;
     }
 
     // The two style layers collapse into one block, in the order they were applied, so that

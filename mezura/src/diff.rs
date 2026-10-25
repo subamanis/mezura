@@ -503,7 +503,7 @@ pub fn scope_of(engine: &mezura_core::EngineConfig, counting: mezura_core::Count
         languages: engine.languages_of_interest.to_written_form(),
         excluded_languages: engine.excluded_languages.to_written_form(),
         forced_languages: engine.forced_languages.to_written_form(),
-        counting: counting.name().to_owned(),
+        counting: counting.as_str().to_owned(),
         search_in_dotted: engine.should_search_in_dotted,
         gitignore: !engine.no_gitignore,
         ignore_files: !engine.no_ignore_files,
@@ -574,7 +574,7 @@ pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Co
     }
     // Only a model this build has can be adopted: a word it does not know names a fold it cannot
     // perform, so it is left to the settings-differ note rather than half-imitated
-    if !typed.counting && document.counting != config.view.counting.name()
+    if !typed.counting && document.counting != config.view.counting.as_str()
             && let Some(model) = mezura_core::CountingModel::parse(&document.counting) {
         config.view.counting = model;
         adopted.push(COUNTING);
@@ -811,7 +811,7 @@ fn determine_comparison_notes(baseline: &Reading, subject: &Reading, config: &Co
     // The other two layouts have nothing to show for a comparison, and the reader is told so rather
     // than left wondering why the layout was ignored
     if matches!(config.view.layout, Layout::List | Layout::Matrix) {
-        notes.push(Note::LayoutFallback { layout: config.view.layout.name() });
+        notes.push(Note::LayoutFallback { layout: config.view.layout.as_str() });
     }
 
     notes

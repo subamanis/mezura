@@ -90,7 +90,7 @@ fn read_names_as_a_run_from_here_would(engine: &EngineConfig) -> EngineConfig {
 fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, asked_for: ExplainedLines) {
     let theme = get_active();
     outln!("{}", theme.explain_heading.paint(&format!("{path} as {}, counted by {}",
-            explanation.language, model.name())));
+            explanation.language, model.as_str())));
     if let Some((literal, line)) = &explanation.identified_by {
         outln!("{}", theme.note.paint(&format!("Its extension is contested, and line {line} \
                 carrying '{literal}' is what identified it.")));
@@ -139,7 +139,7 @@ fn print_text(path: &str, explanation: &FileExplanation, model: CountingModel, a
         };
         outln!("{:>width$}  {}", at + 1, paint_by_spans(source, &line.spans));
         let mut verdict = format!("{}  {}", bucket_style.paint(model.get_bucket_name(bucket)),
-                theme.explain_detail.paint(line.class.name()));
+                theme.explain_detail.paint(line.class.as_str()));
         let mut notes = line.in_test.then(|| "test code".to_owned()).into_iter().collect::<Vec<_>>();
         notes.extend(line.read_as.as_ref().map(|name| format!("read as {name}")));
         notes.extend(describe_carried(&line.carried));
@@ -171,13 +171,13 @@ fn build_json_document(path: &str, explanation: &FileExplanation, model: Countin
     document.push_str(&format!("{{\"format\":1,\"counter\":\"mezura\",\"file\":\"{}\",",
             escape(path)));
     document.push_str(&format!("\"language\":\"{}\",\"counting\":\"{}\",\"lines\":{},",
-            escape(&explanation.language), model.name(), explanation.lines.len()));
+            escape(&explanation.language), model.as_str(), explanation.lines.len()));
     if let Some((literal, line)) = &explanation.identified_by {
         document.push_str(&format!("\"identified_by\":{{\"line\":{line},\"evidence\":\"{}\"}},",
                 escape(literal)));
     }
     if let Some(skip) = explanation.left_out_of_a_scan {
-        document.push_str(&format!("\"left_out_of_a_scan\":\"{}\",", skip.name()));
+        document.push_str(&format!("\"left_out_of_a_scan\":\"{}\",", skip.as_str()));
     }
     if let Some(entry) = explanation.test_file_rule.as_ref().and_then(build_test_file_entry) {
         document.push_str(&format!("\"test_file\":{entry},"));
@@ -191,7 +191,7 @@ fn build_json_document(path: &str, explanation: &FileExplanation, model: Countin
         }
         let bucket = model.get_bucket_name(model.fold(line.class));
         document.push_str(&format!("{{\"line\":{},\"bucket\":\"{bucket}\",\"class\":\"{}\"",
-                at + 1, line.class.name()));
+                at + 1, line.class.as_str()));
         if line.in_test {
             document.push_str(",\"in_test\":true");
         }
@@ -203,7 +203,7 @@ fn build_json_document(path: &str, explanation: &FileExplanation, model: Countin
         }
         if !line.spans.is_empty() {
             document.push_str(&format!(",\"spans\":[{}]", line.spans.iter()
-                    .map(|span| format!("[{},{},\"{}\"]", span.from, span.to, span.kind.name()))
+                    .map(|span| format!("[{},{},\"{}\"]", span.from, span.to, span.kind.as_str()))
                     .collect::<Vec<_>>().join(",")));
         }
         document.push('}');
@@ -358,7 +358,7 @@ fn build_test_file_entry(rule: &TestFileRule) -> Option<String> {
         _ => return None
     };
 
-    Some(format!("{{\"rule\":\"{}\"{members}}}", rule.name()))
+    Some(format!("{{\"rule\":\"{}\"{members}}}", rule.get_name()))
 }
 
 #[cfg(test)]

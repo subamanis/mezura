@@ -555,7 +555,7 @@ mod tests {
             settled_by: Some(SettledBy::AlphabeticalTiebreak)
         }], report.contested);
         assert_eq!(vec![(warnings::Code::LanguageTiebreak, "counts")],
-                report.collect_warnings().iter().map(|x| (x.code, x.affects().name())).collect::<Vec<_>>());
+                report.collect_warnings().iter().map(|x| (x.code, x.affects().as_str())).collect::<Vec<_>>());
     }
 
     // Moving a declaration to the dotted form and leaving the bare one behind is the ordinary way in

@@ -360,7 +360,7 @@ impl SortCriterion {
     }
 
     /// The spelling [`SortCriterion::parse`] reads back.
-    pub fn name(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Files => "files",
             Self::Lines => "lines",
@@ -404,7 +404,7 @@ impl ScanSkip {
     pub const ALL : [ScanSkip; 3] = [ScanSkip::Minified, ScanSkip::Generated, ScanSkip::NotCode];
 
     /// `minified`, `generated` or `not_code`, the [`SkippedFiles`] field this kind is listed under.
-    pub fn name(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Minified => "minified",
             Self::Generated => "generated",

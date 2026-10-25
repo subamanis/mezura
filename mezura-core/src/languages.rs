@@ -77,7 +77,7 @@ impl Languages {
         reported.extend(find_unknown_forced_languages(&in_play, &config.forced_languages));
         // Without this a run that scopes anything repeats every tiebreak once per module.
         let mut already_said = HashSet::new();
-        reported.retain(|warning| already_said.insert((warning.code.name(), warning.subject.clone(),
+        reported.retain(|warning| already_said.insert((warning.code.as_str(), warning.subject.clone(),
                 warning.message.clone())));
 
         // A section can be written in a language the narrowing took out, so those definitions are
@@ -804,7 +804,7 @@ mod language_selection_tests {
 
         let mine = reported.into_iter().find(|x| x.subject == "Nolang-Q9").unwrap();
         assert_eq!(warnings::Code::UnknownLanguage, mine.code);
-        assert_eq!("settings", mine.affects().name());
+        assert_eq!("settings", mine.affects().as_str());
     }
 
     // The command line writes each file to disk under the name it came with, prefixed by its
@@ -882,7 +882,7 @@ mod language_selection_tests {
         let mine = reported.iter().find(|x| x.code == warnings::Code::DuplicateLanguage)
                 .expect("a language declared twice was dropped in silence");
         assert_eq!("Same", mine.subject);
-        assert_eq!("counts", mine.affects().name(), "the choice changes numbers, not settings");
+        assert_eq!("counts", mine.affects().as_str(), "the choice changes numbers, not settings");
         // one of the two really is gone
         assert_eq!(2, languages.into_parts().0.len());
     }
@@ -957,7 +957,7 @@ mod language_selection_tests {
         let mine = reported.iter().filter(|x| x.code == warnings::Code::UnknownForcedLanguage)
                 .collect::<Vec<_>>();
         assert_eq!(1, mine.len(), "said once for each map it could not be used by: {reported:?}");
-        assert_eq!("settings", mine[0].affects().name());
+        assert_eq!("settings", mine[0].affects().as_str());
         assert_eq!("py", mine[0].subject);
         // The message names what was asked for and leaves '--force-language' to whoever has a
         // command line
@@ -980,7 +980,7 @@ mod language_selection_tests {
         assert_eq!(vec!["Rust"], kept.into_iter().map(|x| x.name).collect::<Vec<_>>());
         let mine = reported.iter().find(|x| x.subject == "Nolang-Q9").unwrap();
         assert_eq!(warnings::Code::UnknownExcludedLanguage, mine.code);
-        assert_eq!("settings", mine.affects().name());
+        assert_eq!("settings", mine.affects().as_str());
         assert!(!reported.iter().any(|x| x.subject == "Java"));
     }
 

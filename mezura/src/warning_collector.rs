@@ -98,7 +98,7 @@ mod tests {
         for (code, command) in [(Code::UnknownForcedLanguage, "--force-language"), (Code::UnknownLanguage, "--languages"),
                 (Code::UnknownExcludedLanguage, "--exclude-languages")] {
             let advised = add_advice_to(Warning::new(code, "zz", "not found.".to_owned()));
-            assert!(advised.message.contains(command), "{} did not name '{command}':\n{}", code.name(), advised.message);
+            assert!(advised.message.contains(command), "{} did not name '{command}':\n{}", code.as_str(), advised.message);
         }
 
         let untouched = add_advice_to(Warning::new(Code::ConflictLineSkipped, "a line",

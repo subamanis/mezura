@@ -101,7 +101,7 @@ pub enum TestFileRule {
 impl TestFileRule {
     /// `test_directory`, `file_name`, `preset`, `declared`, `declared_not_tests`,
     /// `declared_module`, `file_marker` or `inner_attribute`.
-    pub fn name(&self) -> &'static str {
+    pub fn get_name(&self) -> &'static str {
         match self {
             Self::TestDirectory { .. } => "test_directory",
             Self::FileName(_) => "file_name",

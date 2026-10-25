@@ -377,7 +377,7 @@ fn create_comparison_warnings_array(notes: &[super::diff::Note]) -> String {
     // comparison rather than to either side: a document's own warnings are already inside it
     let mut entries = super::warning_collector::get_collected_warnings().into_iter()
             .map(|x| WarningEntry {
-                code: x.code.name().to_owned(), affects: x.affects().name(),
+                code: x.code.as_str().to_owned(), affects: x.affects().as_str(),
                 subject: x.subject.clone(), message: x.message.clone()
             })
             .collect::<Vec<_>>();
@@ -400,7 +400,7 @@ fn create_note_entries(note: &super::diff::Note) -> Vec<WarningEntry> {
     use mezura_core::warnings::Affects;
 
     let entry = |code: &str, affects: Affects, subject: String, message: String| WarningEntry {
-        code: code.to_owned(), affects: affects.name(), subject, message
+        code: code.to_owned(), affects: affects.as_str(), subject, message
     };
     match note {
         // The other half of 'setting-differs': one says the two disagreed, this says they were made
@@ -491,7 +491,7 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target], 
         // numbers the same way an exclusion does
         format!("\"forced_languages\":{}",
                 create_forced_languages_object(&config.engine.forced_languages.to_written_form())),
-        format!("\"counting\":\"{}\"", config.view.counting.name()),
+        format!("\"counting\":\"{}\"", config.view.counting.as_str()),
         format!("\"search_in_dotted\":{}", config.engine.should_search_in_dotted),
         format!("\"gitignore\":{}", !config.engine.no_gitignore),
         format!("\"ignore_files\":{}", !config.engine.no_ignore_files),
@@ -699,8 +699,8 @@ fn create_keywords_object(occurences: &HashMap<String, usize>) -> String {
 // version adds a code it has never heard of. In the order they were printed.
 fn create_warnings_array() -> String {
     create_array(super::warning_collector::get_collected_warnings().iter().map(|warning| create_object([
-        format!("\"code\":\"{}\"", escape(warning.code.name())),
-        format!("\"affects\":\"{}\"", warning.affects().name()),
+        format!("\"code\":\"{}\"", escape(warning.code.as_str())),
+        format!("\"affects\":\"{}\"", warning.affects().as_str()),
         format!("\"subject\":\"{}\"", escape(&warning.subject)),
         format!("\"message\":\"{}\"", escape(&warning.message)),
     ])))
@@ -715,7 +715,7 @@ fn create_skipped_files_object(skipped: &mezura_core::SkippedFiles, asked_for: b
     };
 
     create_object(mezura_core::ScanSkip::ALL.map(|kind|
-            format!("\"{}\":{}", kind.name(), paths(skipped.get_of_kind(kind)))))
+            format!("\"{}\":{}", kind.as_str(), paths(skipped.get_of_kind(kind)))))
 }
 
 fn create_faulty_files_array(faulty_files: &[FaultyFileDetails], asked_for: bool) -> String {

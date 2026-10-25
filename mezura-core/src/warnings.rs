@@ -58,7 +58,7 @@ pub enum Code {
 
 impl Code {
     /// The stable spelling, `language-tiebreak`.
-    pub fn name(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::LanguageTiebreak => "language-tiebreak",
             Self::UnknownForcedLanguage => "unknown-forced-language",
@@ -145,7 +145,7 @@ pub enum Affects {
 
 impl Affects {
     /// `counts` or `settings`.
-    pub fn name(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Counts => "counts",
             Self::Settings => "settings"
@@ -161,9 +161,9 @@ mod tests {
     fn a_warning_carries_a_stable_code_and_a_readable_message() {
         let warning = Warning::new(Code::LanguageTiebreak, "m", "the readable half".to_owned());
 
-        assert_eq!("language-tiebreak", warning.code.name());
-        assert_eq!("counts", warning.affects().name());
-        assert_eq!("settings", Affects::Settings.name());
+        assert_eq!("language-tiebreak", warning.code.as_str());
+        assert_eq!("counts", warning.affects().as_str());
+        assert_eq!("settings", Affects::Settings.as_str());
     }
 
     #[test]

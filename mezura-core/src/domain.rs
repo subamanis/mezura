@@ -913,7 +913,7 @@ impl LineClass {
             LineClass::BlankInString];
 
     /// The name of the [`LineClasses`] field this class counts into.
-    pub fn name(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         LineClasses::NAMES[self as usize]
     }
 }
@@ -958,7 +958,7 @@ pub enum SpanKind {
 
 impl SpanKind {
     /// `code`, `string` or `comment`.
-    pub fn name(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Code => "code",
             Self::String => "string",
@@ -995,7 +995,7 @@ impl CountingModel {
     }
 
     /// The spelling [`CountingModel::parse`] reads back.
-    pub fn name(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Content => "content",
             Self::Region => "region"
@@ -1286,7 +1286,7 @@ mod tests {
     #[test]
     fn every_class_is_listed_in_the_order_its_names_are_written_in() {
         for (i, class) in LineClass::ALL.iter().enumerate() {
-            assert_eq!(LineClasses::NAMES[i], class.name());
+            assert_eq!(LineClasses::NAMES[i], class.as_str());
         }
     }
 

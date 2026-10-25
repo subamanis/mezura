@@ -3129,7 +3129,7 @@ mod tests {
                 &mut KeywordMatchers::default(), &mut IdentificationMatchers::default(), config,
                 false, TestScope::Ordinary, None, &HashMap::new())? {
             FileOutcome::Counted(report, _) => Ok(report),
-            FileOutcome::Skipped(kind) => panic!("{} was skipped as {}", path.display(), kind.name())
+            FileOutcome::Skipped(kind) => panic!("{} was skipped as {}", path.display(), kind.as_str())
         }
     }
 
@@ -6278,7 +6278,7 @@ mod tests {
                     &mut KeywordMatchers::default(), &mut IdentificationMatchers::default(), config,
                     false, scope, None, &HashMap::new()).unwrap() {
                 FileOutcome::Counted(report, _) => report.tests.map(|tests| (tests.stats.lines, tests.stats.classes.clone(), tests.bytes)),
-                FileOutcome::Skipped(kind) => panic!("skipped as {}", kind.name())
+                FileOutcome::Skipped(kind) => panic!("skipped as {}", kind.as_str())
             }
         };
         let whole = (6, parse_lines_whole(go, LANGUAGE_MAP_REF.get("Go").unwrap()).classes, go.len());

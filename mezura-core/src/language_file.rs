@@ -77,7 +77,7 @@ impl ConflictBlock {
     }
 
     /// The marker that opens the block in the file, `contested-extensions` and the other three.
-    pub fn name(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             ConflictBlock::ContestedExtensions => CONTESTED_EXTENSIONS,
             ConflictBlock::ContestedFilenames => CONTESTED_FILENAMES,
@@ -742,7 +742,7 @@ pub fn find_block_of_marker(line: &str) -> Option<ConflictBlock> {
         return None;
     }
     let name = line.trim_start_matches("===>").split_whitespace().next().unwrap_or_default();
-    ConflictBlock::ALL.into_iter().find(|block| name.eq_ignore_ascii_case(block.name()))
+    ConflictBlock::ALL.into_iter().find(|block| name.eq_ignore_ascii_case(block.as_str()))
 }
 
 /// The key under which [`parse_conflict_rules`] would file this rule line of the given block, or

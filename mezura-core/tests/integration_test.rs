@@ -638,7 +638,7 @@ fn a_rule_written_for_a_module_this_run_does_not_declare_is_reported() {
     assert_eq!("iOS", reported[0].subject, "the module names are matched exactly, as the targets are");
     assert!(reported[0].message.contains("'ios'"), "the message does not say which modules there are: {}",
             reported[0].message);
-    assert_eq!("settings", reported[0].affects().name());
+    assert_eq!("settings", reported[0].affects().as_str());
 }
 
 // The two arguments of 'run' have to describe the same question. They used to be allowed to
