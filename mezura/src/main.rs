@@ -268,6 +268,11 @@ fn main() -> ExitCode {
             for warning in collect_warnings_to_emit(&result.warnings, &config.view.test_patterns_from_presets, against_a_revision) {
                 crate::warning_collector::emit(warning);
             }
+            if config.engine.detect_tests {
+                for warning in crate::test_presets::collect_shadowed_file_warnings(&crate::paths::PERSISTENT_APP_PATHS.test_presets_dir) {
+                    crate::warning_collector::emit(warning);
+                }
+            }
             let comparison = counted_baseline.map(|baseline| baseline.with_subject(
                     crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config), &config));
             crate::present::present(&result, comparison.as_ref(), &config);

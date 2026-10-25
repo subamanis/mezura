@@ -7,7 +7,6 @@ use mezura_core::language_file::{ConflictRules, FaultyLanguageFile, LanguageDirP
 use super::config_manager::*;
 use crate::paths::PERSISTENT_APP_PATHS;
 use crate::test_presets::{PresetError, collect_user_preset_names, is_a_shipped_name, read_user_preset};
-use crate::test_presets::PRESET_SIGIL;
 
 static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
 pub(crate) const MESSAGE_WIDTH : usize = 110;
@@ -121,8 +120,8 @@ pub const TESTS_HELP  :  &str =
     file another file declares as a module under a marker, which a '!' never reaches. A marker
     that makes a whole file test code, '@Test' in Java, is off under a '!'.
 
-    A preset is the names a test tool gives its test files. '--tests @pytest' stands for
-    'test_*.py', '*_test.py' and 'conftest.py', and '--tests !@pytest' takes each of them back.
+    A preset is the names a test tool gives its test files. '--tests \"@pytest\"' stands for
+    'test_*.py', '*_test.py' and 'conftest.py', and '--tests \"!@pytest\"' takes each of them back.
     A preset also turns itself on under a folder holding the tool's own file, the jest one under
     a 'jest.config.ts', and a pattern typed here comes after it, so a '!' corrects it there too.
     '--show-presets' lists them, and '--save-preset' keeps a list of your own under a name. A
@@ -136,6 +135,11 @@ pub const TESTS_HELP  :  &str =
     If you are using Windows Powershell, you will need to escape the commas with a backtick: `
     or surround all the arguments with quotation marks:
     <arg1>`, <arg2>`, <arg3>   or   \"<arg1>, <arg2>, <arg3>\"
+    A preset goes in quotation marks there too, \"@pytest\", since PowerShell reads a word
+    starting with '@' as a variable and passes nothing.
+
+    In bash and zsh a pattern holding '!' goes in single quotes, --tests 'spec,!spec/fixtures',
+    since inside double quotes those shells read '!' as a history lookup, \"event not found\".
 
 ";
 pub const NO_GITIGNORE_HELP  :  &str =
@@ -557,13 +561,13 @@ pub const SAVE_PRESET_HELP  :  &str =
 "--save-preset
     save the test patterns of this run as a test preset of your own
 
-    One argument, the name of the preset, which '--tests @<name>' will use: no spaces, and none
-    of / \\ , ! @ { }.
+    One argument, the name of the preset, which '--tests \"@<name>\"' will use: no spaces, and
+    none of / \\ , ! @ { }.
 
     Writes the test patterns of this run, whether typed with '--tests' or read from a
     configuration, into 'data/test-presets/<name>.txt', every '@<name>' among them written out.
     The name of a shipped preset is refused: to change one, take it back and add your own,
-    '--tests !@jest,@mine'.
+    '--tests \"!@jest,@mine\"'.
 
     The file holds its patterns under a '===> tests' line, as a configuration does, and whatever
     is written above that line is the description '--show-presets' prints.
@@ -1185,9 +1189,9 @@ pub const SHOW_PRESETS_HELP  :  &str =
 
     No arguments.
 
-    Lists every preset '--tests @<name>' can name: each shipped one with the files that turn it
-    on by itself and the patterns it declares, then your own, read from the 'data/test-presets/'
-    directory. Counts nothing.
+    Lists every preset '--tests \"@<name>\"' can name: each shipped one with the files that
+    turn it on by itself and the patterns it declares, then your own, read from the
+    'data/test-presets/' directory. Counts nothing.
 
 ";
 
@@ -1690,6 +1694,19 @@ pub fn format_faulty_language_files_message(faulty_files: &[FaultyLanguageFile])
     message + "\n"
 }
 
+// The quotes the usual shell of the system takes. PowerShell reads a bare '@' as a variable, and
+// bash and zsh read a '!' inside double quotes as a history lookup.
+pub fn quote_for_the_shell(argument: &str) -> String {
+    if cfg!(windows) {format!("\"{argument}\"")} else {format!("'{argument}'")}
+}
+
+pub fn format_tests_command(argument: &str) -> String {
+    match cfg!(windows) {
+        true => format!("'--{TESTS} {}'", quote_for_the_shell(argument)),
+        false => format!("--{TESTS} {}", quote_for_the_shell(argument))
+    }
+}
+
 // Two files declaring one language is a broken installation, and naming it twice here would read as
 // two languages rather than as the one it is. Their extensions are merged under the one name, since
 // which of the two files was read is not decided by anything the reader can see.
@@ -1810,17 +1827,17 @@ fn format_test_presets_message(presets_dir: &str) -> String {
             .map(|name| name.chars().count() + 3).max().unwrap_or(0);
     let indent = LIST_INDENT + name_width + LABEL_WIDTH;
     let format_entry = |name: &str, lines: &[(&str, String)]| lines.iter().enumerate().map(|(at, (label, value))| {
-        let named = if at == 0 {format!("{PRESET_SIGIL}{name}")} else {String::new()};
+        let named = if at == 0 {format!("@{name}")} else {String::new()};
         format!("{}{named:<name_width$}{label:<LABEL_WIDTH$}{}\n", " ".repeat(LIST_INDENT),
                 hang_under(value, MESSAGE_WIDTH - indent, indent))
     }).collect::<String>();
 
     let mut message = format!("\n{}\n\n", wrap_message(&format!("The shipped test presets. One with a file to turn \
-            it on applies itself under every folder holding that file, '--{TESTS} {PRESET_SIGIL}<name>' declares one \
-            everywhere, and '--{TESTS} !{PRESET_SIGIL}<name>' takes it back.")));
+            it on applies itself under every folder holding that file, {} declares one everywhere, and {} takes \
+            it back.", format_tests_command("@<name>"), format_tests_command("!@<name>"))));
     for preset in get_test_presets() {
         let turned_on_by = match (preset.trigger_files, preset.companion_file) {
-            ([], _) => format!("no file, only '--{TESTS} {PRESET_SIGIL}{}'", preset.name),
+            ([], _) => format!("no file, only {}", format_tests_command(&format!("@{}", preset.name))),
             (files, None) => files.join(", "),
             (files, Some(companion)) => format!("{}, with a {companion} beside it", files.join(", "))
         };
@@ -1836,7 +1853,7 @@ fn format_test_presets_message(presets_dir: &str) -> String {
     message.push_str(&format!("\nYour own, in '{dir}':\n\n"));
     for name in &yours {
         let lines = if is_a_shipped_name(name) {
-            vec![("not used", format!("'{PRESET_SIGIL}{}' names the shipped one, so this file is never read.",
+            vec![("not used", format!("'@{}' names the shipped one, so this file is never read.",
                     name.to_lowercase()))]
         } else {
             match read_user_preset(presets_dir, name) {
@@ -1845,7 +1862,7 @@ fn format_test_presets_message(presets_dir: &str) -> String {
                         ("patterns", preset.patterns.join(", "))],
                 Err(PresetError::Unusable { why, .. }) => vec![("not used", why)],
                 Err(PresetError::Unknown(_)) => vec![("not used",
-                        format!("The name cannot be written after '{PRESET_SIGIL}' in a list of patterns."))]
+                        "The name cannot be written after '@' in a list of patterns.".to_owned())]
             }
         };
         message.push_str(&format_entry(name, &lines));

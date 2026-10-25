@@ -47,8 +47,12 @@ New:
   `EngineConfig::test_patterns` takes any of it back, and `RunResult::applied_presets` lists every
   preset so turned on as an `AppliedPreset`, with its directory, the file that turned it on and
   whether it decided any file. `TestFileRule::Preset` names the preset, the file and the pattern
-  for a file one decided.
+  for a file one decided. The warning code `preset-file-shadowed` is for a caller's own preset
+  carrying a shipped one's name.
 - A `testdata` directory at any depth below a `go.mod` is test code whole, as the go tool treats it.
+- `EngineConfig::checkout` takes a `RepositoryCheckout`, a checkout's root and the repository it
+  was written from, for targets inside a revision written out to another place. The build files and
+  test tools' files above the checkout are then read above the repository, so both count alike.
 - `render::calculate_percentage` gives one number's share of a total, rounded the way
   `calculate_percentages_of_a_given_total` rounds each of its entries.
 - `.t` files are counted as Perl.

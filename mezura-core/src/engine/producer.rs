@@ -220,8 +220,10 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                 continue;
             }
             if ft.is_file() {
-                local_total_files += 1;
                 let file_name = e.file_name();
+                // A worktree or a submodule keeps in a '.git' file what a repository keeps in its folder
+                if file_name == ".git" { continue; }
+                local_total_files += 1;
                 let name = Path::new(&file_name);
                 // Which module the file is in is settled before its language is named, and not
                 // after, because a module can be given rules of its own: a file that is a target

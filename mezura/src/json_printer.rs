@@ -423,8 +423,12 @@ fn create_note_entries(note: &super::diff::Note) -> Vec<WarningEntry> {
         Note::VersionsDiffer { baseline_version, subject_version, .. } => vec![
             entry("versions-differ", Affects::Counts, format!("{baseline_version} -> {subject_version}"),
                 format!("The readings were counted by mezura {baseline_version} and {subject_version}, so part of the difference may be a language counted better since."))],
-        // 'settings' and not 'counts': the counts are sound, the 'modules' key is simply absent,
-        // and its absence would otherwise read as a run that never named a module
+        Note::PresetOnOneSide { name, directories, applied_in, not_in } => vec![
+            entry("preset-on-one-side", Affects::Counts, name.clone(),
+                format!("Test preset '@{name}' applies under {} in '{applied_in}' and is off there in '{not_in}'. Files there that match its names count as tests in '{applied_in}' only.",
+                    directories.join(", ")))],
+        // The counts are sound, so this is 'settings'. Only the 'modules' key is absent, and its
+        // absence would otherwise read as a run that never named a module.
         Note::ModulesDiffer { baseline_modules, subject_modules, .. } => {
             let names = |modules: &Option<String>| modules.clone().unwrap_or_else(|| "none".to_owned());
             vec![entry("modules-differ", Affects::Settings,

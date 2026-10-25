@@ -189,8 +189,8 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     file another file declares as a module under a marker, which a '!' never reaches. A marker
     that makes a whole file test code, '@Test' in Java, is off under a '!'.
 
-    A preset is the names a test tool gives its test files. '--tests @pytest' stands for
-    'test_*.py', '*_test.py' and 'conftest.py', and '--tests !@pytest' takes each of them back.
+    A preset is the names a test tool gives its test files. '--tests "@pytest"' stands for
+    'test_*.py', '*_test.py' and 'conftest.py', and '--tests "!@pytest"' takes each of them back.
     A preset also turns itself on under a folder holding the tool's own file, the jest one under
     a 'jest.config.ts', and a pattern typed here comes after it, so a '!' corrects it there too.
     '--show-presets' lists them, and '--save-preset' keeps a list of your own under a name. A
@@ -204,6 +204,11 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     If you are using Windows Powershell, you will need to escape the commas with a backtick: `
     or surround all the arguments with quotation marks:
     <arg1>`, <arg2>`, <arg3>   or   "<arg1>, <arg2>, <arg3>"
+    A preset goes in quotation marks there too, "@pytest", since PowerShell reads a word
+    starting with '@' as a variable and passes nothing.
+
+    In bash and zsh a pattern holding '!' goes in single quotes, --tests 'spec,!spec/fixtures',
+    since inside double quotes those shells read '!' as a history lookup, "event not found".
 ```
 
 ### <a id="cmd-languages" name="cmd-languages"></a>--languages
@@ -450,9 +455,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
     No arguments.
 
-    Lists every preset '--tests @<name>' can name: each shipped one with the files that turn it
-    on by itself and the patterns it declares, then your own, read from the 'data/test-presets/'
-    directory. Counts nothing.
+    Lists every preset '--tests "@<name>"' can name: each shipped one with the files that
+    turn it on by itself and the patterns it declares, then your own, read from the
+    'data/test-presets/' directory. Counts nothing.
 ```
 
 ## How the report looks
@@ -1118,13 +1123,13 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 --save-preset
     save the test patterns of this run as a test preset of your own
 
-    One argument, the name of the preset, which '--tests @<name>' will use: no spaces, and none
-    of / \ , ! @ { }.
+    One argument, the name of the preset, which '--tests "@<name>"' will use: no spaces, and
+    none of / \ , ! @ { }.
 
     Writes the test patterns of this run, whether typed with '--tests' or read from a
     configuration, into 'data/test-presets/<name>.txt', every '@<name>' among them written out.
     The name of a shipped preset is refused: to change one, take it back and add your own,
-    '--tests !@jest,@mine'.
+    '--tests "!@jest,@mine"'.
 
     The file holds its patterns under a '===> tests' line, as a configuration does, and whatever
     is written above that line is the description '--show-presets' prints.

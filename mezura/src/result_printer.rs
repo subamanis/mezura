@@ -500,6 +500,29 @@ pub(crate) fn elide_long_path(relative: &str) -> Cow<'_, str> {
     Cow::Borrowed(relative)
 }
 
+pub(crate) fn find_outermost_directories<'a>(directories: &[&'a str]) -> Vec<&'a str> {
+    directories.iter().copied().filter(|directory| !directories.iter()
+            .any(|other| other != directory && is_inside(directory, other))).collect()
+}
+
+// As it would be typed from the working directory, and whole when it is outside it. Folded, since
+// cmd.exe keeps the working directory in the case it was typed in.
+pub(crate) fn format_preset_directory(directory: &str, working_directory: Option<&str>) -> String {
+    let fold = crate::paths::fold_path;
+    let relative = working_directory.filter(|from| is_inside(&fold(directory), &fold(from)))
+            .map(|from| format!("./{}", directory[from.len()..].trim_start_matches('/')));
+
+    elide_long_path(relative.as_deref().unwrap_or(directory)).into_owned()
+}
+
+pub(crate) fn format_cut_list(items: &[impl AsRef<str>], shown: usize) -> String {
+    let listed = items[..shown].iter().map(|item| item.as_ref()).collect::<Vec<_>>().join(", ");
+    match items.len() - shown {
+        0 => listed,
+        more => format!("{listed} and {more} more")
+    }
+}
+
 fn shorten_path<'a>(path: &'a str, targets: &[mezura_core::Target], common_directory: &str) -> Cow<'a, str> {
     let relative = targets.iter().filter_map(|target| path.strip_prefix(&target.path))
             .map(|rest| rest.trim_start_matches('/'))
@@ -1429,6 +1452,7 @@ fn count_languages_hidden_by_top(pairs: Option<&[super::diff::ModulePair]>, base
 // Wrapped before painting, since the wrap counts characters and an escape code is not one.
 fn format_note_sentence(theme: &Theme, note: &super::diff::Note) -> String {
     use super::diff::Note;
+    const SHOWN_PRESET_DIRECTORIES : usize = 3;
     let sentence = match note {
         Note::SettingsAdopted { from, settings, naming_nothing } => {
             let one = settings.len() == 1;
@@ -1464,6 +1488,15 @@ fn format_note_sentence(theme: &Theme, note: &super::diff::Note) -> String {
                 "'{baseline}' was counted by mezura {baseline_version} and '{subject}' by \
                 {subject_version}, so part of the difference below may be a language counted \
                 better since, and not code that changed."),
+        Note::PresetOnOneSide { name, directories, applied_in, not_in } => {
+            let working_directory = crate::paths::find_working_directory();
+            let shown = directories.iter()
+                    .map(|directory| format_preset_directory(directory, working_directory.as_deref()))
+                    .collect::<Vec<_>>();
+            format!("Test preset '@{name}' applies under {} in '{applied_in}' and is off there in '{not_in}'. Files \
+                    there that match its names count as tests in '{applied_in}' only.",
+                    format_cut_list(&shown, shown.len().min(SHOWN_PRESET_DIRECTORIES)))
+        },
         // The doubt lines stay unpainted, so this one does not take the shared tail
         Note::CountsInDoubt { about, doubts } => return format!("{}\n{}",
                 theme.warning.paint(&wrap_message(&format!(

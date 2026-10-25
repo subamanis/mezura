@@ -225,9 +225,13 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
                 && directories.iter().all(|name| std::path::Path::new(&(data_dir.to_owned() + name)).is_dir())
     });
 
-    // Whether the record describes the files this binary carries, and not whether the version string
-    // moved: the two differ for every build made between releases, where the files change and
-    // 'VERSION_ID' does not.
+    // Made without a word and never demanded, since a missing one only means no presets of the user's
+    // own. Above the return, so an installation whose files are all in place gets it too.
+    let _ = std::fs::create_dir_all(data_dir.to_owned() + TEST_PRESETS_DIR_NAME);
+
+    // Asks whether the record describes the files this binary carries. The version string answers
+    // another question, since every build made between releases changes the files and keeps
+    // 'VERSION_ID'.
     if !force && recorded == carried && everything_is_there {
         return outcome;
     }
@@ -244,10 +248,6 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
             note_written_file(&mut outcome, name.to_owned() + "/", !recorded.is_empty());
         }
     }
-    // Made without a word and never demanded, since every installation older than it lacks it and a
-    // missing one only means no presets of the user's own
-    let _ = std::fs::create_dir_all(data_dir.to_owned() + TEST_PRESETS_DIR_NAME);
-
     // A file enters the manifest only once it is really on disk with the contents this version
     // ships, so one that could not be written is retried by the next run
     let mut manifest = HashMap::new();

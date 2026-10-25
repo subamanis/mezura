@@ -343,27 +343,22 @@ fn describe_test_file_rule(rule: &TestFileRule, language: &str) -> Option<String
 fn build_test_file_entry(rule: &TestFileRule) -> Option<String> {
     let matched = |folder: &Option<String>| folder.as_ref()
             .map(|folder| format!(",\"matched_folder\":\"{}\"", escape(folder))).unwrap_or_default();
-    match rule {
-        TestFileRule::TestDirectory { directory, build_files } => Some(format!(
-                "{{\"rule\":\"test_directory\",\"directory\":\"{}\",\"build_files\":{}}}", escape(directory),
-                create_string_array(build_files))),
-        TestFileRule::FileName(shape) => Some(format!("{{\"rule\":\"file_name\",\"shape\":\"{}\"}}",
-                escape(&shape.to_string()))),
-        TestFileRule::Preset { name, directory, trigger_file, pattern, matched_folder } => Some(format!(
-                "{{\"rule\":\"preset\",\"name\":\"{}\",\"directory\":\"{}\",\"trigger_file\":\"{}\",\"pattern\":\"{}\"{}}}",
-                escape(name), escape(directory), escape(trigger_file), escape(pattern), matched(matched_folder))),
-        TestFileRule::Declared { pattern, matched_folder } => Some(format!(
-                "{{\"rule\":\"declared\",\"pattern\":\"{}\"{}}}", escape(pattern), matched(matched_folder))),
-        TestFileRule::DeclaredNotTests { pattern, matched_folder } => Some(format!(
-                "{{\"rule\":\"declared_not_tests\",\"pattern\":\"{}\"{}}}", escape(pattern), matched(matched_folder))),
-        TestFileRule::DeclaredModule { declared_by } => Some(format!("{{\"rule\":\"declared_module\",\"declared_by\":{}}}",
-                create_string_array(declared_by))),
-        TestFileRule::FileMarker { marker, line } => Some(format!("{{\"rule\":\"file_marker\",\"marker\":\"{}\",\"line\":{line}}}",
-                escape(marker))),
-        TestFileRule::InnerAttribute { attribute, line } => Some(format!(
-                "{{\"rule\":\"inner_attribute\",\"attribute\":\"{}\",\"line\":{line}}}", escape(attribute))),
-        _ => None
-    }
+    let members = match rule {
+        TestFileRule::TestDirectory { directory, build_files } => format!(",\"directory\":\"{}\",\"build_files\":{}",
+                escape(directory), create_string_array(build_files)),
+        TestFileRule::FileName(shape) => format!(",\"shape\":\"{}\"", escape(&shape.to_string())),
+        TestFileRule::Preset { name, directory, trigger_file, pattern, matched_folder } => format!(
+                ",\"name\":\"{}\",\"directory\":\"{}\",\"trigger_file\":\"{}\",\"pattern\":\"{}\"{}",
+                escape(name), escape(directory), escape(trigger_file), escape(pattern), matched(matched_folder)),
+        TestFileRule::Declared { pattern, matched_folder } | TestFileRule::DeclaredNotTests { pattern, matched_folder } =>
+                format!(",\"pattern\":\"{}\"{}", escape(pattern), matched(matched_folder)),
+        TestFileRule::DeclaredModule { declared_by } => format!(",\"declared_by\":{}", create_string_array(declared_by)),
+        TestFileRule::FileMarker { marker, line } => format!(",\"marker\":\"{}\",\"line\":{line}", escape(marker)),
+        TestFileRule::InnerAttribute { attribute, line } => format!(",\"attribute\":\"{}\",\"line\":{line}", escape(attribute)),
+        _ => return None
+    };
+
+    Some(format!("{{\"rule\":\"{}\"{members}}}", rule.name()))
 }
 
 #[cfg(test)]

@@ -51,7 +51,9 @@ pub enum Code {
     ThemeUnavailable,
     /// A pattern of the exclusions or of the test code changed nothing. It names nothing on disk,
     /// a place outside every target, or a name no file or directory of the scan matched.
-    PatternMatchedNothing
+    PatternMatchedNothing,
+    /// A test preset of the user's own carries the name of a shipped one, so it is never read.
+    PresetFileShadowed
 }
 
 impl Code {
@@ -77,7 +79,8 @@ impl Code {
             Self::CommandIgnored => "command-ignored",
             Self::ConfigStyleInvalid => "config-style-invalid",
             Self::ThemeUnavailable => "theme-unavailable",
-            Self::PatternMatchedNothing => "pattern-matched-nothing"
+            Self::PatternMatchedNothing => "pattern-matched-nothing",
+            Self::PresetFileShadowed => "preset-file-shadowed"
         }
     }
 
@@ -95,7 +98,7 @@ impl Code {
             | Self::ConflictLineSkipped | Self::ConfigValueIgnored
             | Self::ConfigSectionUnknown | Self::ConfigSectionRepeated
             | Self::CommandIgnored | Self::ConfigStyleInvalid
-            | Self::ThemeUnavailable | Self::PatternMatchedNothing => Affects::Settings
+            | Self::ThemeUnavailable | Self::PatternMatchedNothing | Self::PresetFileShadowed => Affects::Settings
         }
     }
 }

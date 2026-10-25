@@ -55,8 +55,8 @@ pub mod warnings;
 pub use domain::{Bucket, CountingModel, HeredocRules, Keyword, Language, LeveledPair, LineClass, LineClasses,
         LineContinuation, MultilineString, NestedLanguage, Span, SpanKind, Stats, StringRules,
         TestFileName};
-pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, PathPatterns, ScopedByModule, Target,
-        Threads, format_module_scope, split_off_module_scope};
+pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, PathPatterns, RepositoryCheckout,
+        ScopedByModule, Target, Threads, format_module_scope, split_off_module_scope};
 pub use engine::identity::{Claim, ClaimKind, SettledBy};
 pub use engine::path_patterns::{PatternError, validate_exclude_patterns, validate_test_patterns};
 pub use engine::targets::TargetError;
@@ -430,6 +430,7 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
 {
     let mut scopes_of_directories = HashMap::new();
     let climb = PresetClimb::default();
+    let checkout = config.checkout.as_ref().map(engine::targets::resolve_checkout);
     for target in crate::engine::targets::topmost_targets(targets) {
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(&target);
@@ -447,7 +448,7 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
                 false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module, size)
             };
             let holder = find_test_scope_of_target(config, test_patterns, dir_path.parent().unwrap_or(dir_path), names_root,
-                    OwnListing::Unread, &climb, &mut scopes_of_directories);
+                    OwnListing::Unread, &climb, checkout.as_ref(), &mut scopes_of_directories);
             let test_scope = match config.detect_tests {
                 true => holder.of_file(dir_path, test_patterns, &mut Vec::new()).0,
                 false => TestScope::Ordinary
@@ -460,7 +461,7 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
         } else if dir_path.is_dir() {
             let gitignore_stack = GitignoreStack::for_root_dir(dir_path, ObeyedIgnoreFiles::of(config));
             let scope = find_test_scope_of_target(config, test_patterns, dir_path, names_root, OwnListing::ReadByTheWalk, &climb,
-                    &mut scopes_of_directories);
+                    checkout.as_ref(), &mut scopes_of_directories);
             dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module, scope, exclude_root));
         }
     }
@@ -502,14 +503,16 @@ fn describe_unused_pattern(unused: UnusedPattern, so: &str) -> Warning {
 }
 
 fn find_test_scope_of_target(config: &EngineConfig, test_patterns: &PathPatternMatcher, directory: &Path, names_root: usize,
-        own_listing: OwnListing, climb: &PresetClimb, known: &mut HashMap<(PathBuf, usize, OwnListing), DirectoryScope>)
+        own_listing: OwnListing, climb: &PresetClimb, checkout: Option<&RepositoryCheckout>,
+        known: &mut HashMap<(PathBuf, usize, OwnListing), DirectoryScope>)
 -> DirectoryScope
 {
     if !config.detect_tests {
         return DirectoryScope::default();
     }
     known.entry((directory.to_path_buf(), names_root, own_listing))
-            .or_insert_with(|| DirectoryScope::of_target(directory, names_root, test_patterns, climb, own_listing)).clone()
+            .or_insert_with(|| DirectoryScope::of_target(directory, names_root, test_patterns, climb, own_listing, checkout))
+            .clone()
 }
 
 // Sorted here, since the threads append in whichever order they reach a directory and two runs over

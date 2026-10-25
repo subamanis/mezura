@@ -131,6 +131,7 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
     let of_git_revision = EngineConfig { targets,
             exclude_patterns: move_patterns_into_checkout(&checkout.path, &resolved.repository, &config.engine.exclude_patterns),
             test_patterns: move_patterns_into_checkout(&checkout.path, &resolved.repository, &config.engine.test_patterns),
+            checkout: Some(mezura_core::RepositoryCheckout { root: checkout.path.clone(), repository: resolved.repository.clone() }),
             ..config.engine.clone() };
     // A revision older than every target holds a reading of zero, which is no failure
     let result = if of_git_revision.targets.is_empty() {
@@ -324,6 +325,39 @@ mod tests {
 
         crate::git::await_checkout_removals();
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_revision_reads_the_test_tool_files_above_its_repository() {
+        let holder = std::env::temp_dir().join("mezura-revision-above");
+        let _ = std::fs::remove_dir_all(&holder);
+        let root = holder.join("repo");
+        std::fs::create_dir_all(root.join("ui")).unwrap();
+        std::fs::write(holder.join("jest.config.js"), "module.exports = {};\n").unwrap();
+        std::fs::write(root.join("ui/a.test.ts"), "test('a', () => {});\n").unwrap();
+        std::fs::write(root.join("ui/a.ts"), "export const a = 1;\n").unwrap();
+        let git = |arguments: &[&str]| {
+            let outcome = std::process::Command::new("git").arg("-C").arg(&root).args(arguments).output().unwrap();
+            assert!(outcome.status.success(), "git {arguments:?}: {}", String::from_utf8_lossy(&outcome.stderr));
+        };
+        git(&["init", "-q"]);
+        git(&["add", "."]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x"]);
+
+        let languages_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../mezura-core/data/languages/");
+        let parsed = mezura_core::language_file::parse_languages_in_dir(languages_dir).unwrap().0;
+        let config = Configuration::new(vec![crate::paths::normalise_separators(&root.to_string_lossy()).into_owned()]);
+        let side = start_acquiring_revisions(prepare_revisions(&["HEAD"], &config.engine).unwrap()).into_iter().next().unwrap();
+        let (revision, _) = count_git_revision(side, &config, parsed.clone(), &Default::default()).unwrap();
+        let tree = mezura_core::run(&config.engine,
+                mezura_core::Languages::resolve(&config.engine, parsed, &Default::default()).0).unwrap();
+        let files_of_tests = |result: &mezura_core::RunResult| result.tests.get("TypeScript").map(|code| code.stats.files);
+        assert_eq!(Some(1), files_of_tests(&tree));
+        assert_eq!(files_of_tests(&tree), files_of_tests(&revision.result),
+                "the revision did not read the jest configuration above its repository");
+
+        crate::git::await_checkout_removals();
+        std::fs::remove_dir_all(&holder).unwrap();
     }
 
     #[test]

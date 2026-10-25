@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 
-use mezura_core::{FaultyFileDetails, RunResult, ScanSkip, Target, UnreadableDirDetails};
+use mezura_core::{AppliedPreset, FaultyFileDetails, RunResult, ScanSkip, UnreadableDirDetails};
 
 use super::config_manager::Configuration;
-use super::config_manager::{HIDE, TESTS};
+use super::config_manager::HIDE;
+use crate::message_printer::{format_tests_command, quote_for_the_shell};
 use crate::message_printer::MESSAGE_WIDTH;
 use crate::paths::PERSISTENT_APP_PATHS;
-use crate::test_presets::PRESET_SIGIL;
+use crate::result_printer::{find_outermost_directories, format_cut_list, format_preset_directory};
 
 // A file that says which ecosystem a project is in without saying where its tests are, the presets
 // that ecosystem's test tools have, and the languages those tests are written in
@@ -180,16 +181,12 @@ fn format_files_left_out(result: &RunResult, show_skipped: bool) -> Vec<String> 
     lines
 }
 
-// Nothing once the project's own configuration declares its test patterns. The rows keep to the
-// width themselves, so nothing wraps them.
+// The rows keep to the width themselves, so nothing wraps them
 fn print_test_preset_notes(result: &RunResult, config: &Configuration) {
-    let declared_by_the_project = config.view.local_dir.as_ref().is_some_and(|x| x.declares_test_patterns);
-    if !config.view.prints_text() || !config.engine.detect_tests || declared_by_the_project {
+    if !config.view.prints_text() {
         return;
     }
-    let lines = format_applied_presets(result).into_iter()
-            .chain(find_names_of_presets_to_suggest(result).iter().map(|names| format_preset_suggestion(names)))
-            .collect::<Vec<_>>();
+    let lines = collect_test_preset_notes(result, config);
     if !lines.is_empty() {
         eprintln!();
     }
@@ -198,55 +195,72 @@ fn print_test_preset_notes(result: &RunResult, config: &Configuration) {
     }
 }
 
-fn format_applied_presets(result: &RunResult) -> Vec<String> {
-    let mut rows : BTreeMap<&str, (Vec<String>, Vec<&str>)> = BTreeMap::new();
-    for preset in result.applied_presets.iter().filter(|preset| preset.matched) {
-        let (directories, trigger_files) = rows.entry(preset.name.as_str()).or_default();
-        directories.push(format_preset_directory(&preset.directory, &result.targets));
-        if !trigger_files.contains(&preset.trigger_file.as_str()) {
-            trigger_files.push(&preset.trigger_file);
-        }
-    }
-    if rows.is_empty() {
+// Nothing once the project's own configuration declares its test patterns, and no hint for a run
+// that typed some, since whoever typed '--tests' has met the presets in its help
+fn collect_test_preset_notes(result: &RunResult, config: &Configuration) -> Vec<String> {
+    let declared_by_the_project = config.view.local_dir.as_ref().is_some_and(|x| x.declares_test_patterns);
+    if !config.engine.detect_tests || declared_by_the_project {
         return Vec::new();
     }
-
-    let name_width = rows.keys().map(|name| name.chars().count() + 4).max().unwrap_or(0);
-    let mut lines = vec!["Test presets applied:".to_owned()];
-    for (name, (directories, trigger_files)) in &rows {
-        let opening = format!("  {:<name_width$}under ", format!("{PRESET_SIGIL}{name}"));
-        let closing = format!(" ({})", trigger_files.join(", "));
-        let room = MESSAGE_WIDTH.saturating_sub(opening.chars().count() + closing.chars().count());
-        let shown = (1..=directories.len()).rev()
-                .find(|&shown| format_directory_list(directories, shown).chars().count() <= room).unwrap_or(1);
-        lines.push(format!("{opening}{}{closing}", format_directory_list(directories, shown)));
+    let mut lines = format_applied_presets(result, crate::paths::find_working_directory().as_deref());
+    if !config.typed_explicitly.tests {
+        lines.extend(find_names_of_presets_to_suggest(result).iter().map(|names| format_preset_suggestion(names)));
     }
-    lines.push(format!("To disable a test preset: '--{TESTS} !{PRESET_SIGIL}<name>'. To disable test detection: \
-            '--{HIDE} tests'."));
 
     lines
 }
 
-fn format_directory_list(directories: &[String], shown: usize) -> String {
-    let listed = directories[..shown].join(", ");
-    match directories.len() - shown {
-        0 => listed,
-        more => format!("{listed} and {more} more")
+// A folder inside another one of the same preset adds nothing to where it applies, and the
+// shallowest come first
+fn format_applied_presets(result: &RunResult, working_directory: Option<&str>) -> Vec<String> {
+    let mut by_name : BTreeMap<&str, Vec<&AppliedPreset>> = BTreeMap::new();
+    for preset in result.applied_presets.iter().filter(|preset| preset.matched) {
+        by_name.entry(preset.name.as_str()).or_default().push(preset);
     }
+    if by_name.is_empty() {
+        return Vec::new();
+    }
+
+    let name_width = by_name.keys().map(|name| name.chars().count() + 4).max().unwrap_or(0);
+    let mut lines = vec!["Test presets applied:".to_owned()];
+    for (name, presets) in &by_name {
+        let mut outermost = find_outermost_directories(&presets.iter().map(|preset| preset.directory.as_str())
+                .collect::<Vec<_>>());
+        outermost.sort_by_key(|directory| (directory.matches('/').count(), *directory));
+        let directories = outermost.iter().map(|directory| format_preset_directory(directory, working_directory))
+                .collect::<Vec<_>>();
+        let mut trigger_files = Vec::new();
+        for preset in presets {
+            if !trigger_files.contains(&preset.trigger_file.as_str()) {
+                trigger_files.push(preset.trigger_file.as_str());
+            }
+        }
+        let opening = format!("  {:<name_width$}under ", format!("@{name}"));
+        // The file names give way first, so that one folder always fits
+        let fewest_directories = format_cut_list(&directories, 1);
+        let named = find_most_shown_that_fit(&opening, trigger_files.len(),
+                |named| format!("{fewest_directories} ({})", format_cut_list(&trigger_files, named)));
+        let closing = format!(" ({})", format_cut_list(&trigger_files, named));
+        let shown = find_most_shown_that_fit(&opening, directories.len(),
+                |shown| format_cut_list(&directories, shown) + &closing);
+        lines.push(format!("{opening}{}{closing}", format_cut_list(&directories, shown)));
+    }
+    lines.push(format!("To disable a test preset: {}. To disable test detection: '--{HIDE} tests'.",
+            format_tests_command("!@<name>")));
+
+    lines
 }
 
-fn format_preset_directory(directory: &str, targets: &[Target]) -> String {
-    let relative = targets.iter().filter(|target| super::result_printer::is_inside(directory, &target.path))
-            .max_by_key(|target| target.path.len())
-            .map(|target| format!("./{}", directory[target.path.len()..].trim_start_matches('/')));
-
-    super::result_printer::elide_long_path(relative.as_deref().unwrap_or(directory)).into_owned()
+fn find_most_shown_that_fit(opening: &str, count: usize, format_rest: impl Fn(usize) -> String) -> usize {
+    (1..=count).rev().find(|&shown| opening.chars().count() + format_rest(shown).chars().count() <= MESSAGE_WIDTH)
+            .unwrap_or(1)
 }
 
 fn find_names_of_presets_to_suggest(result: &RunResult) -> Vec<&'static [&'static str]> {
     GENERIC_PROJECT_FILES.iter().filter(|(file, names_of_presets, names_of_languages)| {
-        let counted = names_of_languages.iter().any(|language| result.per_language.contains_key(*language));
-        let tests_found = names_of_languages.iter().any(|language| result.tests.get(*language).is_some_and(|x| x.stats.lines > 0))
+        let counted = names_of_languages.iter().any(|name_of_language| result.per_language.contains_key(*name_of_language));
+        let tests_found = names_of_languages.iter()
+                .any(|name_of_language| result.tests.get(*name_of_language).is_some_and(|x| x.stats.lines > 0))
                 || result.applied_presets.iter().any(|preset| preset.matched && names_of_presets.contains(&preset.name.as_str()));
         counted && !tests_found
                 && result.targets.iter().any(|target| std::path::Path::new(&target.path).join(file).is_file())
@@ -255,8 +269,8 @@ fn find_names_of_presets_to_suggest(result: &RunResult) -> Vec<&'static [&'stati
 
 fn format_preset_suggestion(names: &[&str]) -> String {
     let declared = names.iter().enumerate().map(|(at, name)| match at {
-        0 => format!("'--{TESTS} {PRESET_SIGIL}{name}'"),
-        _ => format!("'{PRESET_SIGIL}{name}'")
+        0 => format_tests_command(&format!("@{name}")),
+        _ => quote_for_the_shell(&format!("@{name}"))
     }).collect::<Vec<_>>();
 
     format!("{} tests are declared with {}.", join_with_or(names), join_with_or(&declared))
@@ -353,7 +367,7 @@ fn determine_log_file_path(config: &Configuration) -> Option<String> {
 mod tests {
     use std::collections::HashMap;
 
-    use mezura_core::{AppliedPreset, FilesPresent, Performance, Threads};
+    use mezura_core::{FilesPresent, Performance, Target, Threads};
 
     use super::*;
 
@@ -401,20 +415,28 @@ mod tests {
     }
 
     #[test]
-    fn the_presets_list_gathers_the_folders_of_a_preset_to_the_width_and_leaves_out_one_that_decided_nothing() {
-        let applied = |name: &str, directory: String, trigger_file: &str, matched| AppliedPreset::new(name.to_owned(),
-                directory, trigger_file.to_owned(), matched);
+    fn the_presets_list_shows_the_outermost_folders_of_a_preset_to_the_width_and_leaves_out_one_that_decided_nothing() {
+        let applied = |name: &str, directory: &str, trigger_file: &str, matched| AppliedPreset::new(name.to_owned(),
+                directory.to_owned(), trigger_file.to_owned(), matched);
         let mut result = result_with(0, 0);
         result.targets = vec![Target::of("D:/proj")];
-        result.applied_presets = vec![applied("jest", "D:/proj".to_owned(), "jest.config.js", true),
-                applied("pytest", "D:/proj/tools".to_owned(), "conftest.py", false), applied("jest", "D:/".to_owned(), "jest.config.ts", true)];
-        result.applied_presets.extend((0..20).map(|i| applied("jest", format!("D:/proj/packages/package-{i:02}"), "jest.config.js", true)));
+        result.applied_presets = (0..20).map(|i| applied("jest", &format!("D:/proj/packages/package-{i:02}"), "jest.config.js", true))
+                .collect();
+        result.applied_presets.extend([applied("jest", "D:/proj/packages/package-00/src/nested", "jest.config.ts", true),
+                applied("jest", "D:/proj/web", "jest.config.js", true), applied("pytest", "D:/proj/tools", "conftest.py", false)]);
 
-        let lines = format_applied_presets(&result);
+        let lines = format_applied_presets(&result, Some("D:/proj"));
         assert_eq!(3, lines.len(), "a preset that decided nothing got a row: {lines:#?}");
-        assert_eq!("  @jest   under ./, D:/, ./packages/package-00 and 19 more (jest.config.js, jest.config.ts)", lines[1]);
-        result.applied_presets.truncate(4);
-        assert_eq!("  @jest   under ./, D:/, ./packages/package-00 (jest.config.js, jest.config.ts)", format_applied_presets(&result)[1]);
+        assert_eq!("  @jest   under ./web, ./packages/package-00 and 19 more (jest.config.js, jest.config.ts)", lines[1],
+                "a folder inside another of the same preset was listed, or a deeper one came first");
+
+        result.applied_presets = ["vitest.config.ts", "vitest.workspace.ts", "vitest.config.mts", "vitest.config.js",
+                "vitest.workspace.json"].iter().zip('a'..).map(|(file, folder)| applied("vitest", &format!("D:/proj/packages/{folder}"),
+                file, true)).collect();
+        assert_eq!("  @vitest   under ./packages/a, ./packages/b and 3 more (vitest.config.ts, vitest.workspace.ts and 3 more)",
+                format_applied_presets(&result, Some("D:/proj"))[1], "the file names ran the row past the width");
+        assert_eq!("  @vitest   under D:/proj/packages/a and 4 more (vitest.config.ts, vitest.workspace.ts and 3 more)",
+                format_applied_presets(&result, Some("D:/elsewhere"))[1], "a folder outside the working directory was not written whole");
     }
 
     #[test]
@@ -428,7 +450,12 @@ mod tests {
         result.per_language.insert("TypeScript".to_owned(), result.total.clone());
 
         let suggested = find_names_of_presets_to_suggest(&result).iter().map(|names| format_preset_suggestion(names)).collect::<Vec<_>>();
-        assert_eq!(vec!["jest, vitest or mocha tests are declared with '--tests @jest', '@vitest' or '@mocha'.".to_owned()], suggested);
+        assert_eq!(vec![format!("jest, vitest or mocha tests are declared with {}, {} or {}.", format_tests_command("@jest"),
+                quote_for_the_shell("@vitest"), quote_for_the_shell("@mocha"))], suggested);
+        let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        assert_eq!(suggested, collect_test_preset_notes(&result, &config));
+        config.typed_explicitly.tests = true;
+        assert!(collect_test_preset_notes(&result, &config).is_empty(), "a run that typed '--tests' was told about presets");
         result.applied_presets = vec![AppliedPreset::new("vitest".to_owned(), "D:/".to_owned(), "vitest.config.ts".to_owned(), true)];
         assert!(find_names_of_presets_to_suggest(&result).is_empty(), "a preset that found the tests was suggested again");
 

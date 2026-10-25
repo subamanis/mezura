@@ -388,7 +388,13 @@ pub struct EngineConfig {
     /// [`Self::detect_tests`] finds on its own. A `!` pattern takes a file or a directory back
     /// from a rule or an earlier pattern and switches the toolchain's file names and the file
     /// markers off for it, while the markers that open lines stay. Nothing while detection is off.
-    pub test_patterns: PathPatterns
+    pub test_patterns: PathPatterns,
+    /// Set when the targets sit in a checkout of a repository written to another place on disk,
+    /// such as a revision written out to a temporary folder. The folders above the checkout are
+    /// then read above the repository, so a build file or a test tool's file there decides the
+    /// same for both. Both paths are read as the targets are, a relative one from the working
+    /// directory. None by default.
+    pub checkout: Option<RepositoryCheckout>
 }
 
 // Written out rather than derived, because a derived 'count_keywords' would be false and anyone
@@ -413,7 +419,8 @@ impl Default for EngineConfig {
             use_heuristics: true,
             detect_shebangs: true,
             detect_tests: true,
-            test_patterns: PathPatterns::default()
+            test_patterns: PathPatterns::default(),
+            checkout: None
         }
     }
 }
@@ -426,4 +433,13 @@ impl EngineConfig {
             ..Default::default()
         }
     }
+}
+
+/// A repository written out to another place on disk, see [`EngineConfig::checkout`].
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct RepositoryCheckout {
+    /// The checkout's own root, spelled as the targets inside it are.
+    pub root: String,
+    /// The root of the repository it was written from.
+    pub repository: String
 }

@@ -122,6 +122,16 @@ pub fn fold_for_comparison(path: &str) -> Cow<'_, str> {
     if cfg!(windows) {Cow::Owned(normalise_separators(path).to_lowercase())} else {Cow::Borrowed(path)}
 }
 
+// ASCII only, so a byte offset into the folded path is one into the path as it was spelled
+pub fn fold_path(path: &str) -> Cow<'_, str> {
+    if cfg!(windows) {Cow::Owned(path.to_ascii_lowercase())} else {Cow::Borrowed(path)}
+}
+
+pub fn find_working_directory() -> Option<String> {
+    let directory = std::env::current_dir().ok()?;
+    Some(normalise_separators(&directory.to_string_lossy()).trim_end_matches('/').to_owned())
+}
+
 // On Windows the roaming folder is what 'APPDATA' holds. Asking the shell for the same folder
 // costs two calls into it before any counting has started.
 fn get_the_system_data_dir() -> String {

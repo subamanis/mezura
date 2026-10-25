@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use mezura_core::{EngineConfig, FileEntry, ForcedLanguages, Language, LanguageNames, Languages,
         ModuleResult, PathPatterns, RunResult, Stats, UNNAMED_MODULE_NAME, render};
@@ -11,6 +11,7 @@ use super::config_manager::{COUNTING, COUNT_GENERATED, COUNT_MINIFIED, COUNT_NOT
         EXCLUDE_LANGUAGES, FORCE_LANGUAGE, LANGUAGES, NO_GITIGNORE, NO_HEURISTICS, NO_IGNORE_FILES,
         NO_SHEBANG, SEARCH_IN_DOTTED, TESTS};
 use super::json_reader::{DocumentError, DocumentWarning, Scope};
+use super::paths::fold_path;
 use super::sources::RevisionSide;
 
 // The half of a document's warnings that says the numbers themselves may be wrong, as the document
@@ -318,6 +319,7 @@ pub enum Note {
     TestPatternsUnused { patterns: Vec<String>, from: String },
     SettingsDiffer { baseline: String, subject: String, settings: Vec<&'static str> },
     VersionsDiffer { baseline: String, baseline_version: String, subject: String, subject_version: String },
+    PresetOnOneSide { name: String, directories: Vec<String>, applied_in: String, not_in: String },
     CountsInDoubt { about: String, doubts: Vec<String> },
     // A side whose scan found nothing at all, which the table can only show as zeros
     NothingCounted { about: String },
@@ -690,6 +692,7 @@ fn prepare_sides<const N: usize>(sides: [DiffSide; N], engine: &EngineConfig)
 fn forget_tests_of(reading: &mut Reading) {
     reading.scope.tests_detected = false;
     reading.result.tests.clear();
+    reading.result.applied_presets.clear();
     for module in &mut reading.result.modules {
         module.tests.clear();
         for entry in module.files.values_mut().flatten() {
@@ -764,6 +767,7 @@ fn determine_comparison_notes(baseline: &Reading, subject: &Reading, config: &Co
                 baseline_version: baseline.version.clone(), subject: subject.determine_display_name(),
                 subject_version: subject.version.clone() });
     }
+    notes.extend(find_presets_on_one_side(baseline, subject));
     // How each side's own scan went. Nothing else says it for a document or a revision, and a side
     // that failed to parse half its files reads as code that shrank.
     for reading in [baseline, subject] {
@@ -813,6 +817,63 @@ fn determine_comparison_notes(baseline: &Reading, subject: &Reading, config: &Co
     notes
 }
 
+// A preset that decided files on one side is one-sided where the other side never turned it on,
+// whether or not it found a file there
+fn find_presets_on_one_side(baseline: &Reading, subject: &Reading) -> Vec<Note> {
+    let (base_before, base_now) = determine_file_bases(&baseline.result, &subject.result);
+    let sides = [(baseline, base_before.as_str(), subject, base_now.as_str()), (subject, base_now.as_str(), baseline, base_before.as_str())];
+
+    let mut notes = Vec::new();
+    for (applied_in, own_base, not_in, other_base) in sides {
+        let elsewhere = collect_outermost_preset_directories(not_in, false);
+        for (name, directories) in collect_outermost_preset_directories(applied_in, true) {
+            let others = elsewhere.get(name).map(Vec::as_slice).unwrap_or_default();
+            let one_sided = directories.iter()
+                    .filter(|directory| !others.iter().any(|other| is_held_by(directory, own_base, other, other_base)))
+                    .map(|directory| (*directory).to_owned()).collect::<Vec<_>>();
+            if !one_sided.is_empty() {
+                notes.push(Note::PresetOnOneSide { name: name.to_owned(), directories: one_sided,
+                        applied_in: applied_in.determine_display_name(), not_in: not_in.determine_display_name() });
+            }
+        }
+    }
+
+    notes
+}
+
+fn collect_outermost_preset_directories(reading: &Reading, matched_only: bool) -> BTreeMap<&str, Vec<&str>> {
+    let mut by_name : BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for preset in reading.result.applied_presets.iter().filter(|preset| preset.matched || !matched_only) {
+        by_name.entry(preset.name.as_str()).or_default().push(preset.directory.as_str());
+    }
+    by_name.into_iter().map(|(name, directories)| (name, super::result_printer::find_outermost_directories(&directories)))
+            .collect()
+}
+
+// Two checkouts of one project spell every folder differently, so the place below each side's own
+// base counts too
+fn is_held_by(directory: &str, own_base: &str, other: &str, other_base: &str) -> bool {
+    let is_inside = super::result_printer::is_inside;
+    if is_inside(&fold_path(directory), &fold_path(other)) {
+        return true;
+    }
+    match (find_path_below(directory, own_base), find_path_below(other, other_base)) {
+        (Some(directory), Some(other)) => other.is_empty() || is_inside(&fold_path(directory), &fold_path(other)),
+        _ => false
+    }
+}
+
+fn find_path_below<'a>(path: &'a str, base: &str) -> Option<&'a str> {
+    if base.is_empty() {
+        return None;
+    }
+    let (folded_path, folded_base) = (fold_path(path), fold_path(base));
+    if folded_path == folded_base {
+        return Some("");
+    }
+    folded_path.strip_prefix(folded_base.as_ref()).filter(|rest| rest.starts_with('/')).map(|_| &path[base.len() + 1..])
+}
+
 // A path the base does not hold keeps its absolute form, which pairs with nothing and is honest
 // about it. Windows spells one path in several cases, so the matching folds the way
 // 'move_excludes_into_checkout' does; the ASCII fold never moves a byte, so the cut lands on the
@@ -837,10 +898,6 @@ fn hold_the_same_values(a: &[String], b: &[String]) -> bool {
     a.sort();
     b.sort();
     a == b
-}
-
-fn fold_path(path: &str) -> Cow<'_, str> {
-    if cfg!(windows) {Cow::Owned(path.to_ascii_lowercase())} else {Cow::Borrowed(path)}
 }
 
 #[cfg(test)]
@@ -1068,7 +1125,11 @@ mod tests {
         baseline.unreadable_dirs_count = 1;
         baseline.warnings.push(DocumentWarning { code: "language-file-unreadable".to_owned(),
                 affects: "counts".to_owned(), message: "'Lua.txt' could not be used.".to_owned() });
-        let subject = reading("new.json", "3.0.0", vec![module("web")]);
+        let mut subject = reading("new.json", "3.0.0", vec![module("web")]);
+        let jest = |directory: &str| mezura_core::AppliedPreset::new("jest".to_owned(), directory.to_owned(),
+                "jest.config.js".to_owned(), true);
+        baseline.result.applied_presets = vec![jest("D:/p/web")];
+        subject.result.applied_presets = vec![jest("D:/p"), jest("D:/p/api")];
 
         let notes = determine_comparison_notes(&baseline, &subject, &config, vec![adopted], true);
         assert_eq!(vec![
@@ -1077,6 +1138,8 @@ mod tests {
                     settings: vec!["search-in-dotted"] },
             Note::VersionsDiffer { baseline: "old.json".to_owned(), baseline_version: "2.9.0".to_owned(),
                     subject: "new.json".to_owned(), subject_version: "3.0.0".to_owned() },
+            Note::PresetOnOneSide { name: "jest".to_owned(), directories: vec!["D:/p".to_owned()],
+                    applied_in: "new.json".to_owned(), not_in: "old.json".to_owned() },
             Note::CountsInDoubt { about: "old.json".to_owned(), doubts: vec![
                     "2 of its files could not be parsed, so its counts are short by that".to_owned(),
                     "1 directory could not be read, so nothing inside was counted".to_owned(),
@@ -1087,6 +1150,20 @@ mod tests {
         ], notes);
 
         config.view.layout = crate::config_manager::Layout::Table;
+        let mut first_test = reading("b.json", "3.0.0", Vec::new());
+        first_test.result.applied_presets = vec![jest("D:/q")];
+        let mut no_test_yet = reading("a.json", "3.0.0", Vec::new());
+        no_test_yet.result.applied_presets = vec![mezura_core::AppliedPreset::new("jest".to_owned(), "D:/q".to_owned(),
+                "jest.config.js".to_owned(), false)];
+        assert!(determine_comparison_notes(&no_test_yet, &first_test, &config, Vec::new(), true).is_empty(),
+                "the first test file under a jest config both sides have was said to be a preset of one side");
+        let (mut one_clone, mut another) = (reading("a.json", "3.0.0", Vec::new()), reading("b.json", "3.0.0", Vec::new()));
+        one_clone.result.targets = vec![mezura_core::Target::of("D:/clone2")];
+        another.result.targets = vec![mezura_core::Target::of("D:/r1")];
+        one_clone.result.applied_presets = vec![jest("D:/clone2/web")];
+        another.result.applied_presets = vec![jest("D:/r1/web")];
+        assert!(determine_comparison_notes(&one_clone, &another, &config, Vec::new(), true).is_empty(),
+                "two checkouts of one project at different paths were said to differ in their presets");
         let plain = reading("a.json", "3.0.0", Vec::new());
         assert!(determine_comparison_notes(&plain, &reading("b.json", "3.0.0", Vec::new()), &config, Vec::new(), true).is_empty());
 
@@ -1141,6 +1218,10 @@ mod tests {
                     files: hashmap!["Rust".to_owned() => vec![file]] };
             let mut result = crate::test_support::plain_result_of(per_language, vec![module], Vec::new());
             result.tests = tests;
+            if detected {
+                result.applied_presets = vec![mezura_core::AppliedPreset::new("jest".to_owned(), "D:/p".to_owned(),
+                        "jest.config.js".to_owned(), true)];
+            }
             let mut scope = scope_of(&mezura_core::EngineConfig::default(), mezura_core::CountingModel::Content);
             scope.tests_detected = detected;
             Reading { source: Source::Document { path: name.to_owned() }, taken: "2026-08-07T10:00:00+03:00".to_owned(),
@@ -1150,6 +1231,7 @@ mod tests {
         };
         let config = crate::config_manager::Configuration::new(vec!["./src".to_owned()]);
         let has_no_tests = |side: &Reading| !side.scope.tests_detected && side.result.tests.is_empty()
+                && side.result.applied_presets.is_empty()
                 && side.result.modules.iter().all(|module| module.tests.is_empty()
                         && module.files.values().flatten().all(|file| file.tests.is_none()));
 

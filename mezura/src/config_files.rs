@@ -49,7 +49,7 @@ pub enum UnreadableCause {
 // result looks, plus the sections nobody asked for, and they are always just said out loud.
 #[derive(Debug, Default)]
 pub struct ConfigFileIssues {
-    pub invalid_fields: Vec<&'static str>,
+    pub invalid_fields: Vec<(&'static str, Option<String>)>,
     // The code travels with the message from where the kind is known, so nothing downstream has to
     // recover it by looking for a phrase inside the English.
     pub warnings: Vec<(mezura_core::warnings::Code, String)>
@@ -88,14 +88,19 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                         Ok(parsed) if !parsed.is_empty() => builder.targets = Some(parsed.into_iter()
                                 .map(|(module, path)| Target { module, path }).collect()),
                         Ok(_) => {},
-                        Err(_) => issues.invalid_fields.push(config_manager::TARGETS)
+                        Err(_) => issues.invalid_fields.push((config_manager::TARGETS, None))
                     }
                 },
                 config_manager::EXCLUDE => read_patterns_value(&mut builder.exclude_patterns, &mut reader, &mut buf,
-                        config_manager::EXCLUDE, &mut issues, |written| validate_exclude_patterns(&written).ok().map(|()| written)),
+                        config_manager::EXCLUDE, &mut issues,
+                        |written| validate_exclude_patterns(&written).map(|()| written).map_err(|why| why.to_string())),
                 config_manager::TESTS => read_patterns_value(&mut builder.test_patterns, &mut reader, &mut buf,
-                        config_manager::TESTS, &mut issues, |written| expand_presets(written, &PERSISTENT_APP_PATHS.test_presets_dir)
-                                .ok().map(|expanded| expanded.patterns).filter(|patterns| validate_test_patterns(patterns).is_ok())),
+                        config_manager::TESTS, &mut issues, |written| {
+                            let presets_dir = &PERSISTENT_APP_PATHS.test_presets_dir;
+                            let expanded = expand_presets(written, presets_dir).map_err(|why| why.format_reason(presets_dir))?;
+                            validate_test_patterns(&expanded.patterns).map_err(|why| why.to_string())?;
+                            Ok(expanded.patterns)
+                        }),
                 config_manager::LANGUAGES => {
                     let langs = read_lines_from_file_to_vec(&mut reader, &mut buf, super::args::parse_languages_to_vec);
                     if !langs.is_empty() {
@@ -118,7 +123,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                     if declared.split(',').any(|pair| !pair.trim().is_empty()) {
                         match super::args::parse_forced_languages(&declared) {
                             Some(x) => builder.forced_languages = Some(x),
-                            None => issues.invalid_fields.push(config_manager::FORCE_LANGUAGE)
+                            None => issues.invalid_fields.push((config_manager::FORCE_LANGUAGE, None))
                         }
                     }
                 },
@@ -221,6 +226,15 @@ pub fn strip_byte_order_mark(contents: &str) -> &str {
 pub fn find_block_name(line: &str) -> Option<&str> {
     let line = line.trim();
     line.starts_with("===>").then(|| line.trim_start_matches("===>").split_whitespace().next().unwrap_or(""))
+}
+
+pub fn read_names_in_dir(dir: &str, extension: Option<&str>) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    let mut names = entries.flatten().map(|x| x.path())
+            .filter(|path| path.is_file() && extension.is_none_or(|wanted| path.extension().is_some_and(|x| x == wanted)))
+            .filter_map(|path| path.file_stem().and_then(|x| x.to_str()).map(str::to_owned)).collect::<Vec<_>>();
+    names.sort_by_key(|x| x.to_lowercase());
+    names
 }
 
 // The targets must be set before this is called: they are unwrapped below.
@@ -363,15 +377,6 @@ fn yes_or_no(value: bool) -> &'static str {
     if value {"yes"} else {"no"}
 }
 
-pub fn read_names_in_dir(dir: &str, extension: Option<&str>) -> Vec<String> {
-    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
-    let mut names = entries.flatten().map(|x| x.path())
-            .filter(|path| path.is_file() && extension.is_none_or(|wanted| path.extension().is_some_and(|x| x == wanted)))
-            .filter_map(|path| path.file_stem().and_then(|x| x.to_str()).map(str::to_owned)).collect::<Vec<_>>();
-    names.sort_by_key(|x| x.to_lowercase());
-    names
-}
-
 // Counts lines, and remembers a line it could not deliver instead of losing it. From then on it
 // reads as an ended file, which every caller already treats as the end of its block, so nothing
 // after the bad line is applied and the file is refused whole by the single check at the end.
@@ -405,7 +410,7 @@ fn read_parsed_value<T>(into: &mut Option<T>, reader: &mut CountingReader, buf: 
     let _ = reader.read_line(buf);
     match parse(buf) {
         Some(x) => *into = Some(x),
-        None => issues.invalid_fields.push(field)
+        None => issues.invalid_fields.push((field, None))
     }
 }
 
@@ -415,20 +420,20 @@ fn read_flag_value(into: &mut Option<bool>, reader: &mut CountingReader, buf: &m
 {
     match read_bool_value_from_file(reader, buf) {
         Ok(x) => *into = x,
-        Err(()) => issues.invalid_fields.push(field)
+        Err(()) => issues.invalid_fields.push((field, None))
     }
 }
 
 fn read_patterns_value(into: &mut Option<PathPatterns>, reader: &mut CountingReader, buf: &mut String,
-        field: &'static str, issues: &mut ConfigFileIssues, check: impl FnOnce(Vec<String>) -> Option<Vec<String>>)
+        field: &'static str, issues: &mut ConfigFileIssues, check: impl FnOnce(Vec<String>) -> Result<Vec<String>, String>)
 {
     let written = read_lines_from_file_to_vec(reader, buf, super::args::parse_paths_to_vec);
     if written.is_empty() {
         return;
     }
     match check(written) {
-        Some(patterns) => *into = Some(PathPatterns::of(patterns)),
-        None => issues.invalid_fields.push(field)
+        Ok(patterns) => *into = Some(PathPatterns::of(patterns)),
+        Err(why) => issues.invalid_fields.push((field, Some(why)))
     }
 }
 
@@ -560,6 +565,12 @@ mod tests {
         assert!(issues.invalid_fields.is_empty(), "{:?}", issues.invalid_fields);
         assert_eq!(Some(PathPatterns::of(["xt/", "!src/*Test/", "!src/testFixtures/"])), read.test_patterns);
         assert_eq!(Some(PathPatterns::of(["@types"])), read.exclude_patterns, "an exclusion read a name starting with '@' as a preset");
+
+        std::fs::write(&path, "===> tests\n@nope\n").unwrap();
+        let (_, issues) = parse_config_file(Some("with-a-preset"), Some(SCRATCH_CONFIG_DIR.to_owned())).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(vec![config_manager::TESTS], issues.invalid_fields.iter().map(|(field, _)| *field).collect::<Vec<_>>(),
+                "a preset that names nothing was dropped and the run would count without it");
     }
 
     // Every flag above is written from a command line, where a flag is either given or not, so a
@@ -720,7 +731,7 @@ mod tests {
 
         std::fs::write(&path, "===> targets\nfrontend=\n")?;
         let (options, issues) = parse_config_file(Some("targets-block"), Some(dir)).unwrap();
-        assert_eq!(vec![config_manager::TARGETS], issues.invalid_fields);
+        assert_eq!(vec![(config_manager::TARGETS, None)], issues.invalid_fields);
         assert_eq!(None, options.targets);
 
         std::fs::remove_file(&path)
@@ -775,8 +786,8 @@ mod tests {
                 "===> threads\n3343 45534\n\n===> counting\nmitsos\n\n===> compare\n99\n\n===> hide\nkeywords\n\n===> sort\nnope\n").unwrap();
 
         let (options, issues) = super::super::config_files::parse_config_file(Some("badcfg"), Some(dir_str)).unwrap();
-        assert_eq!(issues.invalid_fields, vec![config_manager::THREADS, config_manager::COUNTING,
-                config_manager::COMPARE_LEVEL, config_manager::SORT]);
+        assert_eq!(issues.invalid_fields, vec![(config_manager::THREADS, None), (config_manager::COUNTING, None),
+                (config_manager::COMPARE_LEVEL, None), (config_manager::SORT, None)]);
         assert!(issues.warnings.is_empty());
         assert_eq!(options.threads, None);
         assert_eq!(options.counting, None);

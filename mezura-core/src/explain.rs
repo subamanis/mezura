@@ -280,7 +280,8 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
     let file = Path::new(&absolute);
     let folder = file.parent().unwrap_or(file);
     let climb = PresetClimb::default();
-    let holder = DirectoryScope::of_target(folder, names_root, &patterns, &climb, OwnListing::Unread);
+    let checkout = config.checkout.as_ref().map(crate::engine::targets::resolve_checkout);
+    let holder = DirectoryScope::of_target(folder, names_root, &patterns, &climb, OwnListing::Unread, checkout.as_ref());
     let (scope, decided_by) = holder.of_file(file, &patterns, &mut Vec::new());
     // Read the way a run reads it, so a file a pattern took back is still declared under the marker
     // and a declarer a pattern made whole seeds nothing of its own
@@ -289,7 +290,7 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
         let root = crate::find_names_root_of_target(&config.test_patterns, &spelled, find_names_root_of_path(&spelled, true));
         let candidate = Path::new(&spelled);
         let folder = candidate.parent().unwrap_or(candidate);
-        DirectoryScope::of_target(folder, root, &patterns, &climb, OwnListing::Unread)
+        DirectoryScope::of_target(folder, root, &patterns, &climb, OwnListing::Unread, checkout.as_ref())
                 .of_file(candidate, &patterns, &mut Vec::new()).0 == TestScope::Tests
     };
     let mut files_on_disk = FilesOnDisk { lookup, config, is_whole: &is_whole };
@@ -308,7 +309,7 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
                 _ => TestFileRule::Declared { pattern, matched_folder }
             })
         },
-        (None, TestScope::Tests) => find_test_directory_along(folder).0.map(|found| TestFileRule::TestDirectory {
+        (None, TestScope::Tests) => find_test_directory_along(folder, checkout.as_ref()).0.map(|found| TestFileRule::TestDirectory {
             directory: spell_out(found.directory),
             build_files: found.build_files.iter().map(|file| spell_out(file)).collect()
         }).or_else(|| holder.find_preset_match(&absolute, true).map(|hit| TestFileRule::Preset {

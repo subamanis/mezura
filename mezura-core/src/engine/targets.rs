@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path};
 
 use crate::GitignoreStack;
-use crate::engine::config::Target;
+use crate::engine::config::{RepositoryCheckout, Target};
 
 pub(crate) const WILDCARDS : [char; 4] = ['*', '?', '[', '{'];
 
@@ -233,6 +233,11 @@ pub(crate) fn find_names_root_of_pattern(pattern: &str) -> usize {
 pub(crate) fn is_inside_or_at(path: &str, folder: &str) -> bool {
     let (path, folder) = (path_comparison_key(path), path_comparison_key(folder));
     path == folder || is_ancestor_of(&folder, &path)
+}
+
+// Spelled the way the targets are, since the climbs above them compare the two by component
+pub(crate) fn resolve_checkout(checkout: &RepositoryCheckout) -> RepositoryCheckout {
+    RepositoryCheckout { root: convert_to_absolute(&checkout.root), repository: convert_to_absolute(&checkout.repository) }
 }
 
 // Sorted by path with the duplicates gone, so the nearest enclosing target of any entry is the last

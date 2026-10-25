@@ -1,13 +1,11 @@
 // What '@name' stands for inside '--tests', a preset the core ships or one of the user's own, which
 // is a file in the 'test-presets' folder of the data directory.
-use mezura_core::engine::path_patterns::split_negation;
+use mezura_core::engine::path_patterns::{is_a_path_pattern, split_negation};
 use mezura_core::warnings::{Code, Warning};
 use mezura_core::{TestPreset, get_test_presets, validate_test_patterns};
 
 use crate::config_files::{find_block_name, read_names_in_dir, strip_byte_order_mark};
 use crate::message_printer::wrap_message;
-
-pub const PRESET_SIGIL : char = '@';
 
 const PATTERNS_HEADING : &str = "===> tests";
 const PRESET_FILE_EXTENSION : &str = "txt";
@@ -16,7 +14,8 @@ const UNUSABLE_IN_A_NAME : [char; 7] = ['/', '\\', ',', '!', '@', '{', '}'];
 #[derive(Debug, PartialEq, Eq, Default)]
 pub struct ExpandedPatterns {
     pub patterns: Vec<String>,
-    // The texts a preset wrote, which never warn for having matched nothing
+    // The names a preset wrote, which never warn for having matched nothing. A place it wrote warns
+    // as a typed one does, since it is one project's folder.
     pub from_presets: Vec<String>
 }
 
@@ -30,20 +29,25 @@ pub enum PresetError {
 impl PresetError {
     // Wrapped here, since a suggestion below the sentence keeps its own indentation
     pub fn format_message(&self, presets_dir: &str) -> String {
+        let reason = wrap_message(&self.format_reason(presets_dir));
+        let Self::Unknown(name) = self else { return reason };
+        let (shipped, yours) = collect_names_to_offer(presets_dir);
+        let candidates = shipped.iter().copied().chain(yours.iter().map(String::as_str)).collect::<Vec<_>>();
+        match crate::suggestions::format_suggestion(name, &candidates) {
+            Some(suggestion) => format!("{reason}\n\n{suggestion}"),
+            None => reason
+        }
+    }
+
+    // Unwrapped and with no suggestion, for a message that puts words of its own around it
+    pub fn format_reason(&self, presets_dir: &str) -> String {
         match self {
             Self::Unknown(name) => {
-                let shipped = get_test_presets().iter().map(|preset| preset.name).collect::<Vec<_>>();
-                let yours = collect_user_preset_names(presets_dir).into_iter()
-                        .filter(|name| !is_a_shipped_name(name)).collect::<Vec<_>>();
+                let (shipped, yours) = collect_names_to_offer(presets_dir);
                 let and_yours = if yours.is_empty() {String::new()} else {format!(", and yours are {}", yours.join(", "))};
-                let candidates = shipped.iter().copied().chain(yours.iter().map(String::as_str)).collect::<Vec<_>>();
-                let suggestion = crate::suggestions::format_suggestion(name, &candidates)
-                        .map(|x| format!("\n\n{x}")).unwrap_or_default();
-                format!("{}{suggestion}", wrap_message(&format!("'{PRESET_SIGIL}{name}' names no test preset. The \
-                        shipped ones are {}{and_yours}.", shipped.join(", "))))
+                format!("'@{name}' names no test preset. The shipped ones are {}{and_yours}.", shipped.join(", "))
             },
-            Self::Unusable { name, why } => wrap_message(&format!("The test preset '{PRESET_SIGIL}{name}' could not be \
-                    used. {why}"))
+            Self::Unusable { name, why } => format!("The test preset '@{name}' could not be used. {why}")
         }
     }
 }
@@ -67,7 +71,7 @@ pub fn read_user_preset(presets_dir: &str, name: &str) -> Result<UserPreset, Pre
     if !can_name_a_preset(name) {
         return Err(PresetError::Unknown(name.to_owned()));
     }
-    let path = format!("{presets_dir}{name}.{PRESET_FILE_EXTENSION}");
+    let path = build_preset_path(presets_dir, name);
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(PresetError::Unknown(name.to_owned())),
@@ -83,7 +87,7 @@ pub fn read_user_preset(presets_dir: &str, name: &str) -> Result<UserPreset, Pre
         return Err(build_unusable(name, format!("'{path}' holds no pattern under '{PATTERNS_HEADING}'.")));
     }
     let expanded = expand_with(written, |inner| find_shipped_preset(inner).map(copy_patterns_of)
-            .ok_or_else(|| build_unusable(name, format!("It names '{PRESET_SIGIL}{inner}', and a preset of your own \
+            .ok_or_else(|| build_unusable(name, format!("It names '@{inner}', and a preset of your own \
                     can name only a shipped one."))))?;
     validate_test_patterns(&expanded.patterns).map_err(|error| build_unusable(name, error.to_string()))?;
 
@@ -92,7 +96,7 @@ pub fn read_user_preset(presets_dir: &str, name: &str) -> Result<UserPreset, Pre
 
 pub fn write_user_preset(presets_dir: &str, name: &str, patterns: &[String]) -> std::io::Result<String> {
     std::fs::create_dir_all(presets_dir)?;
-    let path = format!("{presets_dir}{name}.{PRESET_FILE_EXTENSION}");
+    let path = build_preset_path(presets_dir, name);
     std::fs::write(&path, format!("{PATTERNS_HEADING}\n{}\n", patterns.join("\n")))?;
 
     Ok(path)
@@ -102,14 +106,21 @@ pub fn collect_user_preset_names(presets_dir: &str) -> Vec<String> {
     read_names_in_dir(presets_dir, Some(PRESET_FILE_EXTENSION))
 }
 
-// Without regard to case, since on Windows and macOS 'Jest.txt' is the file 'jest.txt' would be
 pub fn is_a_shipped_name(name: &str) -> bool {
-    get_test_presets().iter().any(|preset| preset.name.eq_ignore_ascii_case(name))
+    find_shipped_preset(name).is_some()
 }
 
 // A name that can be typed back as '@name' inside a comma separated list of patterns
 pub fn can_name_a_preset(name: &str) -> bool {
     !name.is_empty() && !name.contains(UNUSABLE_IN_A_NAME) && !name.contains(char::is_whitespace)
+}
+
+pub fn collect_shadowed_file_warnings(presets_dir: &str) -> Vec<Warning> {
+    collect_user_preset_names(presets_dir).into_iter().filter(|name| is_a_shipped_name(name)).map(|name| {
+        let path = build_preset_path(presets_dir, &name);
+        Warning::new(Code::PresetFileShadowed, &path, format!("'{path}' is never read, since '@{}' names a shipped \
+                test preset. Give the file another name to use it as a preset of your own.", name.to_lowercase()))
+    }).collect()
 }
 
 pub fn is_about_a_preset_pattern(warning: &Warning, from_presets: &[String]) -> bool {
@@ -119,6 +130,7 @@ pub fn is_about_a_preset_pattern(warning: &Warning, from_presets: &[String]) -> 
 fn expand_with(written: Vec<String>, find: impl Fn(&str) -> Result<Vec<String>, PresetError>)
 -> Result<ExpandedPatterns, PresetError>
 {
+    const PRESET_SIGIL : char = '@';
     let mut expanded = ExpandedPatterns::default();
     for pattern in written {
         let (negation, text) = split_negation(&pattern);
@@ -135,7 +147,9 @@ fn expand_with(written: Vec<String>, find: impl Fn(&str) -> Result<Vec<String>, 
                     _ => continue
                 }
             };
-            expanded.from_presets.push(added.clone());
+            if !is_a_path_pattern(&added) {
+                expanded.from_presets.push(added.clone());
+            }
             expanded.patterns.push(added);
         }
     }
@@ -143,8 +157,15 @@ fn expand_with(written: Vec<String>, find: impl Fn(&str) -> Result<Vec<String>, 
     Ok(expanded)
 }
 
+fn collect_names_to_offer(presets_dir: &str) -> (Vec<&'static str>, Vec<String>) {
+    let shipped = get_test_presets().iter().map(|preset| preset.name).collect();
+    let yours = collect_user_preset_names(presets_dir).into_iter().filter(|name| !is_a_shipped_name(name)).collect();
+    (shipped, yours)
+}
+
+// Without regard to case, since on Windows and macOS 'Jest.txt' is the file 'jest.txt' would be
 fn find_shipped_preset(name: &str) -> Option<&'static TestPreset> {
-    get_test_presets().iter().find(|preset| preset.name == name)
+    get_test_presets().iter().find(|preset| preset.name.eq_ignore_ascii_case(name))
 }
 
 fn copy_patterns_of(preset: &TestPreset) -> Vec<String> {
@@ -153,6 +174,10 @@ fn copy_patterns_of(preset: &TestPreset) -> Vec<String> {
 
 fn build_unusable(name: &str, why: String) -> PresetError {
     PresetError::Unusable { name: name.to_owned(), why }
+}
+
+fn build_preset_path(presets_dir: &str, name: &str) -> String {
+    format!("{presets_dir}{name}.{PRESET_FILE_EXTENSION}")
 }
 
 #[cfg(test)]
@@ -171,12 +196,20 @@ mod tests {
         let dir = crate::paths::normalise_separators(&dir.to_string_lossy()).into_owned() + "/";
         std::fs::write(dir.clone() + "mine.txt", "Our layout.\n\n===> tests\nspec/, !spec/fixtures/\n@xt\n").unwrap();
         std::fs::write(dir.clone() + "nested.txt", "===> tests\n@mine\n").unwrap();
+        std::fs::write(dir.clone() + "placed.txt", "===> tests\n./spec/, conftest.py\n").unwrap();
 
         let expanded = expand_presets(written(&["@pytest", "!tests/data/", "**/@types/"]), &dir).unwrap();
         assert_eq!(written(&["test_*.py", "*_test.py", "conftest.py", "!tests/data/", "**/@types/"]), expanded.patterns,
                 "a preset was not written out in its place, or a pattern with '@' inside it was read as one");
         assert_eq!(written(&["test_*.py", "*_test.py", "conftest.py"]), expanded.from_presets);
+        assert_eq!(written(&["conftest.py"]), expand_presets(written(&["@placed"]), &dir).unwrap().from_presets,
+                "a place a preset wrote would never say that it is missing");
         assert_eq!(written(&["!*Tests/", "!*.Test/"]), expand_presets(written(&["!@dotnet"]), &dir).unwrap().patterns);
+        std::fs::write(dir.clone() + "Jest.txt", "===> tests\nmine/\n").unwrap();
+        assert_eq!(copy_patterns_of(find_shipped_preset("jest").unwrap()), expand_presets(written(&["@Jest"]), &dir).unwrap().patterns,
+                "a file of the user's own was read under a shipped name, which '--show-presets' says never happens");
+        assert_eq!(vec![dir.clone() + "Jest.txt"], collect_shadowed_file_warnings(&dir).into_iter()
+                .map(|warning| warning.subject).collect::<Vec<_>>());
 
         assert_eq!(written(&["spec/", "!spec/fixtures/", "xt/"]), expand_presets(written(&["@mine"]), &dir).unwrap().patterns);
         assert_eq!(written(&["!spec/", "!xt/"]), expand_presets(written(&["!@mine"]), &dir).unwrap().patterns,

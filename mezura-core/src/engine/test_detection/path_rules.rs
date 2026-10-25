@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::TestFileName;
+use crate::{RepositoryCheckout, TestFileName};
 use crate::engine::is_the_same_name;
 use crate::engine::path_patterns::{PathPatternMatcher, PatternMatch, TakingBack};
 use crate::engine::targets::spell_out;
@@ -144,12 +144,12 @@ impl TestScope {
         scope
     }
 
-    pub(crate) fn of_target(path: &Path) -> DirectoryScope {
-        let (test_directory, roots) = find_test_directory_along(path);
+    pub(crate) fn of_target(path: &Path, checkout: Option<&RepositoryCheckout>) -> DirectoryScope {
+        let (test_directory, roots) = find_test_directory_along(path, checkout);
         if test_directory.is_some() {
             return DirectoryScope { scope: TestScope::Tests, roots, ..DirectoryScope::default() };
         }
-        let is_jvm_sources = path.file_name().zip(path.parent()).is_some_and(|(name, parent)| {
+        let is_jvm_sources = path.file_name().zip(find_parent_of(path, checkout)).is_some_and(|(name, parent)| {
             let name = name.as_encoded_bytes();
             (roots.jvm_build && is_the_jvm_sources_directory(name)) || is_jvm_sources(name, parent)
         });
@@ -224,11 +224,11 @@ pub(crate) struct DirectoryScope {
 
 impl DirectoryScope {
     pub(crate) fn of_target(path: &Path, names_root: usize, patterns: &PathPatternMatcher, climb: &PresetClimb,
-            own_listing: OwnListing) -> DirectoryScope
+            own_listing: OwnListing, checkout: Option<&RepositoryCheckout>) -> DirectoryScope
     {
-        let mut found = TestScope::of_target(path);
+        let mut found = TestScope::of_target(path, checkout);
         found.names_root = names_root;
-        found.presets = climb.find_presets_above(path, own_listing);
+        found.presets = climb.find_presets_above(path, own_listing, checkout);
         let Some(absolute) = path.to_str() else { return found };
         let mut scratch = Vec::new();
         if !patterns.is_empty() {
@@ -367,13 +367,22 @@ pub(crate) struct PresetClimb {
 }
 
 impl PresetClimb {
-    pub(crate) fn find_presets_above(&self, path: &Path, own_listing: OwnListing) -> Option<Arc<[Arc<ActivePreset>]>> {
-        // The walk reads a directory target's own listing, so the climb starts above it
-        let mut directories = path.ancestors().skip(usize::from(own_listing == OwnListing::ReadByTheWalk)).collect::<Vec<_>>();
+    // Above a checkout, a preset reads names from the checkout's own folder down, the most its paths
+    // can spell, so a preset two folders above the repository never matches the folder between them.
+    pub(crate) fn find_presets_above(&self, path: &Path, own_listing: OwnListing, checkout: Option<&RepositoryCheckout>)
+    -> Option<Arc<[Arc<ActivePreset>]>>
+    {
+        let mut directories = collect_folders_up_from(path, checkout).into_iter()
+                .skip(usize::from(own_listing == OwnListing::ReadByTheWalk)).collect::<Vec<_>>();
         directories.reverse();
         let mut presets = Vec::new();
         for directory in directories {
-            presets.extend(self.read_presets_of(directory));
+            let names_root = match checkout {
+                Some(checkout) if !directory.starts_with(&checkout.root) =>
+                        Path::new(&checkout.root).parent().map_or(0, find_names_root_below),
+                _ => find_names_root_below(directory)
+            };
+            presets.extend(self.read_presets_of(directory, names_root));
         }
         (!presets.is_empty()).then(|| Arc::from(presets))
     }
@@ -382,11 +391,11 @@ impl PresetClimb {
         self.by_directory.into_inner().into_values().flatten().collect()
     }
 
-    fn read_presets_of(&self, directory: &Path) -> Vec<Arc<ActivePreset>> {
+    fn read_presets_of(&self, directory: &Path, names_root: usize) -> Vec<Arc<ActivePreset>> {
         if let Some(known) = self.by_directory.borrow().get(directory) {
             return known.clone();
         }
-        let turned_on = read_trigger_files_of(directory).turn_on(directory);
+        let turned_on = read_trigger_files_of(directory).turn_on_reading_names_from(directory, names_root);
         self.by_directory.borrow_mut().insert(directory.to_path_buf(), turned_on.clone());
         turned_on
     }
@@ -446,14 +455,20 @@ impl TriggerFilesSeen {
         if self.is_empty() {
             return Vec::new();
         }
+        self.turn_on_reading_names_from(directory, find_names_root_below(directory))
+    }
+
+    fn turn_on_reading_names_from(self, directory: &Path, names_root: usize) -> Vec<Arc<ActivePreset>> {
+        if self.is_empty() {
+            return Vec::new();
+        }
         TEST_PRESETS.iter().enumerate().filter_map(|(at, preset)| {
             let trigger_file = preset.trigger_files.iter().find(|file| self.holds(file))?;
             if preset.companion_file.is_some_and(|companion| !self.holds(companion)) {
                 return None;
             }
-            Some(Arc::new(ActivePreset { preset, trigger_file, directory: spell_out(directory),
-                    names_root: find_names_root_below(directory), matcher: get_preset_matcher(at),
-                    matched: AtomicBool::new(false) }))
+            Some(Arc::new(ActivePreset { preset, trigger_file, directory: spell_out(directory), names_root,
+                    matcher: get_preset_matcher(at), matched: AtomicBool::new(false) }))
         }).collect()
     }
 
@@ -478,14 +493,16 @@ pub(crate) struct TestDirectory<'a> {
 
 // The components are read by name, and the disk is asked only at one named like a test
 // directory, plus the root files at every directory above the path.
-pub(crate) fn find_test_directory_along(path: &Path) -> (Option<TestDirectory<'_>>, RootsAbove) {
-    let mut directories = path.ancestors().collect::<Vec<_>>();
+pub(crate) fn find_test_directory_along<'a>(path: &'a Path, checkout: Option<&'a RepositoryCheckout>)
+-> (Option<TestDirectory<'a>>, RootsAbove)
+{
+    let mut directories = collect_folders_up_from(path, checkout);
     directories.reverse();
     let mut jvm_build_root = None;
     let mut go_module_root = None;
     for directory in directories {
         let roots = RootsAbove { jvm_build: jvm_build_root.is_some(), go_module: go_module_root.is_some() };
-        if let (Some(name), Some(parent)) = (directory.file_name(), directory.parent()) {
+        if let (Some(name), Some(parent)) = (directory.file_name(), find_parent_of(directory, checkout)) {
             let name = name.as_encoded_bytes();
             if let Some(root) = &jvm_build_root && is_the_jvm_test_directory(name)
                     && parent.file_name().is_some_and(|above| is_the_jvm_sources_directory(above.as_encoded_bytes())) {
@@ -494,7 +511,7 @@ pub(crate) fn find_test_directory_along(path: &Path) -> (Option<TestDirectory<'_
             if let Some(root) = &go_module_root && is_the_same_name(name, GO_TEST_DATA_DIRECTORY.as_bytes()) {
                 return (Some(TestDirectory { directory, build_files: vec![PathBuf::clone(root)] }), roots);
             }
-            if let Some((holder, files)) = find_build_of_test_directory(name, parent) {
+            if let Some((holder, files)) = find_build_of_test_directory(name, parent, checkout) {
                 let build_files = files.iter().map(|file| holder.join(file)).collect();
                 return (Some(TestDirectory { directory, build_files }), roots);
             }
@@ -565,7 +582,9 @@ fn read_trigger_files_of(directory: &Path) -> TriggerFilesSeen {
     seen
 }
 
-fn find_build_of_test_directory<'a>(name: &[u8], parent: &'a Path) -> Option<(&'a Path, &'static [&'static str])> {
+fn find_build_of_test_directory<'a>(name: &[u8], parent: &'a Path, checkout: Option<&'a RepositoryCheckout>)
+-> Option<(&'a Path, &'static [&'static str])>
+{
     BUILD_TOOLS.iter().find_map(|tool| tool.test_directories.iter().find_map(|directory| {
         let (above, last) = match directory.rsplit_once('/') {
             Some((above, last)) => (Some(above), last),
@@ -578,10 +597,23 @@ fn find_build_of_test_directory<'a>(name: &[u8], parent: &'a Path) -> Option<(&'
             None => Some(parent),
             Some(above) => parent.file_name()
                     .filter(|parent_name| is_the_same_name(parent_name.as_encoded_bytes(), above.as_bytes()))
-                    .and_then(|_| parent.parent())
+                    .and_then(|_| find_parent_of(parent, checkout))
         };
         holder.filter(|holder| tool.files.iter().all(|file| holder.join(file).is_file())).map(|holder| (holder, tool.files))
     }))
+}
+
+fn collect_folders_up_from<'a>(path: &'a Path, checkout: Option<&'a RepositoryCheckout>) -> Vec<&'a Path> {
+    std::iter::successors(Some(path), |directory| find_parent_of(directory, checkout)).collect()
+}
+
+// A checkout sits in a temporary folder that belongs to nobody, so above its root the folders are
+// the repository's
+fn find_parent_of<'a>(directory: &'a Path, checkout: Option<&'a RepositoryCheckout>) -> Option<&'a Path> {
+    match checkout {
+        Some(checkout) if directory == Path::new(&checkout.root) => Path::new(&checkout.repository).parent(),
+        _ => directory.parent()
+    }
 }
 
 fn is_jvm_sources(name: &[u8], parent: &Path) -> bool {
@@ -714,7 +746,7 @@ mod tests {
         let patterns = PathPatternMatcher::compile(&["spec/".to_owned(), "!spec/helpers/".to_owned(), "!tests/fixtures/".to_owned(),
                 "!vendor/".to_owned(), "!*_test.go".to_owned()], crate::engine::path_patterns::TakingBack::Allowed).unwrap();
         let climb = PresetClimb::default();
-        let of = |path: &str| DirectoryScope::of_target(&root.join(path), names_root, &patterns, &climb, OwnListing::ReadByTheWalk);
+        let of = |path: &str| DirectoryScope::of_target(&root.join(path), names_root, &patterns, &climb, OwnListing::ReadByTheWalk, None);
         let child = |holder: &DirectoryScope, path: &str, build_files: &[&str]| {
             let name = Path::new(path).file_name().unwrap().to_str().unwrap().to_owned();
             holder.of_child(&name, seen(build_files), &root.join(path), &patterns, &mut Vec::new())
@@ -790,8 +822,8 @@ mod tests {
                 "sbt/build.sbt", "gradle/settings.gradle.kts", "go/go.mod"] {
             std::fs::write(root.join(file), "").unwrap();
         }
-        let of = |path: &str| TestScope::of_target(&root.join(path)).scope;
-        let inside = |path: &str| TestScope::of_target(&root.join(path)).roots.jvm_build;
+        let of = |path: &str| TestScope::of_target(&root.join(path), None).scope;
+        let inside = |path: &str| TestScope::of_target(&root.join(path), None).roots.jvm_build;
 
         assert_eq!(of("cargo/tests"), Tests);
         assert_eq!(of("cargo/tests/common"), Tests);
@@ -824,13 +856,50 @@ mod tests {
 
         assert_eq!(of("go/testdata"), Tests);
         assert_eq!(of("go/pkg/testdata/deep"), Tests, "a 'testdata' deeper down the module");
-        assert_eq!((of("go/pkg/data"), TestScope::of_target(&root.join("go/pkg/data")).roots.go_module), (Ordinary, true));
-        assert_eq!((of("go"), TestScope::of_target(&root.join("go")).roots.go_module), (Ordinary, false));
+        assert_eq!((of("go/pkg/data"), TestScope::of_target(&root.join("go/pkg/data"), None).roots.go_module), (Ordinary, true));
+        assert_eq!((of("go"), TestScope::of_target(&root.join("go"), None).roots.go_module), (Ordinary, false));
         assert_eq!(of("loose/testdata"), Ordinary, "a 'testdata' with no go.mod above it");
         let deep = root.join("go/pkg/testdata/deep");
-        let (found, _) = find_test_directory_along(&deep);
+        let (found, _) = find_test_directory_along(&deep, None);
         let found = found.unwrap();
         assert_eq!((root.join("go/pkg/testdata").as_path(), vec![root.join("go/go.mod")]), (found.directory, found.build_files));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    // The checkout sits under a folder named 'test' and the repository's parent has a shorter name,
+    // so a preset reading names from where its own folder ends in the repository's spelling would
+    // take the checkout whole through mocha's 'test/'
+    #[test]
+    fn a_checkout_reads_the_folders_above_the_repository_and_never_the_ones_it_was_written_into() {
+        let root = std::env::temp_dir().join("mezura_checkout_climb");
+        let _ = std::fs::remove_dir_all(&root);
+        for dir in ["w/web", "a/test/holder/web/src", "a/test/holder/web/testdata"] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in ["w/jest.config.js", "w/.mocharc.json", "w/go.mod", "a/test/holder/web/src/a.test.ts"] {
+            std::fs::write(root.join(file), "").unwrap();
+        }
+        let at = |path: &str| PathBuf::from(spell_out(&root.join(path)));
+        let checkout = RepositoryCheckout { root: spell_out(&root.join("a/test/holder/web")), repository: spell_out(&root.join("w/web")) };
+        let patterns = PathPatternMatcher::compile(&[] as &[String], TakingBack::Allowed).unwrap();
+        let names_root = spell_out(&root.join("a/test/holder")).len() + 1;
+
+        let climb = PresetClimb::default();
+        let presets = climb.find_presets_above(&at("a/test/holder/web"), OwnListing::ReadByTheWalk, Some(&checkout)).unwrap();
+        assert_eq!(vec!["jest", "mocha"], presets.iter().map(|preset| preset.preset.name).collect::<Vec<_>>());
+        assert!(PresetClimb::default().find_presets_above(&at("a/test/holder/web"), OwnListing::ReadByTheWalk, None).is_none());
+
+        let target = DirectoryScope::of_target(&at("a/test/holder/web"), names_root, &patterns, &climb, OwnListing::ReadByTheWalk,
+                Some(&checkout));
+        assert_eq!(TestScope::Ordinary, target.scope, "mocha's 'test/' took the folder the checkout was written into");
+        let sources = DirectoryScope::of_target(&at("a/test/holder/web/src"), names_root, &patterns, &climb,
+                OwnListing::ReadByTheWalk, Some(&checkout));
+        assert_eq!(TestScope::Tests, sources.of_file(&at("a/test/holder/web/src/a.test.ts"), &patterns, &mut Vec::new()).0);
+
+        assert_eq!(TestScope::Tests, TestScope::of_target(&at("a/test/holder/web/testdata"), Some(&checkout)).scope,
+                "a 'go.mod' above the repository was not read for its checkout");
+        assert_eq!(TestScope::Ordinary, TestScope::of_target(&at("a/test/holder/web/testdata"), None).scope);
 
         std::fs::remove_dir_all(&root).unwrap();
     }

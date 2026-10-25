@@ -1013,7 +1013,8 @@ impl ConfigurationBuilder {
                 count_keywords: !hidden.keywords,
                 detect_tests: !hidden.tests,
                 collect_files: self.by_file.is_some(),
-                test_patterns: self.test_patterns.clone().unwrap_or_default()
+                test_patterns: self.test_patterns.clone().unwrap_or_default(),
+                checkout: None
             },
             view: ViewConfig {
                 version: VERSION_ID,
@@ -1461,7 +1462,7 @@ fn save_the_test_preset(name: &str, patterns: &[String]) {
     match write_user_preset(presets_dir, name, patterns) {
         Err(error) => eprintln!("\n{}", wrap_message(&format!(
                 "Test preset '{name}' could not be written to '{presets_dir}': {error}")).yellow()),
-        Ok(path) => eprintln!("\nTest preset '{name}' saved in '{path}'. Use it with '--{TESTS} @{name}'.")
+        Ok(path) => eprintln!("\nTest preset '{name}' saved in '{path}'. Use it with '--{TESTS} \"@{name}\"'.")
     }
 }
 
@@ -1502,10 +1503,10 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
 
     // A bad value here is skipped when it decides how the report looks and stops the run when it
     // decides what gets counted.
-    let (changes_the_numbers, presentation) : (Vec<&str>, Vec<&str>) = issues.invalid_fields.iter()
-            .partition(|field| CHANGES_THE_NUMBERS.contains(field));
-    for field in presentation {
-        report_ignored_config_value(field, &label);
+    let (changes_the_numbers, presentation) : (Vec<_>, Vec<_>) = issues.invalid_fields.into_iter()
+            .partition(|(field, _)| CHANGES_THE_NUMBERS.contains(field));
+    for (field, why) in &presentation {
+        report_ignored_config_value(field, why.as_deref(), &label);
     }
     resolve_invalid_config_fields(config_builder, &changes_the_numbers, &label)?;
 
@@ -1537,8 +1538,8 @@ fn apply_default_configuration(config_builder: &mut ConfigurationBuilder)
     let under_a_project = config_builder.local_dir.as_ref().is_some_and(|x| x.configuration_applied);
     let (default_config, invalid_fields) = if under_a_project {
         (default_config.forget_what_changes_the_numbers(),
-                issues.invalid_fields.iter().copied()
-                        .filter(|field| !CHANGES_THE_NUMBERS.contains(field)).collect())
+                issues.invalid_fields.into_iter()
+                        .filter(|(field, _)| !CHANGES_THE_NUMBERS.contains(field)).collect())
     } else {
         (default_config, issues.invalid_fields)
     };
@@ -1629,7 +1630,10 @@ fn print_config_file_warnings(issues: &[(mezura_core::warnings::Code, String)], 
 
 // Every command that can end up in 'invalid_fields' belongs here. One that is missing is treated as
 // never overridden, so giving it correctly on the command line would still not rescue the run.
-fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_fields: &[&str], config_name: &str) -> Result<(), ArgParsingError> {
+fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_fields: &[(&str, Option<String>)],
+        config_name: &str)
+-> Result<(), ArgParsingError>
+{
     // Destructured with no '..', so a new field of the builder stops the build here until somebody
     // decides whether it belongs in the match below.
     let ConfigurationBuilder {
@@ -1650,7 +1654,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             // still applies, so these warn instead of reaching here
             styles: _, config_styles: _, theme_styles: _ } = config_builder;
 
-    for field in invalid_fields {
+    for (field, why) in invalid_fields {
         let is_overridden = match *field {
             TARGETS => targets.is_some(),
             THREADS => threads.is_some(),
@@ -1684,8 +1688,11 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
         };
 
         if is_overridden {
-            report_ignored_config_value(field, config_name);
+            report_ignored_config_value(field, why.as_deref(), config_name);
         } else {
+            if let Some(why) = why {
+                eprintln!("\n{}", wrap_message(&format!("In config '{config_name}': {why}")).red());
+            }
             message_printer::print_help_message_for_command(field);
             return Err(ArgParsingError::InvalidValueInConfig(field.to_string(), config_name.to_owned()));
         }
@@ -1694,9 +1701,10 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
     Ok(())
 }
 
-fn report_ignored_config_value(field: &str, config_name: &str) {
+fn report_ignored_config_value(field: &str, why: Option<&str>, config_name: &str) {
+    let why = why.map(|why| format!(" {why}")).unwrap_or_default();
     super::warning_collector::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConfigValueIgnored, field,
-            format!("Invalid value for the command '--{field}', in config '{config_name}'. The value will be ignored.")));
+            format!("Invalid value for the command '--{field}', in config '{config_name}'.{why} The value will be ignored.")));
 }
 
 fn print_warnings_for_commands_that_need_a_loaded_configuration(builder: &ConfigurationBuilder,
