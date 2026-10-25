@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use mezura_core::{AppliedPreset, FaultyFileDetails, RunResult, ScanSkip, UnreadableDirDetails};
 
 use super::config_manager::Configuration;
 use super::config_manager::HIDE;
-use crate::message_printer::{format_tests_command, quote_for_the_shell};
+use crate::message_printer::{format_tests_command, join_with, quote_for_the_shell};
 use crate::message_printer::MESSAGE_WIDTH;
 use crate::paths::PERSISTENT_APP_PATHS;
 use crate::result_printer::{find_outermost_directories, format_cut_list, format_preset_directory};
@@ -14,16 +15,17 @@ use crate::result_printer::{find_outermost_directories, format_cut_list, format_
 const GENERIC_PROJECT_FILES : [GenericProjectFile; 4] = [
     GenericProjectFile { file_name: "package.json",
             words_by_name_of_preset: &[("jest", &["jest", "react-scripts"]), ("vitest", &["vitest"]), ("mocha", &["mocha"])],
-            names_of_languages: &["JavaScript", "TypeScript", "JSX", "TSX"] },
+            names_of_languages: &["JavaScript", "TypeScript", "JSX", "TSX"], declares_workspace_members: true },
     GenericProjectFile { file_name: "pyproject.toml",
             words_by_name_of_preset: &[("pytest", &["pytest"]), ("unittest", &["unittest", "django"])],
-            names_of_languages: &["Python"] },
+            names_of_languages: &["Python"], declares_workspace_members: false },
     GenericProjectFile { file_name: "Gemfile",
             words_by_name_of_preset: &[("rspec", &["rspec"]), ("minitest", &["minitest", "rails"])],
-            names_of_languages: &["Ruby"] },
+            names_of_languages: &["Ruby"], declares_workspace_members: false },
     GenericProjectFile { file_name: "composer.json", words_by_name_of_preset: &[("phpunit", &["phpunit"])],
-            names_of_languages: &["PHP"] },
+            names_of_languages: &["PHP"], declares_workspace_members: false },
 ];
+const WORKSPACE_GLOBSTAR_DEPTH : usize = 3;
 
 pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>, config: &Configuration) {
     let datetime_now = chrono::Local::now();
@@ -266,7 +268,8 @@ fn find_most_shown_that_fit(opening: &str, count: usize, format_rest: impl Fn(us
 struct GenericProjectFile {
     file_name: &'static str,
     words_by_name_of_preset: &'static [(&'static str, &'static [&'static str])],
-    names_of_languages: &'static [&'static str]
+    names_of_languages: &'static [&'static str],
+    declares_workspace_members: bool
 }
 
 // The file is read last, so a run that would print no hint reads nothing
@@ -281,8 +284,7 @@ fn find_names_of_presets_to_suggest(result: &RunResult) -> Vec<Vec<&'static str>
         if !counted || tests_found {
             return None;
         }
-        let contents = result.targets.iter()
-                .filter_map(|target| std::fs::read(std::path::Path::new(&target.path).join(generic.file_name)).ok())
+        let contents = result.targets.iter().flat_map(|target| read_project_files_of(Path::new(&target.path), generic))
                 .collect::<Vec<_>>();
         let named = generic.words_by_name_of_preset.iter()
                 .filter(|(_, words)| words.iter().any(|word| contents.iter().any(|text| contains_word(text, word))))
@@ -291,22 +293,102 @@ fn find_names_of_presets_to_suggest(result: &RunResult) -> Vec<Vec<&'static str>
     }).collect()
 }
 
+// Only the declared members are read, since a search of the folders reaches node_modules and test fixtures
+fn read_project_files_of(target: &Path, generic: &GenericProjectFile) -> Vec<Vec<u8>> {
+    let Ok(own) = std::fs::read(target.join(generic.file_name)) else { return Vec::new() };
+    let members = match generic.declares_workspace_members {
+        true => find_workspace_members(target, &own),
+        false => Vec::new()
+    };
+    let of_members = members.iter().filter_map(|member| std::fs::read(member.join(generic.file_name)).ok()).collect::<Vec<_>>();
+
+    std::iter::once(own).chain(of_members).collect()
+}
+
+fn find_workspace_members(root: &Path, package_json: &[u8]) -> Vec<PathBuf> {
+    let mut patterns = Vec::new();
+    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(package_json)
+            && let Some(declared) = json.get("workspaces").map(|declared| declared.get("packages").unwrap_or(declared))
+            && let Some(listed) = declared.as_array() {
+        patterns.extend(listed.iter().filter_map(|pattern| pattern.as_str().map(str::to_owned)));
+    }
+    if let Ok(yaml) = std::fs::read_to_string(root.join("pnpm-workspace.yaml")) {
+        patterns.extend(parse_pnpm_package_patterns(&yaml));
+    }
+    let (excluded, included): (Vec<&String>, Vec<&String>) = patterns.iter().partition(|pattern| pattern.starts_with('!'));
+    let excluded = excluded.iter().flat_map(|pattern| expand_directory_pattern(root, &pattern[1..])).collect::<Vec<_>>();
+    let mut members = included.iter().flat_map(|pattern| expand_directory_pattern(root, pattern))
+            .filter(|member| !excluded.contains(member)).collect::<Vec<_>>();
+    members.sort();
+    members.dedup();
+
+    members
+}
+
+fn parse_pnpm_package_patterns(yaml: &str) -> Vec<String> {
+    let mut patterns = Vec::new();
+    let mut in_packages = false;
+    for line in yaml.lines() {
+        let line = line.split(" #").next().unwrap_or_default().trim_end();
+        if line.trim().is_empty() || line.trim_start().starts_with('#') {
+            continue;
+        }
+        if !line.starts_with([' ', '\t', '-']) {
+            in_packages = line.starts_with("packages:");
+        } else if in_packages && let Some(item) = line.trim_start().strip_prefix('-') {
+            patterns.push(item.trim().trim_matches(['\'', '"']).to_owned());
+        }
+    }
+
+    patterns
+}
+
+// A '**' matches no folder as well as several, so 'packages/**' takes 'packages' itself
+fn expand_directory_pattern(root: &Path, pattern: &str) -> Vec<PathBuf> {
+    let mut found = vec![root.to_path_buf()];
+    for segment in pattern.split('/').filter(|segment| !segment.is_empty() && *segment != ".") {
+        found = found.into_iter().flat_map(|directory| match segment {
+            "**" => std::iter::once(directory.clone()).chain(list_subdirectories(&directory, WORKSPACE_GLOBSTAR_DEPTH))
+                    .collect::<Vec<_>>(),
+            _ if segment.contains('*') => list_subdirectories(&directory, 1).into_iter()
+                    .filter(|child| child.file_name().and_then(|name| name.to_str())
+                            .is_some_and(|name| matches_name_pattern(name, segment)))
+                    .collect(),
+            _ => vec![directory.join(segment)]
+        }).collect();
+    }
+
+    found
+}
+
+fn list_subdirectories(directory: &Path, depth: usize) -> Vec<PathBuf> {
+    if depth == 0 {
+        return Vec::new();
+    }
+    let children = std::fs::read_dir(directory).map(|entries| entries.flatten().map(|entry| entry.path())
+            .filter(|path| path.is_dir() && path.file_name().and_then(|name| name.to_str())
+                    .is_some_and(|name| !name.starts_with('.') && name != "node_modules"))
+            .collect::<Vec<_>>()).unwrap_or_default();
+    let below = children.iter().flat_map(|child| list_subdirectories(child, depth - 1)).collect::<Vec<_>>();
+
+    children.into_iter().chain(below).collect()
+}
+
+fn matches_name_pattern(name: &str, pattern: &str) -> bool {
+    match pattern.split_once('*') {
+        None => name == pattern,
+        Some((head, rest)) => name.strip_prefix(head).is_some_and(|after| (0..=after.len())
+                .filter(|&at| after.is_char_boundary(at)).any(|at| matches_name_pattern(&after[at..], rest)))
+    }
+}
+
 fn format_preset_suggestion(names: &[&str]) -> String {
     let declared = names.iter().enumerate().map(|(at, name)| match at {
         0 => format_tests_command(&format!("@{name}")),
         _ => quote_for_the_shell(&format!("@{name}"))
     }).collect::<Vec<_>>();
 
-    format!("{} tests are declared with {}.", join_with_or(names), join_with_or(&declared))
-}
-
-fn join_with_or(items: &[impl AsRef<str>]) -> String {
-    match items {
-        [] => String::new(),
-        [only] => only.as_ref().to_owned(),
-        [first @ .., last] => format!("{} or {}", first.iter().map(|item| item.as_ref()).collect::<Vec<&str>>().join(", "),
-                last.as_ref())
-    }
+    format!("{} tests are declared with {}.", join_with(names, "or"), join_with(&declared, "or"))
 }
 
 // '-' and '_' join a word, so 'eslint-plugin-jest' and '@testing-library/jest-dom' do not name jest
@@ -496,6 +578,49 @@ mod tests {
         result.applied_presets = Vec::new();
         std::fs::write(root.join("package.json"), r#"{"devDependencies": {"eslint": "^9", "prettier": "^3"}}"#).unwrap();
         assert!(find_names_of_presets_to_suggest(&result).is_empty(), "a package.json kept for tooling named a test tool");
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_workspace_root_names_the_tools_of_the_members_it_declares_and_of_nothing_else() {
+        let root = std::env::temp_dir().join("mezura-workspace-members");
+        let _ = std::fs::remove_dir_all(&root);
+        let write = |path: &str, contents: &str| {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, contents).unwrap();
+        };
+        let suggested_at = |folder: &str| {
+            let mut result = result_with(0, 0);
+            result.targets = vec![Target::of(crate::paths::normalise_separators(&root.join(folder).to_string_lossy()))];
+            result.per_language.insert("TypeScript".to_owned(), result.total.clone());
+            find_names_of_presets_to_suggest(&result)
+        };
+        write("npm/package.json", r#"{"workspaces": ["packages/*", "!packages/legacy"], "devDependencies": {"prettier": "^3"}}"#);
+        write("npm/packages/web/package.json", r#"{"devDependencies": {"jest": "^29"}}"#);
+        write("npm/packages/legacy/package.json", r#"{"devDependencies": {"mocha": "^10"}}"#);
+        write("npm/packages/cli/package.json", r#"{"scripts": {"test": "tap"}}"#);
+        write("npm/examples/demo/package.json", r#"{"devDependencies": {"vitest": "^2"}}"#);
+        write("pnpm/package.json", r#"{"private": true}"#);
+        write("pnpm/pnpm-workspace.yaml", "packages:\n# the apps\n  - 'apps/**'\n\n  - \"libs/*-core\" # the cores\n\
+                onlyBuiltDependencies:\n  - esbuild\n");
+        write("pnpm/apps/site/web/package.json", r#"{"devDependencies": {"vitest": "^2"}}"#);
+        write("pnpm/apps/node_modules/mocha/package.json", r#"{"name": "mocha"}"#);
+        write("pnpm/libs/date-core/package.json", r#"{"devDependencies": {"jest": "^29"}}"#);
+        write("pnpm/libs/date-ui/package.json", r#"{"devDependencies": {"mocha": "^10"}}"#);
+        write("pnpm/esbuild/package.json", r#"{"devDependencies": {"mocha": "^10"}}"#);
+        write("globstar/package.json", r#"{"private": true}"#);
+        write("globstar/pnpm-workspace.yaml", "packages:\n  - 'tools/*/**'\n");
+        write("globstar/tools/lint/package.json", r#"{"devDependencies": {"mocha": "^10"}}"#);
+
+        assert_eq!(vec![vec!["jest"]], suggested_at("npm"),
+                "a member taken back by '!', a folder the root does not declare or a member running tap named a tool");
+        write("npm/package.json", r#"{"workspaces": {"packages": ["packages/web"]}}"#);
+        assert_eq!(vec![vec!["jest"]], suggested_at("npm"), "the members under 'workspaces.packages' were not read");
+        assert_eq!(vec![vec!["jest", "vitest"]], suggested_at("pnpm"),
+                "pnpm-workspace.yaml was misread past a comment, a blank line, a '**', a '*-core' or another key's list");
+        assert_eq!(vec![vec!["mocha"]], suggested_at("globstar"), "a '**' did not take the folder it stands for itself");
 
         std::fs::remove_dir_all(&root).unwrap();
     }

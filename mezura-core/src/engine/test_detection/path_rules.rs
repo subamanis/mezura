@@ -46,10 +46,10 @@ const JEST_PATTERNS : [&str; 17] = ["__tests__/", "*.test.js", "*.test.jsx", "*.
 const VITEST_PATTERNS : [&str; 16] = ["*.test.js", "*.test.jsx", "*.test.ts", "*.test.tsx", "*.test.mjs", "*.test.cjs",
         "*.test.mts", "*.test.cts", "*.spec.js", "*.spec.jsx", "*.spec.ts", "*.spec.tsx", "*.spec.mjs", "*.spec.cjs",
         "*.spec.mts", "*.spec.cts"];
-// A trigger belongs to one test tool, except 'vite.config.*', which is vite's and which vitest
-// reads. A 'package.json' or a 'pytest.ini' says nothing about where the tests are without being
-// read, and the walk reads listings only. '.rspec' needs the 'Gemfile' beside it, or the one in a
-// home directory makes every 'spec' under it test code.
+// A trigger names its tool without being read. It is the tool's own file, a gradle or Perl build
+// file, or vite's, which vitest reads. A 'package.json' or a 'pytest.ini' says nothing about where
+// the tests are without being read, and the walk reads listings only. '.rspec' needs the 'Gemfile'
+// beside it, or the one in a home directory makes every 'spec' under it test code.
 pub(crate) const TEST_PRESETS : [TestPreset; 13] = [
     TestPreset { name: "jest", trigger_files: &["jest.config.js", "jest.config.ts", "jest.config.mjs", "jest.config.mts",
             "jest.config.cjs", "jest.config.cts", "jest.config.json"], companion_file: None, patterns: &JEST_PATTERNS },
@@ -233,7 +233,7 @@ impl DirectoryScope {
         found.presets = climb.find_presets_above(path, own_listing, checkout);
         let Some(absolute) = path.to_str() else { return found };
         if !patterns.is_empty() {
-            let declared = patterns.find_last_match_along(absolute, names_root, false, &mut Vec::new());
+            let declared = patterns.find_last_match_along(absolute, names_root, false);
             (found.scope, found.decided_by) = found.scope.overruled_by(None, declared);
         }
         if found.scope.is_undecided() {

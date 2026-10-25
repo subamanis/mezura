@@ -47,8 +47,8 @@ New:
   `EngineConfig::test_patterns` takes any of it back, and `RunResult::applied_presets` lists every
   preset so turned on as an `AppliedPreset`, with its directory, the file that turned it on and
   whether it decided any file. `TestFileRule::Preset` names every preset that decided a file, each
-  as a `MatchedPreset` with the file that turned it on and the pattern that matched. The warning code `preset-file-shadowed` is for a caller's own preset
-  carrying a shipped one's name.
+  as a `MatchedPreset` with the file that turned it on and the pattern that matched. The warning
+  code `preset-file-shadowed` is for a caller's own preset carrying a shipped one's name.
 - A `testdata` directory at any depth below a `go.mod` is test code whole, as the go tool treats it.
 - `EngineConfig::checkout` takes a `RepositoryCheckout`, a checkout's root and the repository it
   was written from, for targets inside a revision written out to another place. The build files and

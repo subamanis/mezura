@@ -433,7 +433,7 @@ fn report_languages_that_lost_every_claim(lost: Vec<mezura_core::warnings::Warni
     let Some((last, first)) = names.split_last() else { return };
     let (named, they) = match first {
         [] => (last.clone(), "it claims belongs to another language, so no file can be counted as it"),
-        _ => (format!("{} and {last}", first.join(", ")),
+        _ => (crate::message_printer::join_with(&names, "and"),
                 "they claim belongs to another language, so no file can be counted as them")
     };
 

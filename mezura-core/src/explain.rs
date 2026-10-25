@@ -45,12 +45,13 @@ pub enum TestFileRule {
     },
     /// Its name has a shape its language keeps for test files, `*_test.go`.
     FileName(TestFileName),
-    /// A test tool's own file turned the tool's default names on under its directory, and one of
-    /// them matches it.
+    /// Test tools' own files turned their default names on in folders above it, and a name of every
+    /// tool listed matches it.
     Preset {
-        /// Every preset that has a name for it at the place that decided.
+        /// Every tool with a name for it at the first place along its path where any of them has
+        /// one. That place is the file itself or `matched_folder`. Never empty.
         presets: Vec<MatchedPreset>,
-        /// The folder above the file that the pattern matched. None where it matched the file itself.
+        /// That place, where it is a folder above the file. None where it is the file itself.
         matched_folder: Option<String>
     },
     /// A test pattern declares it.
@@ -664,7 +665,7 @@ mod tests {
                 ("proj/lib/d.test.ts", "test('d', () => {});\n"), ("proj/rails/.rspec", ""), ("proj/rails/Gemfile", ""),
                 ("proj/rails/jest.config.js", "module.exports = {};\n"), ("proj/rails/spec/javascript/cart.test.js", "test('c', () => {});\n"),
                 ("proj/both/jest.config.js", "module.exports = {};\n"), ("proj/both/vite.config.ts", "export default {};\n"),
-                ("proj/both/src/a.test.ts", "test('a', () => {});\n"), ("proj/both/src/__tests__/b.ts", "test('b', () => {});\n"),
+                ("proj/both/src/a.test.ts", "test('a', () => {});\n"), ("proj/both/src/__tests__/b.test.ts", "test('b', () => {});\n"),
                 ("proj/nest/jest.config.js", "module.exports = {};\n"), ("proj/nest/app/vite.config.ts", "export default {};\n"),
                 ("proj/nest/app/x.test.ts", "test('x', () => {});\n")] {
             let path = root.join(file);
@@ -698,7 +699,7 @@ mod tests {
                 explain("proj/both/src/a.test.ts", &default).0, "both tools have a name for the file and one was left out");
         assert_eq!(Some(TestFileRule::Preset { presets: vec![matched("jest", "proj/both", "jest.config.js", "__tests__/")],
                 matched_folder: Some(at("proj/both/src/__tests__")) }),
-                explain("proj/both/src/__tests__/b.ts", &default).0, "a tool with a name only for the file was named over the folder");
+                explain("proj/both/src/__tests__/b.test.ts", &default).0, "a tool with a name only for the file was named over the folder");
         assert_eq!(Some(TestFileRule::Preset { presets: vec![matched("jest", "proj/nest", "jest.config.js", "*.test.ts"),
                 matched("vitest", "proj/nest/app", "vite.config.ts", "*.test.ts")], matched_folder: None }),
                 explain("proj/nest/app/x.test.ts", &default).0, "a tool whose file sits in another folder above was left out");

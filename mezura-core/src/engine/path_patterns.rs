@@ -225,12 +225,11 @@ impl PathPatternMatcher {
 
     // Every folder from the root down is read before the target itself, so a later pattern wins
     // across folders here as it does in the walk
-    pub(crate) fn find_last_match_along(&self, absolute: &str, names_root: usize, ends_with_a_file: bool, found: &mut Vec<usize>)
-    -> Option<PatternMatch>
-    {
+    pub(crate) fn find_last_match_along(&self, absolute: &str, names_root: usize, ends_with_a_file: bool) -> Option<PatternMatch> {
+        let mut found = Vec::new();
         find_ends_along(absolute, names_root).filter_map(|end| {
             let is_folder = end < absolute.len() || !ends_with_a_file;
-            self.find_last_match(&absolute[..end], names_root, is_folder, found)
+            self.find_last_match(&absolute[..end], names_root, is_folder, &mut found)
         }).max_by_key(|decided| decided.written_at)
     }
 
@@ -460,7 +459,7 @@ mod tests {
         assert_eq!(None, decide(&found, "D:/dev/proj/src/parser.go", root, false));
         assert_eq!(Some((3, false)), decide(&found, "D:/dev/proj/vendor/tests", root, true), "two patterns match and the later one decides");
 
-        let along = |absolute: &str, ends_with_a_file: bool| found.find_last_match_along(absolute, root, ends_with_a_file, &mut Vec::new())
+        let along = |absolute: &str, ends_with_a_file: bool| found.find_last_match_along(absolute, root, ends_with_a_file)
                 .map(|x| (x.written_at, x.negated));
         assert_eq!(Some((1, true)), along("D:/dev/proj/tests/fixtures/a.rs", true), "the folders above the file were not read");
         assert_eq!(Some((0, false)), along("D:/dev/proj/tests/unit/a.rs", true));

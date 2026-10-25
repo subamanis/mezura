@@ -8,7 +8,7 @@ use mezura_core::{Bucket, Carried, CountingModel, EngineConfig, ExplainError, Fi
 
 use crate::config_manager::{Configuration, ExplainedLines, get_command_that_counts};
 use crate::json_printer::{create_array, create_string_array, escape};
-use crate::message_printer::wrap_message;
+use crate::message_printer::{join_with, wrap_message};
 use crate::theme::get_active;
 
 pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
@@ -311,7 +311,7 @@ fn describe_test_file_rule(rule: &TestFileRule, language: &str) -> Option<String
     match rule {
         TestFileRule::TestDirectory { directory, build_files } => Some(format!("The whole file is test code: it \
                 is inside '{directory}', the test folder of {}.",
-                build_files.iter().map(|file| format!("'{file}'")).collect::<Vec<_>>().join(" and "))),
+                join_with(&build_files.iter().map(|file| format!("'{file}'")).collect::<Vec<_>>(), "and"))),
         TestFileRule::FileName(shape) => Some(format!("The whole file is test code: {language} names its test \
                 files '{shape}'.")),
         TestFileRule::Preset { presets, matched_folder } => Some(format!("The whole file is test code: {}, and {} {}.",
@@ -351,9 +351,9 @@ fn describe_presets_turned_on(presets: &[MatchedPreset]) -> String {
         let here = presets.iter().filter(|preset| preset.directory == *directory).collect::<Vec<_>>();
         let files = here.iter().map(|preset| format!("'{}'", preset.trigger_file)).collect::<Vec<_>>();
         let names = here.iter().map(|preset| preset.name.as_str()).collect::<Vec<_>>();
-        format!("{} in '{directory}' {} on the test names of {}", join_with_and(&files),
-                if here.len() == 1 { "turns" } else { "turn" }, join_with_and(&names))
-    }).collect::<Vec<_>>().join(" and ")
+        format!("{} in '{directory}' {} on the test names of {}", join_with(&files, "and"),
+                if here.len() == 1 { "turns" } else { "turn" }, join_with(&names, "and"))
+    }).collect::<Vec<_>>().join("; ")
 }
 
 fn describe_preset_patterns(presets: &[MatchedPreset]) -> String {
@@ -364,16 +364,7 @@ fn describe_preset_patterns(presets: &[MatchedPreset]) -> String {
         }
     }
     let quoted = patterns.iter().map(|pattern| format!("'{pattern}'")).collect::<Vec<_>>();
-    format!("{} {}", join_with_and(&quoted), if quoted.len() == 1 { "matches" } else { "match" })
-}
-
-fn join_with_and(items: &[impl AsRef<str>]) -> String {
-    match items {
-        [] => String::new(),
-        [only] => only.as_ref().to_owned(),
-        [first @ .., last] => format!("{} and {}", first.iter().map(|item| item.as_ref()).collect::<Vec<&str>>().join(", "),
-                last.as_ref())
-    }
+    format!("{} {}", join_with(&quoted, "and"), if quoted.len() == 1 { "matches" } else { "match" })
 }
 
 fn build_test_file_entry(rule: &TestFileRule) -> Option<String> {
@@ -485,7 +476,7 @@ mod tests {
                 of jest and vitest, and '*.test.ts' matches it.".to_owned()),
                 describe_test_file_rule(&TestFileRule::Preset { presets: vec![matched("jest", "D:/web", "jest.config.js", "*.test.ts"),
                         matched("vitest", "D:/web", "vite.config.ts", "*.test.ts")], matched_folder: None }, "TypeScript"));
-        assert_eq!(Some("The whole file is test code: 'jest.config.js' in 'D:/web' turns on the test names of jest and \
+        assert_eq!(Some("The whole file is test code: 'jest.config.js' in 'D:/web' turns on the test names of jest; \
                 'vite.config.ts' in 'D:/web/app' turns on the test names of vitest, and '*.test.ts' matches it.".to_owned()),
                 describe_test_file_rule(&TestFileRule::Preset { presets: vec![matched("jest", "D:/web", "jest.config.js", "*.test.ts"),
                         matched("vitest", "D:/web/app", "vite.config.ts", "*.test.ts")], matched_folder: None }, "TypeScript"));

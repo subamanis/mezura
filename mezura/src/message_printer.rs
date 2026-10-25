@@ -1707,6 +1707,15 @@ pub fn format_tests_command(argument: &str) -> String {
     }
 }
 
+pub fn join_with(items: &[impl AsRef<str>], conjunction: &str) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.as_ref().to_owned(),
+        [first @ .., last] => format!("{} {conjunction} {}",
+                first.iter().map(|item| item.as_ref()).collect::<Vec<&str>>().join(", "), last.as_ref())
+    }
+}
+
 // Two files declaring one language is a broken installation, and naming it twice here would read as
 // two languages rather than as the one it is. Their extensions are merged under the one name, since
 // which of the two files was read is not decided by anything the reader can see.
