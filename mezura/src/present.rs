@@ -307,6 +307,7 @@ fn read_project_files_of(target: &Path, generic: &GenericProjectFile) -> Vec<Vec
 
 fn find_workspace_members(root: &Path, package_json: &[u8]) -> Vec<PathBuf> {
     let mut patterns = Vec::new();
+    let package_json = package_json.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(package_json);
     if let Ok(json) = serde_json::from_slice::<serde_json::Value>(package_json)
             && let Some(declared) = json.get("workspaces").map(|declared| declared.get("packages").unwrap_or(declared))
             && let Some(listed) = declared.as_array() {
@@ -613,6 +614,8 @@ mod tests {
         write("globstar/package.json", r#"{"private": true}"#);
         write("globstar/pnpm-workspace.yaml", "packages:\n  - 'tools/*/**'\n");
         write("globstar/tools/lint/package.json", r#"{"devDependencies": {"mocha": "^10"}}"#);
+        write("bom/package.json", "\u{feff}{\"workspaces\": [\"packages/*\"]}");
+        write("bom/packages/web/package.json", r#"{"devDependencies": {"jest": "^29"}}"#);
 
         assert_eq!(vec![vec!["jest"]], suggested_at("npm"),
                 "a member taken back by '!', a folder the root does not declare or a member running tap named a tool");
@@ -621,6 +624,7 @@ mod tests {
         assert_eq!(vec![vec!["jest", "vitest"]], suggested_at("pnpm"),
                 "pnpm-workspace.yaml was misread past a comment, a blank line, a '**', a '*-core' or another key's list");
         assert_eq!(vec![vec!["mocha"]], suggested_at("globstar"), "a '**' did not take the folder it stands for itself");
+        assert_eq!(vec![vec!["jest"]], suggested_at("bom"), "a package.json opening with a byte order mark lost its members");
 
         std::fs::remove_dir_all(&root).unwrap();
     }
