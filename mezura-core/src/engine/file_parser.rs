@@ -1445,6 +1445,27 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
     tests_by_path: TestsByPath, log: &mut ExplainLog) -> FileReport
 {
+    let test_walk = TestWalk::of(language, contents, config.detect_tests, tests_by_path);
+    let declarations = match &language.module_keyword {
+        Some(keyword) if config.detect_tests && tests_by_path != TestsByPath::WholeFile =>
+                Some(ModuleDeclarations::of(keyword, contents)),
+        _ => None
+    };
+    let full = EXPLAIN || test_walk.is_some() || declarations.as_ref().is_some_and(|reader| reader.quiet_until() < usize::MAX)
+            || language.heredoc.is_some() || language.declares_line_bound_comments() || !language.nested_languages.is_empty();
+    match full {
+        true => read_lines::<EXPLAIN, true>(contents, language, lookup, matchers, config, buffers, tests_by_path,
+                test_walk, declarations, log),
+        false => read_lines::<false, false>(contents, language, lookup, matchers, config, buffers, tests_by_path,
+                None, declarations, log)
+    }
+}
+
+fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, language: &'a Language,
+    lookup: &NestedLanguageLookup, matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
+    tests_by_path: TestsByPath, test_walk: Option<TestWalk<'a>>, mut declarations: Option<ModuleDeclarations<'a>>,
+    log: &mut ExplainLog) -> FileReport
+{
     let ParseBuffers { scan, alias_indices, code_spans, test_ranges, .. } = buffers;
     let mut shell_stats = if config.count_keywords { FileStats::with_keywords(&language.keywords) }
             else { FileStats::default() };
@@ -1454,14 +1475,10 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     // Nothing but the keyword search reads the spans, so a language with no keywords builds none
     let collecting_spans = config.count_keywords && matchers.for_language(language).is_some();
     let whole_file_is_tests = tests_by_path == TestsByPath::WholeFile;
-    let mut test_walk = TestWalk::of(language, contents, config.detect_tests, tests_by_path);
-    let mut declarations = match &language.module_keyword {
-        Some(keyword) if config.detect_tests && !whole_file_is_tests => Some(ModuleDeclarations::of(keyword, contents)),
-        _ => None
-    };
+    let mut test_walk = if FULL { test_walk } else { None };
     // The plain path writes a line's code range only where the nested language search, the test
     // extent or the module declarations read it
-    let sections_want_ranges = !language.nested_languages.is_empty();
+    let sections_want_ranges = FULL && !language.nested_languages.is_empty();
     let find_quiet_until = |test_walk: &Option<TestWalk>, declarations: &Option<ModuleDeclarations>| match sections_want_ranges {
         true => 0,
         false => match test_walk.as_ref().map_or(usize::MAX, TestWalk::quiet_until) {
@@ -1479,9 +1496,9 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     let mut buckets: Vec<SectionBucket> = Vec::new();
     let mut pending_tag = None;
     let plan = get_or_build_plan_of(language);
-    let mut openers = plan.heredoc.as_ref().map(|(finder, _, _)| finder.find_iter(contents.as_bytes()));
+    let mut openers = if FULL { plan.heredoc.as_ref().map(|(finder, _, _)| finder.find_iter(contents.as_bytes())) } else { None };
     let mut next_opener = openers.as_mut().and_then(Iterator::next);
-    let declares_line_bound_comments = language.declares_line_bound_comments();
+    let declares_line_bound_comments = FULL && language.declares_line_bound_comments();
     let mut lines = MaskedLines::of(contents, &plan.finder);
     let mut handed_back = None;
     loop {
@@ -1493,7 +1510,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
             }
         };
         let line_end = line_start + raw_line.len();
-        let ranges_wanted = line_end > quiet_until;
+        let ranges_wanted = FULL && line_end > quiet_until;
         let plain = !has_candidates && shell.holds_nothing();
         while next_opener.is_some_and(|at| at < line_start) { next_opener = openers.as_mut().and_then(Iterator::next); }
         let holds_opener = next_opener.is_some_and(|at| at < line_end);
@@ -1509,7 +1526,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                         &mut scan.heredoc_openings);
             }
             let candidates = if plain { Candidates::Unsearched } else { Candidates::At(lines.positions(), 0) };
-            let walked = walk_line::<EXPLAIN>(raw_line, line_start, language, collecting_spans, ranges_wanted,
+            let walked = walk_line::<EXPLAIN, FULL>(raw_line, line_start, language, collecting_spans, ranges_wanted,
                     candidates, scan, &mut shell, &mut shell_stats, code_spans, log);
             if holds_opener { scan.heredoc_openings.clear(); }
             walked
@@ -1553,7 +1570,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
 
         // A region opener only counts where the shell left it as code, so one sitting inside a
         // comment or a string of the shell opens nothing
-        if had_code && !language.nested_languages.is_empty()
+        if FULL && had_code && !language.nested_languages.is_empty()
                 && let Some((region, inner)) = find_region_opening(raw_line.trim_ascii(), &scan.code_ranges, language, lookup,
                         &mut pending_tag) {
             let section_from = end_of_line(contents, line_start, raw_line);
@@ -1598,7 +1615,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
                     let rest_from = end_of_line(contents, inner_start, inner_raw).min(closer_at);
                     collect_heredoc_openings(inner_raw, &contents[rest_from..closer_at], inner, &mut scan.heredoc_openings);
                 }
-                walk_line::<EXPLAIN>(inner_raw, inner_start, inner, bucket.collecting_spans,
+                walk_line::<EXPLAIN, true>(inner_raw, inner_start, inner, bucket.collecting_spans,
                         !inner.nested_languages.is_empty(), Candidates::Unsearched, scan, &mut inner_state,
                         &mut bucket.stats, &mut bucket.spans, log);
                 if holds_opener { scan.heredoc_openings.clear(); }
@@ -1717,7 +1734,7 @@ fn walk_plain_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, langu
 
 // Returns the line's class and whether the line left code behind, which is what the section
 // machinery and the test extent need from it.
-fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &Language, collecting_spans: bool,
+fn walk_line<const EXPLAIN: bool, const FULL: bool>(raw_line: &str, line_start: usize, language: &Language, collecting_spans: bool,
     ranges_wanted: bool, candidates: Candidates, scan: &mut ScanBuffers, state: &mut WalkState,
     file_stats: &mut FileStats, code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog) -> (LineClass, bool)
 {
@@ -1757,7 +1774,7 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
     scan.lead = lead;
 
     // No symbol counts inside a heredoc, and the line holding its word is its closing quote
-    if let Some(heredoc) = state.heredocs.first() {
+    if FULL && let Some(heredoc) = state.heredocs.first() {
         if let Some(word_end) = heredoc.find_closing_word_end(raw_line) {
             let code_may_follow = heredoc.code_may_follow;
             state.heredocs.remove(0);
@@ -1792,18 +1809,18 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
     // The line that opens a block never closes it. Perl takes a '=cut' met in code as the start of
     // a block that runs to the next one
     let line_bound_before = state.line_bound;
-    if let Some((pair, depth)) = state.line_bound {
+    if FULL && let Some((pair, depth)) = state.line_bound {
         let bound = language.get_line_bound_pair_of(pair);
         if bound.is_closed_by(raw_line.as_bytes()) {
             state.line_bound = (depth > 1).then_some((pair, depth - 1));
         } else if bound.nests() && bound.is_opened_by(raw_line.as_bytes()) {
             state.line_bound = Some((pair, depth.saturating_add(1)));
         }
-    } else if state.holds_nothing() && let Some(pair) = find_line_bound_opener(raw_line, language) {
+    } else if FULL && state.holds_nothing() && let Some(pair) = find_line_bound_opener(raw_line, language) {
         state.line_bound = Some((pair, 1));
         if EXPLAIN { state.opened_line = log.get_current_line_number(); }
     }
-    if line_bound_before.is_some() || state.line_bound.is_some() {
+    if FULL && (line_bound_before.is_some() || state.line_bound.is_some()) {
         let class = if has_word_byte(line.as_bytes()) { LineClass::WordsInComment }
                 else { LineClass::PunctuationInComment };
         file_stats.classes.bump(class);
@@ -1814,7 +1831,7 @@ fn walk_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, language: &
         return (class, false);
     }
 
-    walk_line_symbols::<EXPLAIN>(line, lead, line_start, None, language, collecting_spans, candidates, scan, state,
+    walk_line_symbols::<EXPLAIN, FULL>(line, lead, line_start, None, language, collecting_spans, candidates, scan, state,
             file_stats, code_spans, log, carried)
 }
 
@@ -1830,13 +1847,13 @@ fn walk_code_after_closing_word<const EXPLAIN: bool>(raw_line: &str, line_start:
     let after_word = raw_line[word.1..].trim_ascii_start();
     let lead = raw_line.len() - after_word.len();
     scan.lead = lead;
-    walk_line_symbols::<EXPLAIN>(after_word.trim_ascii_end(), lead, line_start, Some(word), language, collecting_spans,
+    walk_line_symbols::<EXPLAIN, true>(after_word.trim_ascii_end(), lead, line_start, Some(word), language, collecting_spans,
             Candidates::Unsearched, scan, state, file_stats, code_spans, log, carried)
 }
 
 // Forced in, so that the copy every line runs is compiled with no closing word to handle
 #[inline(always)]
-fn walk_line_symbols<const EXPLAIN: bool>(line: &str, lead: usize, line_start: usize, closing_word: Option<(usize, usize)>,
+fn walk_line_symbols<const EXPLAIN: bool, const FULL: bool>(line: &str, lead: usize, line_start: usize, closing_word: Option<(usize, usize)>,
     language: &Language, collecting_spans: bool, candidates: Candidates, scan: &mut ScanBuffers, state: &mut WalkState,
     file_stats: &mut FileStats, code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog, carried: CarriedRecord)
     -> (LineClass, bool)
@@ -1863,7 +1880,7 @@ fn walk_line_symbols<const EXPLAIN: bool>(line: &str, lead: usize, line_start: u
 
     // The opener and its word are the string's opening quote, and its text begins on the next line.
     // Only an opener the line left as code opens one.
-    if line_info.has_code && state.open_comment.is_none() && state.open_str_symbol.is_none()
+    if FULL && line_info.has_code && state.open_comment.is_none() && state.open_str_symbol.is_none()
             && !scan.heredoc_openings.is_empty() && let Some((finder, symbol, _)) = &get_or_build_plan_of(language).heredoc {
         let width = finder.needle().len();
         let mut after = 0;
@@ -3331,7 +3348,7 @@ mod tests {
             let mut stats = FileStats::default();
             let mut code_spans = Vec::new();
             let candidates = if has_candidates { Candidates::Unsearched } else { Candidates::At(&[], 0) };
-            let (_, had_code) = walk_line::<true>(raw_line, 100, language, true, !language.nested_languages.is_empty(),
+            let (_, had_code) = walk_line::<true, true>(raw_line, 100, language, true, !language.nested_languages.is_empty(),
                     candidates, &mut scan, &mut state, &mut stats, &mut code_spans, &mut log);
             let records = log.records().iter().map(|record| (record.class, record.carried, record.spans.clone()))
                     .collect::<Vec<_>>();
