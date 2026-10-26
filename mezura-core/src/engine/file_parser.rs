@@ -1172,19 +1172,15 @@ struct MaskedLines<'a> {
     block_at: usize,
     newlines: u64,
     candidates: u64,
-    non_spaces: u64,
-    words: u64,
-    // Whether the class masks are read, which only the booking of plain lines does
-    classes: bool,
     // The lines booked so far, in code and inside a block comment: blank, punctuation, with words
     booked: [[usize; 3]; 2],
     positions: Vec<u32>,
 }
 
 impl<'a> MaskedLines<'a> {
-    fn of(contents: &'a str, finder: &'a MaskFinder, classes: bool) -> MaskedLines<'a> {
-        let mut lines = MaskedLines { contents, finder, start: 0, block_at: 0, newlines: 0, candidates: 0, non_spaces: 0,
-                words: 0, classes, booked: [[0; 3]; 2], positions: Vec::new() };
+    fn of(contents: &'a str, finder: &'a MaskFinder) -> MaskedLines<'a> {
+        let mut lines = MaskedLines { contents, finder, start: 0, block_at: 0, newlines: 0, candidates: 0,
+                booked: [[0; 3]; 2], positions: Vec::new() };
         lines.read_block();
         lines
     }
@@ -1193,12 +1189,8 @@ impl<'a> MaskedLines<'a> {
     fn read_block(&mut self) {
         let bytes = self.contents.as_bytes();
         let block = &bytes[self.block_at..bytes.len().min(self.block_at + BLOCK_BYTES)];
-        let masks = match self.classes {
-            true => self.finder.scan_block::<true>(block),
-            false => self.finder.scan_block::<false>(block)
-        };
-        (self.newlines, self.candidates, self.non_spaces, self.words) = (masks.newlines, masks.candidates, masks.non_spaces,
-                masks.words);
+        let masks = self.finder.scan_block(block);
+        (self.newlines, self.candidates) = (masks.newlines, masks.candidates);
     }
 
     // The lines from the next one up to the first that holds a searched byte, booked off the masks
@@ -1209,46 +1201,28 @@ impl<'a> MaskedLines<'a> {
     #[inline(always)]
     fn book_plain_lines(&mut self, in_comment: bool, collecting_spans: bool, code_spans: &mut Vec<(u32, u32)>) {
         let bytes = self.contents.as_bytes();
-        let mut from = self.start.wrapping_sub(self.block_at);
-        if from >= BLOCK_BYTES { return }
-        // What the line begun in an earlier block holds so far: where its code begins and ends
-        let (mut first_code, mut code_end, mut has_words) = (usize::MAX, 0, false);
+        if self.start.wrapping_sub(self.block_at) >= BLOCK_BYTES { return }
         loop {
             let before_candidate = match self.candidates { 0 => u64::MAX, bits => (1u64 << bits.trailing_zeros()) - 1 };
             let mut plain = self.newlines & before_candidate;
             while plain != 0 {
                 let last = plain.trailing_zeros() as usize;
-                let segment = (u64::MAX << from) & !(u64::MAX << last);
-                let code = self.non_spaces & segment;
-                if code != 0 {
-                    if first_code == usize::MAX { first_code = self.block_at + code.trailing_zeros() as usize; }
-                    code_end = self.block_at + BLOCK_BYTES - code.leading_zeros() as usize;
-                }
-                has_words |= self.words & segment != 0;
-                self.booked[in_comment as usize][(first_code != usize::MAX) as usize + has_words as usize] += 1;
+                let line = &bytes[self.start..self.block_at + last];
+                let from_start = trim_indentation(line);
+                let has_words = has_word_byte(from_start);
+                self.booked[in_comment as usize][!from_start.is_empty() as usize + has_words as usize] += 1;
                 if collecting_spans && has_words && !in_comment {
-                    code_spans.push((first_code as u32, code_end as u32));
+                    let code_from = self.start + line.len() - from_start.len();
+                    code_spans.push((code_from as u32, (code_from + from_start.trim_ascii_end().len()) as u32));
                 }
-                (first_code, code_end, has_words) = (usize::MAX, 0, false);
-                from = last + 1;
-                self.start = self.block_at + from;
+                self.start = self.block_at + last + 1;
                 plain &= plain - 1;
                 self.newlines &= plain | !(u64::MAX >> (63 - last));
             }
             if self.candidates != 0 || self.block_at + BLOCK_BYTES >= bytes.len() { return }
             // The rest of the block is the start of a line that ends further on
-            if from < BLOCK_BYTES {
-                let segment = u64::MAX << from;
-                let code = self.non_spaces & segment;
-                if code != 0 {
-                    if first_code == usize::MAX { first_code = self.block_at + code.trailing_zeros() as usize; }
-                    code_end = self.block_at + BLOCK_BYTES - code.leading_zeros() as usize;
-                }
-                has_words |= self.words & segment != 0;
-            }
             self.block_at += BLOCK_BYTES;
             self.read_block();
-            from = 0;
             // A searched byte before the line's end leaves the line to the iterator, which reads it from its start
             let line_end = match self.newlines { 0 => u64::MAX, bits => u64::MAX >> (63 - bits.trailing_zeros()) };
             if self.candidates & line_end != 0 || self.newlines == 0 && self.block_at + BLOCK_BYTES >= bytes.len() { return }
@@ -1619,7 +1593,7 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
     let mut openers = if FULL { plan.heredoc.as_ref().map(|(finder, _, _)| finder.find_iter(contents.as_bytes())) } else { None };
     let mut next_opener = openers.as_mut().and_then(Iterator::next);
     let declares_line_bound_comments = FULL && language.declares_line_bound_comments();
-    let mut lines = MaskedLines::of(contents, &plan.finder, !FULL);
+    let mut lines = MaskedLines::of(contents, &plan.finder);
     let mut handed_back = None;
     loop {
         if !FULL && shell.open_str_symbol.is_none() && !shell.continued_comment {
@@ -2453,6 +2427,15 @@ fn push_code(ranges: &mut Vec<(usize, usize)>, line: &str, from: usize, to: usiz
     if to > from && !line[from..to].trim_ascii().is_empty() {
         ranges.push((from, to));
     }
+}
+
+// Indentation by spaces is passed eight bytes at a time, which is most of a line of C# or Java
+fn trim_indentation(line: &[u8]) -> &[u8] {
+    let mut rest = line;
+    while let Some((eight, after)) = rest.split_first_chunk::<8>() && *eight == [b' '; 8] {
+        rest = after;
+    }
+    rest.trim_ascii_start()
 }
 
 // A word byte is what makes a line say something: a letter, a digit, or anything above ASCII, so
@@ -3310,7 +3293,7 @@ mod tests {
 
     #[test]
     fn plain_lines_booked_off_the_masks_read_as_the_walked_ones() {
-        let pieces = [" ", "\t", "\r", "  ", "a", "Zq9", "_", ";", "{", "})", "=+", "é", "λx", "\"s\"", "// c", "/*", "*/", "*",
+        let pieces = [" ", "\t", "\r", "  ", "        ", "a", "Zq9", "_", ";", "{", "})", "=+", "é", "λx", "\"s\"", "// c", "/*", "*/", "*",
                 "\\"];
         let spliced = c_like_with_a_splice();
         let mut seed = 0x9E37_79B9_7F4A_7C15u64;
@@ -5274,7 +5257,7 @@ mod tests {
         for case in cases {
             let expected = case.lines().collect::<Vec<&str>>();
             let finder = MaskFinder::of(b"");
-            let actual = MaskedLines::of(case, &finder, true).map(|(_, line, _)| line).collect::<Vec<&str>>();
+            let actual = MaskedLines::of(case, &finder).map(|(_, line, _)| line).collect::<Vec<&str>>();
             assert_eq!(expected, actual, "disagreed on {case:?}");
         }
     }
@@ -5298,9 +5281,9 @@ mod tests {
         ];
         for case in &cases {
             let expected = case.lines().map(|line| line.bytes().any(|byte| searched.contains(&byte))).collect::<Vec<bool>>();
-            let actual = MaskedLines::of(case, &finder, true).map(|(_, _, candidate)| candidate).collect::<Vec<bool>>();
+            let actual = MaskedLines::of(case, &finder).map(|(_, _, candidate)| candidate).collect::<Vec<bool>>();
             assert_eq!(expected, actual, "disagreed on {case:?}");
-            let starts = MaskedLines::of(case, &finder, true).map(|(start, line, _)| (start, line)).collect::<Vec<_>>();
+            let starts = MaskedLines::of(case, &finder).map(|(start, line, _)| (start, line)).collect::<Vec<_>>();
             for (start, line) in starts {
                 assert_eq!(&case[start..start + line.len()], line);
             }
@@ -5322,7 +5305,7 @@ mod tests {
             "".to_owned(),
         ];
         for case in &cases {
-            let mut lines = MaskedLines::of(case, &finder, true);
+            let mut lines = MaskedLines::of(case, &finder);
             for expected in case.lines() {
                 let (_, line, has_candidates) = lines.next().unwrap();
                 assert_eq!(expected, line);
@@ -5352,7 +5335,7 @@ mod tests {
             "\t\t\t\t\t\t\t\t\t\t\t\t{long}{long}/* {long} */ \"{long}\"   \r\n",
             "end // {long}"), long = long);
         let plan = get_or_build_plan_of(&RUST);
-        let mut lines = MaskedLines::of(&contents, &plan.finder, true);
+        let mut lines = MaskedLines::of(&contents, &plan.finder);
         let mut seen = 0;
         while let Some((_, raw_line, _)) = lines.next() {
             let from_start = raw_line.trim_ascii_start();
