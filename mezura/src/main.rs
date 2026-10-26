@@ -180,7 +180,7 @@ fn main() -> ExitCode {
     }
 
     if !config.engine.languages_of_interest.is_empty() {
-        match report_unknown_languages(&languages_available, &config.engine.languages_of_interest.get_all_names()) {
+        match report_unknown_languages(&languages_available, &config.engine.languages_of_interest.collect_all_names()) {
             Ok(x) => {
                 if let Some(msg) = x {
                     eprintln!("\n {}", crate::message_printer::wrap_message(&msg));
@@ -267,7 +267,7 @@ fn main() -> ExitCode {
             // Beside a revision this run is one side of two, so a pattern reaching nothing says which
             let against_a_revision = counted_baseline.as_ref().is_some_and(crate::diff::CountedBaseline::is_a_revision);
             for warning in collect_warnings_to_emit(&result.warnings, &config.view.test_patterns_from_presets, against_a_revision) {
-                crate::warning_collector::emit(warning);
+                crate::warning_collector::emit(warning.into());
             }
             if config.engine.detect_tests {
                 for warning in crate::test_presets::collect_shadowed_file_warnings(&crate::paths::PERSISTENT_APP_PATHS.test_presets_dir) {
@@ -349,7 +349,8 @@ fn read_available_languages(outcome: &MigrationOutcome, restore_was_asked_for: b
                 // whose files went uncounted and the document has to name which
                 for faulty in &faulty_files {
                     let (file, reason) = (&faulty.file_name, &faulty.error);
-                    crate::warning_collector::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::LanguageFileUnreadable, file,
+                    crate::warning_collector::keep(crate::warning_collector::ProgramWarning::new(
+                            crate::warning_collector::ProgramCode::LanguageFileUnreadable, file,
                             format!("'{file}' could not be used as a language file, so the files of that language were not counted: {reason}.")));
                 }
             }
@@ -429,7 +430,7 @@ fn report_unknown_languages(languages_available: &[Language], languages_of_inter
 fn report_languages_that_lost_every_claim(lost: Vec<mezura_core::warnings::Warning>) {
     let names = lost.iter().map(|x| format!("'{}'", x.subject)).collect::<Vec<_>>();
     for warning in lost {
-        crate::warning_collector::keep(warning);
+        crate::warning_collector::keep(warning.into());
     }
     if names.is_empty() {
         return;
@@ -464,7 +465,8 @@ fn read_conflict_rules() -> ConflictRules {
                         | mezura_core::language_file::ConflictBlock::NotCodeLineContains =>
                         "so the files of its extension keep being counted"
             };
-            crate::warning_collector::keep(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConflictLineSkipped, line,
+            crate::warning_collector::keep(crate::warning_collector::ProgramWarning::new(
+                    crate::warning_collector::ProgramCode::ConflictLineSkipped, line,
                     format!("'{line}' could not be read in '{LANGUAGE_CONFLICTS_FILE_NAME}' and was skipped, {consequence}.")));
         }
     }
@@ -549,7 +551,7 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
             // name collapse into a single entry. Reported here because this command returns before
             // the run that would otherwise say it.
             for warning in mezura_core::languages::find_duplicate_names(languages_available) {
-                crate::warning_collector::emit(warning);
+                crate::warning_collector::emit(warning.into());
             }
             report_languages_that_lost_every_claim(mezura_core::languages::find_languages_that_lost_every_claim(
                     languages_available, &conflict_rules));

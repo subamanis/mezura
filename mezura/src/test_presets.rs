@@ -1,11 +1,12 @@
 // What '@name' stands for inside '--tests', a preset the core ships or one of the user's own, which
 // is a file in the 'test-presets' folder of the data directory.
-use mezura_core::engine::path_patterns::{is_a_path_pattern, split_negation};
+use mezura_core::{is_a_path_pattern, split_negation};
 use mezura_core::warnings::{Code, Warning};
 use mezura_core::{TestPreset, get_test_presets, validate_test_patterns};
 
 use crate::config_files::{find_block_name, read_names_in_dir, strip_byte_order_mark};
 use crate::message_printer::wrap_message;
+use crate::warning_collector::{ProgramCode, ProgramWarning};
 
 const PATTERNS_HEADING : &str = "===> tests";
 const PRESET_FILE_EXTENSION : &str = "txt";
@@ -115,10 +116,10 @@ pub fn can_name_a_preset(name: &str) -> bool {
     !name.is_empty() && !name.contains(UNUSABLE_IN_A_NAME) && !name.contains(char::is_whitespace)
 }
 
-pub fn collect_shadowed_file_warnings(presets_dir: &str) -> Vec<Warning> {
+pub fn collect_shadowed_file_warnings(presets_dir: &str) -> Vec<ProgramWarning> {
     collect_user_preset_names(presets_dir).into_iter().filter(|name| is_a_shipped_name(name)).map(|name| {
         let path = build_preset_path(presets_dir, &name);
-        Warning::new(Code::PresetFileShadowed, &path, format!("'{path}' is never read, since '@{}' names a shipped \
+        ProgramWarning::new(ProgramCode::PresetFileShadowed, &path, format!("'{path}' is never read, since '@{}' names a shipped \
                 test preset. Give the file another name to use it as a preset of your own.", name.to_lowercase()))
     }).collect()
 }

@@ -29,11 +29,11 @@ pub fn get_active() -> &'static NumberFormat {
 
 // Applied after rounding, so that every rounding rule stays written with a dot.
 pub fn format_with_decimal_separator(text: String) -> String {
-    get_active().with_decimal_mark(&text)
+    get_active().replace_decimal_mark(&text)
 }
 
 pub fn format_with_separators(i: usize) -> String {
-    get_active().integer(i)
+    get_active().format_integer(i)
 }
 
 #[cfg(test)]

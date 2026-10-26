@@ -39,7 +39,7 @@ fn a_run_over_two_directories_counts_files_lines_and_keywords() {
             + result.total.calculate_comment_lines(model) + result.total.calculate_extra_lines(model));
 
     let keyword_num = result.per_language.values()
-            .flat_map(|info| info.keyword_occurences.values()).copied().sum::<usize>();
+            .flat_map(|info| info.keyword_occurrences.values()).copied().sum::<usize>();
     assert!(keyword_num != 0);
 }
 
@@ -84,7 +84,7 @@ fn a_language_of_my_own_is_counted_under_the_name_it_carries() {
 
     assert_eq!(vec!["PetrosLang"], result.per_language.keys().collect::<Vec<_>>());
     assert_eq!(2, result.total.lines);
-    assert_eq!(Some(&1), result.per_language["PetrosLang"].keyword_occurences.get("bindings"));
+    assert_eq!(Some(&1), result.per_language["PetrosLang"].keyword_occurrences.get("bindings"));
 }
 
 // A container file weighs whole on its own language's row, and the sections inside it come back
@@ -370,14 +370,14 @@ fn the_run_total_names_the_same_keywords_as_the_modules_it_is_made_of() {
     };
 
     assert_eq!(vec!["Rust"], counted.per_language.keys().collect::<Vec<_>>());
-    assert_eq!(Some(&2), counted.total.keyword_occurences.get("structs"));
-    assert_eq!(named(&counted.per_language["Rust"].keyword_occurences), named(&counted.total.keyword_occurences),
+    assert_eq!(Some(&2), counted.total.keyword_occurrences.get("structs"));
+    assert_eq!(named(&counted.per_language["Rust"].keyword_occurrences), named(&counted.total.keyword_occurrences),
             "the total of a run over one language names keywords that language does not have");
-    assert_eq!(named(&counted.modules[0].total.keyword_occurences), named(&counted.total.keyword_occurences),
+    assert_eq!(named(&counted.modules[0].total.keyword_occurrences), named(&counted.total.keyword_occurrences),
             "the total of the run and the total of its only module disagree about which keywords exist");
-    assert!(!counted.total.keyword_occurences.contains_key("classes"),
+    assert!(!counted.total.keyword_occurrences.contains_key("classes"),
             "a keyword of a language that never appeared reached the total: {:?}",
-            named(&counted.total.keyword_occurences));
+            named(&counted.total.keyword_occurrences));
 }
 
 // Two spellings of one name, both claiming the same extension, is the case where every mechanism
@@ -1107,7 +1107,7 @@ fn a_thread_count_outside_the_supported_range_cannot_reach_the_run() {
         threads: Threads::new(0, 100_000),
         ..EngineConfig::new([format!("{current_dir}/src")])
     };
-    assert_eq!((1, 128), (config.threads.producers(), config.threads.consumers()));
+    assert_eq!((1, 128), (config.threads.get_producers(), config.threads.get_consumers()));
 }
 
 // What the run actually used, which the caller cannot know: the requested counts are their own
@@ -1278,7 +1278,7 @@ fn the_keywords_inside_the_test_code_are_counted_in_its_share() {
             ..EngineConfig::new([root_str]) });
     std::fs::remove_dir_all(&root).unwrap();
 
-    let structs = |stats: &mezura_core::Stats| stats.keyword_occurences["structs"];
+    let structs = |stats: &mezura_core::Stats| stats.keyword_occurrences["structs"];
     assert_eq!(5, structs(&result.per_language["Rust"]));
     assert_eq!(4, structs(&result.tests["Rust"].stats),
             "the inline module, the declared module with the module inside it, and the integration test");
@@ -1388,17 +1388,20 @@ fn a_pattern_declares_test_code_whole_and_a_later_negative_takes_it_back_while_t
     assert_eq!(Some((2, 8, 2)), inside_the_project(from_project(&["proj/"])),
             "names from the project are read from the project folder's parent for a target inside it");
 
-    let explained = |test_patterns, file: &str| {
-        let config = config_of(&proj_str, test_patterns, true);
+    let explained_under = |target: &str, test_patterns, file: &str| {
+        let config = config_of(target, test_patterns, true);
         let (languages, _) = Languages::shipped(&config);
         mezura_core::explain_file(&proj.join(file), &config, languages).unwrap()
                 .lines.iter().filter(|line| line.in_test).count()
     };
+    let explained = |test_patterns, file: &str| explained_under(&proj_str, test_patterns, file);
     assert_eq!(2, explained(of(&["spec/"]), "spec/s.rs"), "'--explain' disagrees with the run over the same file");
     assert_eq!(0, explained(of(&["spec/", "!spec/helpers/"]), "spec/helpers/h.rs"));
     assert_eq!(5, explained(of(&["!src/"]), "src/lib.rs"));
     assert_eq!(2, explained(of(&["!tests/"]), "tests/x.rs"), "the marker in a file taken back by a '!' stays");
-    assert_eq!(0, explained(of(&["proj/"]), "src/plain.rs"), "a file on its own is read from the folder above its own");
+    assert_eq!(1, explained(of(&["proj/"]), "src/plain.rs"), "'--explain' read the names from somewhere the run does not");
+    assert_eq!(0, explained_under(&format!("{proj_str}/src/plain.rs"), of(&["proj/"]), "src/plain.rs"),
+            "a file on its own is read from the folder above its own");
     assert_eq!(1, explained(from_project(&["proj/"]), "src/plain.rs"), "names from the project are read from the project folder's parent");
 
     let refused = run(&config_with(&["spec/", "[bad"], true), Languages::shipped(&config_with(&[], true)).0);

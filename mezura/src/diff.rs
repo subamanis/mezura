@@ -3,8 +3,7 @@ use std::cell::OnceCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use mezura_core::{EngineConfig, FileEntry, ForcedLanguages, Language, LanguageNames, Languages,
-        ModuleResult, PathPatterns, RunResult, Stats, UNNAMED_MODULE_NAME, render};
-use mezura_core::engine::path_patterns::{is_a_path_pattern, is_on_disk};
+        ModuleResult, PathPatterns, RunResult, Stats, UNNAMED_MODULE_NAME, is_a_path_pattern, is_on_disk, render};
 use mezura_core::language_file::ConflictRules;
 
 use super::config_manager::{ByFile, Configuration, Layout, SortCriterion};
@@ -1078,7 +1077,7 @@ mod tests {
     fn the_modules_are_paired_by_name_and_a_set_that_is_not_the_same_is_not_paired_at_all() {
         let module = |name: Option<&str>, lines: usize| {
             let per_language = hashmap!["Rust".to_owned() => stats(lines, lines, 1)];
-            ModuleResult {name: name.map(str::to_owned), total: Stats::total_of(&per_language), per_language,
+            ModuleResult {name: name.map(str::to_owned), total: Stats::calculate_total_of(&per_language), per_language,
                     nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}
         };
         let result = |modules: Vec<ModuleResult>| {
@@ -1118,8 +1117,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("kept")).unwrap();
         let root_str = crate::paths::normalise_separators(&root.to_string_lossy()).into_owned();
-        let jest = |directory: &str| mezura_core::AppliedPreset::new("jest".to_owned(), directory.to_owned(),
-                "jest.config.js".to_owned(), true);
+        let jest = |directory: &str| mezura_core::AppliedPreset { name: "jest".to_owned(), directory: directory.to_owned(),
+                trigger_file: "jest.config.js".to_owned(), matched: true };
         let reading = |source: Source, base: &str, rows: &[&str], presets: Vec<mezura_core::AppliedPreset>| {
             let files = rows.iter().map(|path| FileEntry { path: (*path).to_owned(), stats: Stats::default(),
                     nested_languages: HashMap::new(), tests: None }).collect::<Vec<_>>();
@@ -1175,7 +1174,7 @@ mod tests {
         };
         let module = |name: &str| {
             let per_language = hashmap!["Rust".to_owned() => stats(50, 40, 1)];
-            ModuleResult { name: Some(name.to_owned()), total: Stats::total_of(&per_language), per_language,
+            ModuleResult { name: Some(name.to_owned()), total: Stats::calculate_total_of(&per_language), per_language,
                     nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new() }
         };
 
@@ -1191,8 +1190,8 @@ mod tests {
         baseline.warnings.push(DocumentWarning { code: "language-file-unreadable".to_owned(),
                 affects: "counts".to_owned(), message: "'Lua.txt' could not be used.".to_owned() });
         let mut subject = reading("new.json", "3.0.0", vec![module("web")]);
-        let jest = |directory: &str| mezura_core::AppliedPreset::new("jest".to_owned(), directory.to_owned(),
-                "jest.config.js".to_owned(), true);
+        let jest = |directory: &str| mezura_core::AppliedPreset { name: "jest".to_owned(), directory: directory.to_owned(),
+                trigger_file: "jest.config.js".to_owned(), matched: true };
         baseline.result.applied_presets = vec![jest("D:/p/web")];
         subject.result.applied_presets = vec![jest("D:/p"), jest("D:/p/api")];
 
@@ -1218,8 +1217,8 @@ mod tests {
         let mut first_test = reading("b.json", "3.0.0", Vec::new());
         first_test.result.applied_presets = vec![jest("D:/q")];
         let mut no_test_yet = reading("a.json", "3.0.0", Vec::new());
-        no_test_yet.result.applied_presets = vec![mezura_core::AppliedPreset::new("jest".to_owned(), "D:/q".to_owned(),
-                "jest.config.js".to_owned(), false)];
+        no_test_yet.result.applied_presets = vec![mezura_core::AppliedPreset { name: "jest".to_owned(), directory: "D:/q".to_owned(),
+                trigger_file: "jest.config.js".to_owned(), matched: false }];
         assert!(determine_comparison_notes(&no_test_yet, &first_test, &config, Vec::new(), true).is_empty(),
                 "the first test file under a jest config both sides have was said to be a preset of one side");
         let (mut one_clone, mut another) = (reading("a.json", "3.0.0", Vec::new()), reading("b.json", "3.0.0", Vec::new()));
@@ -1278,14 +1277,14 @@ mod tests {
             let mut file = FileEntry { path: "D:/p/src/a.rs".to_owned(), stats: stats(100, 70, 1),
                     nested_languages: HashMap::new(), tests: None };
             if detected { file.tests = Some(stats(40, 30, 1)); }
-            let module = ModuleResult { name: None, total: Stats::total_of(&per_language), per_language: per_language.clone(),
+            let module = ModuleResult { name: None, total: Stats::calculate_total_of(&per_language), per_language: per_language.clone(),
                     nested_languages: HashMap::new(), tests: tests.clone(),
                     files: hashmap!["Rust".to_owned() => vec![file]] };
             let mut result = crate::test_support::plain_result_of(per_language, vec![module], Vec::new());
             result.tests = tests;
             if detected {
-                result.applied_presets = vec![mezura_core::AppliedPreset::new("jest".to_owned(), "D:/p".to_owned(),
-                        "jest.config.js".to_owned(), true)];
+                result.applied_presets = vec![mezura_core::AppliedPreset { name: "jest".to_owned(), directory: "D:/p".to_owned(),
+                        trigger_file: "jest.config.js".to_owned(), matched: true }];
             }
             let mut scope = scope_of(&mezura_core::EngineConfig::default(), mezura_core::CountingModel::Content);
             scope.tests_detected = detected;
@@ -1428,7 +1427,7 @@ mod tests {
 
         config.view.by_file = Some(ByFile::All);
         result.modules = vec![ModuleResult { name: None, per_language: per_language.clone(),
-                total: Stats::total_of(&per_language), nested_languages: HashMap::new(), tests: HashMap::new(),
+                total: Stats::calculate_total_of(&per_language), nested_languages: HashMap::new(), tests: HashMap::new(),
                 files: hashmap!["Rust".to_owned() => vec![entry("D:/p/a.rs", 100, 70)]] }];
         let with_rows = write("with-rows", &result, &config);
 

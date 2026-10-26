@@ -200,8 +200,8 @@ fn create_compared_language_object(name: &str, baseline: &Stats, subject: &Stats
     let mut members = vec![format!("\"name\":\"{}\"", escape(name))];
     members.extend(create_triad_members(baseline, subject, model));
     if keywords_counted {
-        members.push(format!("\"keywords\":{}", create_keyword_triads(&baseline.keyword_occurences,
-                &subject.keyword_occurences)));
+        members.push(format!("\"keywords\":{}", create_keyword_triads(&baseline.keyword_occurrences,
+                &subject.keyword_occurrences)));
     }
     if baseline_nested.is_some() || subject_nested.is_some() {
         members.push(format!("\"nested_languages\":{}", create_compared_nested_array(
@@ -274,8 +274,8 @@ fn create_compared_nested_array(baseline: Option<&HashMap<String, Stats>>,
 fn create_compared_tests_object(baseline: &TestCode, subject: &TestCode, keywords_counted: bool, model: CountingModel) -> String {
     let mut members = create_triad_members(&baseline.stats, &subject.stats, model);
     if keywords_counted {
-        members.push(format!("\"keywords\":{}", create_keyword_triads(&baseline.stats.keyword_occurences,
-                &subject.stats.keyword_occurences)));
+        members.push(format!("\"keywords\":{}", create_keyword_triads(&baseline.stats.keyword_occurrences,
+                &subject.stats.keyword_occurrences)));
     }
     members.push(format!("\"whole_files\":{}", create_triad(baseline.whole_files, subject.whole_files)));
 
@@ -287,13 +287,13 @@ fn create_compared_total_object(baseline: &Stats, subject: &Stats,
         keywords_counted: bool, model: CountingModel) -> String {
     let mut lines = create_triad_members(baseline, subject, model);
     if keywords_counted {
-        lines.push(format!("\"keywords\":{}", create_keyword_triads(&baseline.keyword_occurences,
-                &subject.keyword_occurences)));
+        lines.push(format!("\"keywords\":{}", create_keyword_triads(&baseline.keyword_occurrences,
+                &subject.keyword_occurrences)));
     }
     if let (Some(baseline_tests), Some(subject_tests)) = (baseline_tests, subject_tests) {
         lines.push(format!("\"tests\":{}", create_compared_tests_object(
-                &TestCode::total_of(baseline_tests),
-                &TestCode::total_of(subject_tests), keywords_counted, model)));
+                &TestCode::calculate_total_of(baseline_tests),
+                &TestCode::calculate_total_of(subject_tests), keywords_counted, model)));
     }
 
     create_object(lines)
@@ -535,13 +535,13 @@ fn create_total_object(total: &Stats, tests: Option<&HashMap<String, TestCode>>,
     // The keywords and the tests of every language survive '--top' only here, since the languages are
     // cut there and the ones left cannot be added back up to them
     if keywords_counted {
-        members.push(format!("\"keywords\":{}", create_keywords_object(&total.keyword_occurences)));
+        members.push(format!("\"keywords\":{}", create_keywords_object(&total.keyword_occurrences)));
     }
     if let Some(tests) = tests {
-        let mut tests = TestCode::total_of(tests);
+        let mut tests = TestCode::calculate_total_of(tests);
         // The sum names the keywords of the languages that hold tests, so the others go in at zero
-        for keyword in total.keyword_occurences.keys() {
-            tests.stats.keyword_occurences.entry(keyword.clone()).or_insert(0);
+        for keyword in total.keyword_occurrences.keys() {
+            tests.stats.keyword_occurrences.entry(keyword.clone()).or_insert(0);
         }
         members.push(format!("\"tests\":{}", create_tests_object(&tests, keywords_counted, model)));
     }
@@ -618,7 +618,7 @@ fn create_nested_languages_array(sections: &HashMap<String, Stats>, keywords_cou
         let mut members = vec![format!("\"name\":\"{}\"", escape(name))];
         members.extend(create_figure_members(info, model));
         if keywords_counted {
-            members.push(format!("\"keywords\":{}", create_keywords_object(&info.keyword_occurences)));
+            members.push(format!("\"keywords\":{}", create_keywords_object(&info.keyword_occurrences)));
         }
         create_object(members)
     }))
@@ -627,7 +627,7 @@ fn create_nested_languages_array(sections: &HashMap<String, Stats>, keywords_cou
 fn create_tests_object(tests: &TestCode, keywords_counted: bool, model: CountingModel) -> String {
     let mut members = create_figure_members(&tests.stats, model);
     if keywords_counted {
-        members.push(format!("\"keywords\":{}", create_keywords_object(&tests.stats.keyword_occurences)));
+        members.push(format!("\"keywords\":{}", create_keywords_object(&tests.stats.keyword_occurrences)));
     }
     members.push(format!("\"whole_files\":{}", tests.whole_files));
 
@@ -663,7 +663,7 @@ fn create_language_object(name: &str, info: &Stats, keywords_counted: bool, nest
     // Absent when they were not counted, since '--hide keywords' also stops the counting. An empty
     // object means they were counted and the language declares none.
     if keywords_counted {
-        members.push(format!("\"keywords\":{}", create_keywords_object(&info.keyword_occurences)));
+        members.push(format!("\"keywords\":{}", create_keywords_object(&info.keyword_occurrences)));
     }
     if let Some(sections) = sections.filter(|x| nested_shown && !x.is_empty()) {
         members.push(format!("\"nested_languages\":{}", create_nested_languages_array(sections, keywords_counted, model)));
@@ -751,7 +751,7 @@ fn create_unreadable_dirs_array(unreadable_dirs: &[mezura_core::UnreadableDirDet
 // system is allowed to grant fewer.
 fn create_performance_object(performance: &mezura_core::Performance) -> String {
     let threads = format!("{{\"producers\":{},\"consumers\":{}}}",
-            performance.threads.producers(), performance.threads.consumers());
+            performance.threads.get_producers(), performance.threads.get_consumers());
 
     format!("{{\"scan_ms\":{},\"threads\":{threads}}}", performance.duration_millis)
 }
@@ -846,7 +846,7 @@ mod tests {
         let per_language = hashmap![
             "Rust".to_owned() => stats_of(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 1]),
             "HTML".to_owned() => stats_of(1, 900, 40, 30, 0, HashMap::new())];
-        let result = result_of(per_language.clone(), Stats::total_of(&per_language), Vec::new(),
+        let result = result_of(per_language.clone(), Stats::calculate_total_of(&per_language), Vec::new(),
             FilesPresent {total_files: 5, relevant_files: 3, excluded_files: 2});
         create_document(&result, &generated_at(), config)
     }
@@ -941,7 +941,7 @@ mod tests {
 
         let module_of = |name: Option<&str>, language: &str, lines: usize, files: usize| {
             let per_language = hashmap![language.to_owned() => stats_of(files, lines * 10, lines, lines, 0, HashMap::new())];
-            let total = Stats::total_of(&per_language);
+            let total = Stats::calculate_total_of(&per_language);
             mezura_core::ModuleResult {name: name.map(str::to_owned), per_language, total,
                     nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}
         };
@@ -977,8 +977,8 @@ mod tests {
         // and every other test of this binary adds to it.
         assert!(document_of(&config).contains("\"warnings\":["));
 
-        super::super::warning_collector::keep(mezura_core::warnings::Warning::new(
-                mezura_core::warnings::Code::LanguageTiebreak, "a-subject-only-this-test-uses",
+        super::super::warning_collector::keep(super::super::warning_collector::ProgramWarning::new(
+                mezura_core::Code::LanguageTiebreak, "a-subject-only-this-test-uses",
                 "quoted \"text\" and a \\ backslash".to_owned()));
 
         let rendered = create_warnings_array();
@@ -1036,7 +1036,7 @@ mod tests {
 
         let module_of = |name: Option<&str>, language: &str, path: &str| {
             let per_language = hashmap![language.to_owned() => stats_of(1, 900, 30, 24, 0, HashMap::new())];
-            let total = Stats::total_of(&per_language);
+            let total = Stats::calculate_total_of(&per_language);
             mezura_core::ModuleResult {name: name.map(str::to_owned), per_language, total,
                     nested_languages: HashMap::new(), tests: HashMap::new(),
                     files: hashmap![language.to_owned() => vec![file_entry(path, 30, 24, 900)]]}
@@ -1076,7 +1076,7 @@ mod tests {
             unreadable_dirs_count: 0,
             files_recorded: true,
             files_hidden: 0,
-            result: result_of(per_language.clone(), Stats::total_of(&per_language), Vec::new(),
+            result: result_of(per_language.clone(), Stats::calculate_total_of(&per_language), Vec::new(),
                     FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0})
         }
     }
@@ -1119,7 +1119,7 @@ mod tests {
         let module = |name: Option<&str>, language: &str, lines: usize, structs: usize| {
             let per_language = hashmap![language.to_owned() =>
                     stats_of(1, lines * 10, lines, lines, 0, hashmap!["structs".to_owned() => structs])];
-            mezura_core::ModuleResult {name: name.map(str::to_owned), total: Stats::total_of(&per_language), per_language,
+            mezura_core::ModuleResult {name: name.map(str::to_owned), total: Stats::calculate_total_of(&per_language), per_language,
                     nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}
         };
         let with_modules = |source, modules: Vec<mezura_core::ModuleResult>| {
@@ -1165,7 +1165,7 @@ mod tests {
             let per_language = hashmap!["Rust".to_owned() => stats_of(2, 5000, 100, 70, 10, HashMap::new())];
             let mut reading = reading_of(source, per_language.clone());
             reading.result.modules = vec![mezura_core::ModuleResult { name: None,
-                    total: Stats::total_of(&per_language), per_language, nested_languages: HashMap::new(),
+                    total: Stats::calculate_total_of(&per_language), per_language, nested_languages: HashMap::new(),
                     tests: HashMap::new(), files: hashmap!["Rust".to_owned() => files] }];
             reading
         };
@@ -1224,7 +1224,7 @@ mod tests {
                 "Go".to_owned() => TestCode { stats: stats_of(1, 300, 12, 10, 0, HashMap::new()), whole_files: 1 }];
         let mut tested = file_entry("D:/x/src/lib.rs", 80, 60, 4000);
         tested.tests = Some(stats_of(1, 1000, 35, 28, 3, HashMap::new()));
-        let mut result = result_of(per_language.clone(), Stats::total_of(&per_language), Vec::new(),
+        let mut result = result_of(per_language.clone(), Stats::calculate_total_of(&per_language), Vec::new(),
                 FilesPresent {total_files: 5, relevant_files: 5, excluded_files: 0});
         result.tests = tests.clone();
         result.modules = vec![mezura_core::ModuleResult { name: None, total: result.total.clone(), per_language,
@@ -1450,8 +1450,8 @@ mod tests {
         let result = result_of(
             hashmap!["Rust".to_owned() => stats_of(1, 30, 10, 5, 0, HashMap::new())],
             stats_of(1, 30, 10, 5, 0, HashMap::new()),
-            vec![FaultyFileDetails::new("src\\z.rs".to_owned(), "no".to_owned(), 20),
-                 FaultyFileDetails::new("src\\a.rs".to_owned(), "nope".to_owned(), 10)],
+            vec![FaultyFileDetails { path: "src\\z.rs".to_owned(), error_msg: "no".to_owned(), size: 20 },
+                 FaultyFileDetails { path: "src\\a.rs".to_owned(), error_msg: "nope".to_owned(), size: 10 }],
             FilesPresent {total_files: 3, relevant_files: 3, excluded_files: 0});
 
         // How many is always said; the paths are the detail, and are asked for
@@ -1473,10 +1473,10 @@ mod tests {
         let mut result = result_of(HashMap::new(), Stats::default(), Vec::new(),
                 FilesPresent {total_files: 0, relevant_files: 0, excluded_files: 0});
         result.unreadable_dirs = vec![
-            mezura_core::UnreadableDirDetails::new("D:/z".to_owned(),
-                    "Access is denied. (os error 5)".to_owned()),
-            mezura_core::UnreadableDirDetails::new("D:/a".to_owned(),
-                    "The system cannot find the path specified. (os error 3)".to_owned())];
+            mezura_core::UnreadableDirDetails { path: "D:/z".to_owned(),
+                    error_msg: "Access is denied. (os error 5)".to_owned() },
+            mezura_core::UnreadableDirDetails { path: "D:/a".to_owned(),
+                    error_msg: "The system cannot find the path specified. (os error 3)".to_owned() }];
         let written = create_document(&result, &Local::now(), &config);
 
         assert!(written.contains("\"path\":\"D:/a\""), "{written}");

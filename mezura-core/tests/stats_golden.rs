@@ -45,7 +45,7 @@ fn render_report(per_language: &HashMap<String, Stats>) -> String {
                 info.files, info.lines, info.calculate_code_lines(CountingModel::Content),
                 info.calculate_comment_lines(CountingModel::Content), render_classes(&info.classes)));
 
-        let mut keywords = info.keyword_occurences.iter().collect::<Vec<_>>();
+        let mut keywords = info.keyword_occurrences.iter().collect::<Vec<_>>();
         keywords.sort_by_key(|(name, _)| name.as_str());
         if !keywords.is_empty() {
             let rendered = keywords.iter().map(|(name, count)| format!("{name}={count}")).collect::<Vec<_>>();

@@ -60,7 +60,7 @@ pub struct RunResult {
 impl RunResult {
     /// The languages largest first by the chosen figure, ties broken by name.
     pub fn sort_languages_by(&self, criterion: SortCriterion, model: CountingModel) -> Vec<(&str, &Stats)> {
-        sort_languages_by(&self.per_language, criterion, model)
+        criterion.sort_languages(&self.per_language, model)
     }
 
     /// Every language outside its test code. A language that is test code whole has no entry.
@@ -75,7 +75,7 @@ impl RunResult {
 
     /// Every language's test code, added together.
     pub fn calculate_tests_total(&self) -> TestCode {
-        TestCode::total_of(&self.tests)
+        TestCode::calculate_total_of(&self.tests)
     }
 
     /// Files belonging to a counted language were found and every one of them failed to be read.
@@ -157,7 +157,7 @@ pub struct ModuleResult {
 impl ModuleResult {
     /// The languages largest first by the chosen figure, ties broken by name.
     pub fn sort_languages_by(&self, criterion: SortCriterion, model: CountingModel) -> Vec<(&str, &Stats)> {
-        sort_languages_by(&self.per_language, criterion, model)
+        criterion.sort_languages(&self.per_language, model)
     }
 
     /// Every language of this module outside its test code. A language that is test code whole has
@@ -173,7 +173,7 @@ impl ModuleResult {
 
     /// Every language of this module's test code, added together.
     pub fn calculate_tests_total(&self) -> TestCode {
-        TestCode::total_of(&self.tests)
+        TestCode::calculate_total_of(&self.tests)
     }
 }
 
@@ -182,8 +182,8 @@ fn take_out_tests(whole: &Stats, tests: &Stats) -> Stats {
     production.bytes = production.bytes.saturating_sub(tests.bytes);
     production.classes.subtract(&tests.classes);
     production.lines = production.classes.calculate_lines();
-    for (keyword, occurrences) in &tests.keyword_occurences {
-        if let Some(own) = production.keyword_occurences.get_mut(keyword) {
+    for (keyword, occurrences) in &tests.keyword_occurrences {
+        if let Some(own) = production.keyword_occurrences.get_mut(keyword) {
             *own = own.saturating_sub(*occurrences);
         }
     }
@@ -243,7 +243,7 @@ pub struct TestCode {
 
 impl TestCode {
     /// Every language's test code added together, which is what the tests row under the total holds.
-    pub fn total_of(tests: &HashMap<String, TestCode>) -> Self {
+    pub fn calculate_total_of(tests: &HashMap<String, TestCode>) -> Self {
         let mut total = TestCode::default();
         for share in tests.values() {
             total.add(share);
@@ -331,11 +331,11 @@ pub enum SortCriterion {
     Code,
     /// The comments column under it.
     Comments,
-    /// The third column, and only under [`CountingModel::Content`], which is the model that calls
-    /// it `extra`.
+    /// The third column, which [`CountingModel::Content`] calls `extra`. Read under whichever model
+    /// is given, as `Blanks` is.
     Extra,
-    /// The third column, and only under [`CountingModel::Region`], which is the model that calls
-    /// it `blanks`.
+    /// The third column, which [`CountingModel::Region`] calls `blanks`. Read under whichever model
+    /// is given, as `Extra` is.
     Blanks,
     /// Total size on disk.
     Size,
@@ -385,6 +385,20 @@ impl SortCriterion {
             Self::Extra | Self::Blanks => stats.calculate_extra_lines(model),
             Self::Name => 0
         }
+    }
+
+    /// The languages largest first by this figure, ties broken by name with case folded, so two
+    /// languages of equal size cannot swap places between two runs because a map iterated differently.
+    pub fn sort_languages(self, per_language: &HashMap<String, Stats>, model: CountingModel) -> Vec<(&str, &Stats)> {
+        let mut rows = per_language.iter().map(|(name, stats)| (name.as_str(), stats)).collect::<Vec<_>>();
+        if self == SortCriterion::Name {
+            rows.sort_by_key(|(name, _)| name.to_lowercase());
+        } else {
+            rows.sort_by(|a, b| self.get_value_of(b.1, model).cmp(&self.get_value_of(a.1, model))
+                    .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+        }
+
+        rows
     }
 }
 
@@ -452,7 +466,6 @@ impl SkippedFiles {
 /// A file that could not be read or parsed. Its lines are in no total, but it is counted among the
 /// files that were seen.
 #[derive(Debug,Clone)]
-#[non_exhaustive]
 pub struct FaultyFileDetails {
     /// Absolute, with forward slashes.
     pub path: String,
@@ -462,20 +475,8 @@ pub struct FaultyFileDetails {
     pub size: u64
 }
 
-impl FaultyFileDetails {
-    /// The type is non-exhaustive, so this is how a crate outside this one builds it.
-    pub fn new(path: String, error_msg: String, size: u64) -> Self {
-        FaultyFileDetails {
-            path,
-            error_msg,
-            size
-        }
-    }
-}
-
 /// A directory that could not be opened, so nothing inside it reached any figure.
 #[derive(Debug,Clone)]
-#[non_exhaustive]
 pub struct UnreadableDirDetails {
     /// Absolute, with forward slashes.
     pub path: String,
@@ -483,20 +484,9 @@ pub struct UnreadableDirDetails {
     pub error_msg: String
 }
 
-impl UnreadableDirDetails {
-    /// The type is non-exhaustive, so this is how a crate outside this one builds it.
-    pub fn new(path: String, error_msg: String) -> Self {
-        UnreadableDirDetails {
-            path,
-            error_msg
-        }
-    }
-}
-
 /// A [`crate::TestPreset`] the scan turned on under one directory, because the listing of that
 /// directory held one of the preset's trigger files.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct AppliedPreset {
     /// The preset's name, `jest`.
     pub name: String,
@@ -508,18 +498,6 @@ pub struct AppliedPreset {
     /// and no counted file under its directory has a name of its tests, and false where a `!`
     /// pattern took every such file back.
     pub matched: bool
-}
-
-impl AppliedPreset {
-    /// The type is non-exhaustive, so this is how a crate outside this one builds it.
-    pub fn new(name: String, directory: String, trigger_file: String, matched: bool) -> Self {
-        AppliedPreset {
-            name,
-            directory,
-            trigger_file,
-            matched
-        }
-    }
 }
 
 /// A run that produced nothing at all, as opposed to a run that produced zeros.
@@ -535,8 +513,10 @@ pub enum RunError {
     /// The languages were resolved against a configuration that selects a different set from the
     /// one handed to the run, so the counts would not be the ones the settings describe.
     ///
-    /// Only the three settings that resolution reads are compared, with case and order folded, so
-    /// resolving once and counting several directories with it is untouched.
+    /// Compared, with case and order folded, are the languages of interest, the excluded languages,
+    /// the forced extensions, `use_heuristics`, `detect_shebangs`, and the module names the targets
+    /// declare where a rule is scoped to a module. So resolving once and counting several
+    /// directories with it is untouched unless such a rule meets targets declaring other modules.
     LanguagesFromAnotherConfig,
     /// The targets could not be turned into places to visit: a path that names nothing, a pattern
     /// that does not parse or matches nothing, or one place given under two names.
@@ -575,30 +555,7 @@ impl std::fmt::Display for RunError {
     }
 }
 
-impl std::error::Error for RunError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::InvalidTargets(x) => Some(x),
-            _ => None
-        }
-    }
-}
-
-fn sort_languages_by(per_language: &HashMap<String, Stats>, criterion: SortCriterion,
-    model: CountingModel) -> Vec<(&str, &Stats)>
-{
-    let mut rows = per_language.iter().map(|(name, stats)| (name.as_str(), stats)).collect::<Vec<_>>();
-    if criterion == SortCriterion::Name {
-        rows.sort_by_key(|(name, _)| name.to_lowercase());
-    } else {
-        // The name breaks every tie, with case folded, so two languages of equal size cannot swap
-        // places between two runs of the same command because a map iterated differently.
-        rows.sort_by(|a, b| criterion.get_value_of(b.1, model).cmp(&criterion.get_value_of(a.1, model))
-                .then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
-    }
-
-    rows
-}
+impl std::error::Error for RunError {}
 
 #[cfg(test)]
 mod tests {

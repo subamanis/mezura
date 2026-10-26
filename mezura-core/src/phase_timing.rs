@@ -123,7 +123,7 @@ fn format_report(totals: &Totals, consumers: usize, run_millis: u128, hardware_t
 }
 
 fn format_summed_millis(nanos: u64) -> String {
-    format!("{} ms", NumberFormat::new(Some(','), '.').integer((nanos / 1_000_000) as usize))
+    format!("{} ms", NumberFormat::new(Some(','), '.').format_integer((nanos / 1_000_000) as usize))
 }
 
 #[cfg(test)]

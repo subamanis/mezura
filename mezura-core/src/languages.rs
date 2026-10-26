@@ -36,10 +36,15 @@ impl Languages {
 
     /// The shipped set plus language definitions the caller wrote itself, settled by the shipped
     /// conflict rules.
+    ///
+    /// A language of the caller's own whose name is a shipped one's, case aside, replaces the
+    /// shipped one with no warning.
     pub fn shipped_with(config: &EngineConfig, extra: impl IntoIterator<Item = Language>)
     -> (Self, Vec<Warning>)
     {
+        let extra = extra.into_iter().collect::<Vec<_>>();
         let mut languages = parse_shipped_languages();
+        languages.retain(|shipped| !extra.iter().any(|mine| mine.name.eq_ignore_ascii_case(&shipped.name)));
         languages.extend(extra);
         Self::resolve(config, languages, &parse_shipped_conflict_rules())
     }
@@ -129,7 +134,7 @@ pub fn parse_shipped_languages() -> Vec<Language> {
     // 'every_shipped_language_file_parses' is what guarantees these all parse. One that did not
     // would be left out rather than panic here.
     get_shipped_language_files_raw().into_iter()
-            .filter_map(|(_, contents)| crate::language_file::parse_language(&String::from_utf8_lossy(contents)))
+            .filter_map(|(_, contents)| crate::language_file::parse_language(&String::from_utf8_lossy(contents)).ok())
             .collect()
 }
 
@@ -356,7 +361,7 @@ fn find_unknown_module_scopes(config: &EngineConfig) -> Vec<Warning> {
 fn find_unknown_names_of_the_selection(languages: &[Language], config: &EngineConfig) -> Vec<Warning> {
     let mut reported = Vec::new();
     if !config.languages_of_interest.is_empty() {
-        for name in find_unknown_language_names(languages, &config.languages_of_interest.get_all_names()) {
+        for name in find_unknown_language_names(languages, &config.languages_of_interest.collect_all_names()) {
             reported.push(Warning::new(warnings::Code::UnknownLanguage, &name,
                     format!("'{name}' is not among the languages in use, so nothing was counted for it.")));
         }
@@ -364,7 +369,7 @@ fn find_unknown_names_of_the_selection(languages: &[Language], config: &EngineCo
 
     // Asked of the whole list and not of what the selection above left of it: checked after the
     // narrowing, '--languages Java --exclude-languages Rust' reports that Rust does not exist.
-    for name in find_unknown_language_names(languages, &config.excluded_languages.get_all_names()) {
+    for name in find_unknown_language_names(languages, &config.excluded_languages.collect_all_names()) {
         reported.push(Warning::new(warnings::Code::UnknownExcludedLanguage, &name,
                 format!("'{name}' is not among the languages in use, so excluding it changed nothing.")));
     }
@@ -490,7 +495,7 @@ pub fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
 /// Which language owns each extension, whole file name and `#!` name, and which of those more than
 /// one language claimed.
 ///
-/// The standing answer, without the `--force-language` pairs and the narrowing that belong to a
+/// The standing answer, without the forced pairs and the narrowing that belong to a
 /// single run and are applied when its [`Languages`] are resolved.
 #[derive(Debug, Clone)]
 pub struct LanguageClaims {
@@ -530,7 +535,7 @@ impl LanguageClaims {
     }
 
     /// Every name more than one language claimed, ordered by kind and then by the name itself.
-    pub fn get_contested_claims(&self) -> Vec<&Claim> {
+    pub fn collect_contested_claims(&self) -> Vec<&Claim> {
         let mut contested = [&self.by_extension, &self.by_filename, &self.by_shebang].into_iter()
                 .flat_map(HashMap::values).filter(|claim| !claim.losers.is_empty())
                 .collect::<Vec<_>>();
@@ -725,7 +730,7 @@ mod language_selection_tests {
         assert_eq!(("Alone", true, None), (alone.owner.as_str(), alone.losers.is_empty(), alone.settled_by),
                 "there was nothing to settle where one language claims it alone");
         assert!(claims.find_claim_of_extension("nobody").is_none());
-        assert_eq!(vec![contested], claims.get_contested_claims());
+        assert_eq!(vec![contested], claims.collect_contested_claims());
     }
 
     // The three kinds are three maps and three sets of rules, and only the extensions of them are
@@ -998,6 +1003,23 @@ mod language_selection_tests {
         assert_eq!(shipped_lookup.get_of_module_named(None).of_path(std::path::Path::new("a.m")),
                 lookup.get_of_module_named(None).of_path(std::path::Path::new("a.m")),
                 "a contested extension was settled differently, so the conflict rules were lost");
+    }
+
+    #[test]
+    fn a_language_of_your_own_named_like_a_shipped_one_replaces_it_in_silence() {
+        let dir = std::env::temp_dir().join("a_language_of_your_own_named_like_a_shipped_one_replaces_it_in_silence");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.rs"), "// a comment\nfn main() {}\n").unwrap();
+        let config = EngineConfig::new([dir.to_string_lossy()]);
+        let mine = Language::new("rust", ["rs"], StringRules::escaping_nothing(), [""; 0], &[], []);
+
+        let (languages, reported) = Languages::shipped_with(&config, [mine]);
+        let result = crate::run(&config, languages).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert!(!reported.iter().any(|x| x.code == warnings::Code::DuplicateLanguage), "{reported:?}");
+        assert_eq!(0, result.total.calculate_comment_lines(crate::CountingModel::Content));
+        assert_eq!(2, result.total.calculate_code_lines(crate::CountingModel::Content));
     }
 
     fn owned(names: &[&str]) -> Vec<String> {

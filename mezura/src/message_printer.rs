@@ -1642,7 +1642,7 @@ pub fn print_existing_themes(bar_thickness: BarThickness, layout: Layout, counti
         msg.push_str(&format!("{INDENT}{}   ", theme.overview_label.paint("Lines:")));
         let slots = theme.get_language_slots();
         for (i, (lang, percentage, _)) in MOCK_PERCENTAGES.iter().enumerate() {
-            let text = crate::number_formatter::get_active().percent(*percentage) + "%";
+            let text = crate::number_formatter::get_active().format_percent(*percentage) + "%";
             msg.push_str(&format!("{:>5} {}", theme.overview_percent.paint(&text), slots[i].paint(lang)));
             if i < MOCK_PERCENTAGES.len()-1 {msg.push_str("   ")}
         }

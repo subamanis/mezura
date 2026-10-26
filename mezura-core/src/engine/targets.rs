@@ -170,7 +170,8 @@ fn find_contested_target(targets: &[Target]) -> Result<(), TargetError> {
 
 /// The spelling every resolved path carries. It is absolute, with forward slashes, no trailing
 /// separator, no `..` component, and without the `\\?\` prefix that `std::fs::canonicalize` puts
-/// on Windows.
+/// on Windows. A path that names nothing on disk comes back as it was typed, with its separators
+/// normalised, so it may stay relative and keep its `..`.
 pub fn convert_to_absolute(s: &str) -> String {
     let p = Path::new(s);
     if p.is_absolute() && !p.components().any(|component| component == Component::ParentDir) {
@@ -187,7 +188,9 @@ pub fn convert_to_absolute(s: &str) -> String {
     }
 }
 
-pub(crate) fn normalise_separators(path: &str) -> Cow<'_, str> {
+/// The spelling this crate gives every path it hands back, applied to one of the caller's own. On
+/// Windows the backslashes become forward slashes, elsewhere the text is left as it is.
+pub fn normalise_separators(path: &str) -> Cow<'_, str> {
     if cfg!(windows) {Cow::Owned(path.replace('\\', "/"))} else {Cow::Borrowed(path)}
 }
 

@@ -3,15 +3,6 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 
-/// The most scanning threads [`Threads::new`] will accept, anything above it being clamped down.
-pub const MAX_PRODUCERS_VALUE : usize = 32;
-/// The fewest, anything below it being clamped up.
-pub const MIN_PRODUCERS_VALUE : usize = 1;
-/// The most counting threads, and the same clamping.
-pub const MAX_CONSUMERS_VALUE : usize = 128;
-/// The fewest.
-pub const MIN_CONSUMERS_VALUE : usize = 1;
-
 /// One place to count, and the name its figures are reported under.
 #[derive(Debug,PartialEq,Eq,Clone)]
 pub struct Target {
@@ -73,7 +64,7 @@ pub type ForcedLanguages = ScopedByModule<HashMap<String,String>>;
 
 /// One setting for the whole run, and the different values some modules give it.
 ///
-/// A module is a target that was given a name, as in `mezura ios=./ios analysis=./matlab`. A
+/// A module is a target that was given a name, [`Target::named`] with `ios` for `./ios`. A
 /// module that names no value of its own uses the run's. This is what lets one repository count
 /// its `.m` files as Objective-C under one directory and as MATLAB under another, in a single run.
 #[derive(Debug,PartialEq,Eq,Clone,Default)]
@@ -124,7 +115,7 @@ impl ScopedByModule<Vec<String>> {
 
     /// Every name in it, the run's and every module's together. Whether a language exists is not
     /// something one module answers differently, so the check for an unknown name reads this.
-    pub fn get_all_names(&self) -> Vec<String> {
+    pub fn collect_all_names(&self) -> Vec<String> {
         let mut names = self.whole_run.clone();
         for own in self.per_module.values() {
             let fresh = own.iter().filter(|name| !names.contains(name)).cloned().collect::<Vec<_>>();
@@ -137,6 +128,11 @@ impl ScopedByModule<Vec<String>> {
     /// Whether it names nothing anywhere.
     pub fn is_empty(&self) -> bool {
         self.whole_run.is_empty() && self.per_module.values().all(Vec::is_empty)
+    }
+
+    /// The given language names for the whole run.
+    pub fn of_names(names: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        Self::of_the_whole_run(crate::domain::owned_strings(names))
     }
 
     /// Reads a flat list where a scope is spelled `module/name`, the way a person writes it and a
@@ -180,6 +176,12 @@ impl ScopedByModule<HashMap<String,String>> {
     /// Whether it holds no rule anywhere.
     pub fn is_empty(&self) -> bool {
         self.whole_run.is_empty() && self.per_module.values().all(HashMap::is_empty)
+    }
+
+    /// The given rules for the whole run, each a claimed extension with its language.
+    pub fn of_rules(rules: impl IntoIterator<Item = (impl AsRef<str>, impl AsRef<str>)>) -> Self {
+        Self::of_the_whole_run(rules.into_iter()
+                .map(|(claimed, language)| (claimed.as_ref().to_owned(), language.as_ref().to_owned())).collect())
     }
 
     /// Reads a flat map whose keys may be spelled `module/extension`.
@@ -256,7 +258,7 @@ pub struct PathPatterns {
     /// The patterns, as written.
     pub patterns: Vec<String>,
     /// The project directory whose own configuration supplied the patterns. Every target inside
-    /// it then reads names from that directory's parent, the way `mezura ./` typed there would.
+    /// it then reads names from that directory's parent, the way a run of that directory would.
     /// `None` reads them from each target's own parent.
     pub read_from: Option<String>,
     /// Whether a name that matched nothing is reported, which a list typed for this run wants and
@@ -290,23 +292,32 @@ pub struct Threads {
 }
 
 impl Threads {
-    /// Clamped into range rather than refused: a count outside it is a preference the machine
-    /// cannot honour, not a mistake worth ending a run over. See [`MIN_PRODUCERS_VALUE`] and the
-    /// three constants beside it.
+    /// The most scanning threads [`Threads::new`] will accept, anything above it being clamped down.
+    pub const MAX_PRODUCERS : usize = 32;
+    /// The fewest, anything below it being clamped up.
+    pub const MIN_PRODUCERS : usize = 1;
+    /// The most counting threads, and the same clamping.
+    pub const MAX_CONSUMERS : usize = 128;
+    /// The fewest.
+    pub const MIN_CONSUMERS : usize = 1;
+
+    /// Clamped into range, since a count outside it is a preference the machine cannot honour and
+    /// no mistake worth ending a run over. See [`Threads::MIN_PRODUCERS`] and the three constants
+    /// beside it.
     pub fn new(producers: usize, consumers: usize) -> Self {
         Threads {
-            producers: producers.clamp(MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE),
-            consumers: consumers.clamp(MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE)
+            producers: producers.clamp(Self::MIN_PRODUCERS, Self::MAX_PRODUCERS),
+            consumers: consumers.clamp(Self::MIN_CONSUMERS, Self::MAX_CONSUMERS)
         }
     }
 
     /// How many threads scan directories.
-    pub fn producers(&self) -> usize {
+    pub fn get_producers(&self) -> usize {
         self.producers
     }
 
     /// How many read and count the files they find.
-    pub fn consumers(&self) -> usize {
+    pub fn get_consumers(&self) -> usize {
         self.consumers
     }
 }
@@ -322,8 +333,8 @@ impl Default for Threads {
         let threads = num_cpus::get();
         let (threads_per_producer, consumers_per_thread) = if cfg!(windows) {(2, 4)} else {(4, 2)};
         Threads {
-            producers: (threads / threads_per_producer).clamp(2, MAX_PRODUCERS_VALUE),
-            consumers: (threads * consumers_per_thread).clamp(8, MAX_CONSUMERS_VALUE)
+            producers: (threads / threads_per_producer).clamp(2, Self::MAX_PRODUCERS),
+            consumers: (threads * consumers_per_thread).clamp(8, Self::MAX_CONSUMERS)
         }
     }
 }

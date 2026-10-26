@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use directories::ProjectDirs;
+pub use mezura_core::normalise_separators;
 
 pub const APP_NAME : &str = "mezura";
 pub const LANGUAGES_DIR_NAME : &str = "languages";
@@ -112,10 +113,6 @@ pub fn find_local_dir(target_paths: &[String]) -> Option<LocalDir> {
 pub fn choose_place_for_a_local_dir(target_paths: &[String]) -> Option<LocalDir> {
     let directory = find_common_ancestor(target_paths)?;
     may_be_searched(&directory).then(|| build_local_dir_at(&directory))
-}
-
-pub fn normalise_separators(path: &str) -> Cow<'_, str> {
-    if cfg!(windows) {Cow::Owned(path.replace('\\', "/"))} else {Cow::Borrowed(path)}
 }
 
 pub fn fold_for_comparison(path: &str) -> Cow<'_, str> {

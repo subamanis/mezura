@@ -37,7 +37,7 @@ impl std::fmt::Display for PatternError {
     }
 }
 
-/// Whether every pattern of `--tests` reads, for refusing a bad one at the moment somebody typed it.
+/// Whether every test pattern of a list reads, for refusing a bad one at the moment somebody typed it.
 pub fn validate_test_patterns(patterns: &[impl AsRef<str>]) -> Result<(), PatternError> {
     PathPatternMatcher::compile(patterns, TakingBack::Allowed).map(|_| ())
 }

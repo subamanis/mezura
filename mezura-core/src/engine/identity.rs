@@ -30,7 +30,8 @@ pub enum ClaimKind {
 }
 
 impl ClaimKind {
-    pub(crate) fn as_str(&self) -> &'static str {
+    /// The stable spelling, `extension`, `filename` or `shebang`.
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::Extension => "extension",
             Self::Filename => "filename",
@@ -62,12 +63,23 @@ impl ClaimKind {
 #[derive(Debug,PartialEq,Eq,Clone,Copy)]
 #[non_exhaustive]
 pub enum SettledBy {
-    /// A `--force-language` pair, which decides one run.
+    /// A pair of [`crate::EngineConfig::forced_languages`], which decides one run.
     ForcedPair,
     /// A line of `language_conflicts.txt`, which decides every run on this machine.
     ConflictRule,
     /// Nothing but the alphabet, because neither of the two above named this one.
     AlphabeticalTiebreak
+}
+
+impl SettledBy {
+    /// The stable spelling, `forced_pair`, `conflict_rule` or `alphabetical_tiebreak`.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ForcedPair => "forced_pair",
+            Self::ConflictRule => "conflict_rule",
+            Self::AlphabeticalTiebreak => "alphabetical_tiebreak"
+        }
+    }
 }
 
 /// One name a language claims, and which language a file wearing it is counted as.

@@ -7,10 +7,11 @@ use std::{collections::HashMap, sync::OnceLock};
 /// each of their lines is.
 ///
 /// Built with [`Language::new`] and the `with_` methods, never with a struct literal: one field is
-/// a cache this crate fills as it counts.
+/// a cache this crate fills as it counts. Every builder drops an empty symbol, and a pair with an
+/// empty half.
 #[derive(Debug, Clone)]
 pub struct Language {
-    /// What the report calls it, and the name `--languages` answers to.
+    /// What the report calls it, and the name [`crate::EngineConfig::languages_of_interest`] answers to.
     pub name: String,
     /// Without the dot, and matched without regard to case.
     pub extensions : Vec<String>,
@@ -89,8 +90,7 @@ impl Language {
             strings,
             heredoc : None,
             comment_symbols : owned_strings(comment_symbols),
-            multiline_comments : multiline_comments.iter()
-                    .map(|(start, end)| ((*start).to_owned(), (*end).to_owned())).collect(),
+            multiline_comments : owned_pairs(multiline_comments),
             nesting_comments : Vec::new(),
             leveled_comments : Vec::new(),
             line_start_comments : Vec::new(),
@@ -114,14 +114,13 @@ impl Language {
     pub fn with_identification(mut self, line_starts: impl IntoIterator<Item = impl AsRef<str>>,
         line_contains: impl IntoIterator<Item = impl AsRef<str>>) -> Self
     {
-        let kept = |x: Vec<String>| x.into_iter().filter(|literal| !literal.is_empty()).collect();
-        self.identifying_line_starts = kept(owned_strings(line_starts));
-        self.identifying_line_contains = kept(owned_strings(line_contains));
+        self.identifying_line_starts = owned_strings(line_starts);
+        self.identifying_line_contains = owned_strings(line_contains);
         self
     }
 
     /// Adds long-bracket comment pairs. Takes the parsed pair rather than its text, which
-    /// [`LeveledPair::of`] reads, and a comment closer whose run ends it is refused by the file
+    /// [`LeveledPair::parse`] reads, and a comment closer whose run ends it is refused by the file
     /// reader.
     pub fn with_leveled_comments(mut self, pairs: &[LeveledPair]) -> Self {
         self.leveled_comments.extend(pairs.iter().cloned());
@@ -160,7 +159,7 @@ impl Language {
 
     /// Declares the word that names a module living in another file, `mod` for Rust.
     pub fn with_module_keyword(mut self, keyword: impl AsRef<str>) -> Self {
-        self.module_keyword = Some(keyword.as_ref().to_owned());
+        self.module_keyword = Some(keyword.as_ref().to_owned()).filter(|keyword| !keyword.is_empty());
         self
     }
 
@@ -192,29 +191,26 @@ impl Language {
 
     /// Adds comment pairs that nest inside themselves.
     pub fn with_nesting_comments(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
-        self.nesting_comments.extend(pairs.iter()
-                .map(|(start, end)| (start.as_ref().to_owned(), end.as_ref().to_owned())));
+        self.nesting_comments.extend(owned_pairs(pairs));
         self
     }
 
     /// Adds comment pairs whose ends count only at the start of a line.
     pub fn with_line_start_comments(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
-        self.line_start_comments.extend(pairs.iter()
-                .map(|(start, end)| (start.as_ref().to_owned(), end.as_ref().to_owned())));
+        self.line_start_comments.extend(owned_pairs(pairs));
         self
     }
 
     /// Adds comment pairs whose ends count only as the whole of a line.
     pub fn with_whole_line_comments(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
-        self.whole_line_comments.extend(pairs.iter()
-                .map(|(start, end)| (start.as_ref().to_owned(), end.as_ref().to_owned())));
+        self.whole_line_comments.extend(owned_pairs(pairs));
         self
     }
 
     /// Adds symbols that stop counting as themselves when the given character sits right in front
     /// of them.
     pub fn with_cancelled_symbols(mut self, symbols: &[(impl AsRef<str>, u8)]) -> Self {
-        self.cancelled_symbols.extend(symbols.iter()
+        self.cancelled_symbols.extend(symbols.iter().filter(|(symbol, _)| !symbol.as_ref().is_empty())
                 .map(|(symbol, after)| (symbol.as_ref().to_owned(), *after)));
         self
     }
@@ -451,7 +447,7 @@ impl<'a> LineBoundPair<'a> {
 /// Escaping is two questions, and the wrong answer to either runs a string past the quote that
 /// should have closed it. The byte here says which one escapes; [`MultilineString::escapes`] says
 /// whether anything escapes inside one form that crosses lines, and PowerShell answers the two
-/// differently per form.
+/// differently per form. Every builder drops an empty symbol, and a pair with an empty half.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StringRules {
     escape : Option<u8>,
@@ -490,27 +486,27 @@ impl StringRules {
 
     /// Adds symbols that open a string running past the end of its line, escapes obeyed inside it.
     pub fn with_multiline_strings(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
-        self.multiline.extend(symbols.into_iter().map(|x| MultilineString::escaping(x.as_ref())));
+        self.multiline.extend(owned_strings(symbols).iter().map(|x| MultilineString::escaping(x)));
         self
     }
 
     /// The same, for the forms where nothing escapes and only the closing symbol ends the string.
     pub fn with_raw_multiline_strings(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
-        self.multiline.extend(symbols.into_iter().map(|x| MultilineString::raw(x.as_ref())));
+        self.multiline.extend(owned_strings(symbols).iter().map(|x| MultilineString::raw(x)));
         self
     }
 
     /// The same again, for the forms opened and closed by different text, such as `R"(` with `)"`.
     pub fn with_string_pairs(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
-        self.multiline.extend(pairs.iter().map(|(open, close)| MultilineString::of(open.as_ref(), close.as_ref())));
+        self.multiline.extend(owned_pairs(pairs).iter().map(|(open, close)| MultilineString::of(open, close)));
         self
     }
 
     /// The same, for pairs inside which the closer written twice is one quote of the text, C#'s
     /// `@"` with `"`.
     pub fn with_string_pairs_escaped_by_doubling(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
-        self.multiline.extend(pairs.iter().map(|(open, close)| MultilineString {
-            escapes_by_doubling: true, ..MultilineString::of(open.as_ref(), close.as_ref())
+        self.multiline.extend(owned_pairs(pairs).iter().map(|(open, close)| MultilineString {
+            escapes_by_doubling: true, ..MultilineString::of(open, close)
         }));
         self
     }
@@ -518,8 +514,8 @@ impl StringRules {
     /// The same, for pairs the writer may give a delimiter of their own, C++'s `R"(` with `)"`, which
     /// `R"xy(` opens and only `)xy"` closes.
     pub fn with_delimited_string_pairs(mut self, pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Self {
-        self.multiline.extend(pairs.iter().map(|(open, close)| MultilineString {
-            delimited: true, ..MultilineString::of(open.as_ref(), close.as_ref())
+        self.multiline.extend(owned_pairs(pairs).iter().map(|(open, close)| MultilineString {
+            delimited: true, ..MultilineString::of(open, close)
         }));
         self
     }
@@ -563,7 +559,7 @@ impl StringRules {
 /// Whether it escapes is the one thing the shape cannot answer, since a backtick escapes nothing in
 /// Go, Odin and D and does escape in a JavaScript template literal, and `"""` splits the same way
 /// between Kotlin and Java. A form written with two different symbols is raw by construction, which
-/// is why [`MultilineString::of`] takes no flag.
+/// is why `MultilineString::of` takes no flag.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MultilineString {
     /// The text that opens it.
@@ -581,19 +577,19 @@ pub struct MultilineString {
 
 impl MultilineString {
     /// One symbol at both ends, escapes obeyed inside.
-    pub fn escaping(symbol: &str) -> MultilineString {
+    pub(crate) fn escaping(symbol: &str) -> MultilineString {
         MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: true, escapes_by_doubling: false,
                 delimited: false }
     }
 
     /// One symbol at both ends, nothing escaping inside.
-    pub fn raw(symbol: &str) -> MultilineString {
+    pub(crate) fn raw(symbol: &str) -> MultilineString {
         MultilineString { open: symbol.to_owned(), close: symbol.to_owned(), escapes: false, escapes_by_doubling: false,
                 delimited: false }
     }
 
     /// Different text at each end, which is raw by construction.
-    pub fn of(open: &str, close: &str) -> MultilineString {
+    pub(crate) fn of(open: &str, close: &str) -> MultilineString {
         MultilineString { open: open.to_owned(), close: close.to_owned(), escapes: false, escapes_by_doubling: false,
                 delimited: false }
     }
@@ -601,6 +597,7 @@ impl MultilineString {
 
 /// Whose rules a heredoc follows, which decide the word after its opener and the line that closes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum HeredocRules {
     /// `<<EOF`, and `<<-EOF` closing behind tabs. One that never closes runs to the end of the file.
     Shell,
@@ -614,7 +611,7 @@ pub enum HeredocRules {
 
 impl HeredocRules {
     /// The rules a language file names, `None` for a name that is none of them.
-    pub fn of(name: &str) -> Option<HeredocRules> {
+    pub fn parse(name: &str) -> Option<HeredocRules> {
         match name {
             "shell" => Some(HeredocRules::Shell),
             "perl" => Some(HeredocRules::Perl),
@@ -674,7 +671,7 @@ pub enum TestFileName {
 
 impl TestFileName {
     /// Reads one written form. `None` for a `*` anywhere but at one end, and for a `*` alone.
-    pub fn of(written: &str) -> Option<TestFileName> {
+    pub fn parse(written: &str) -> Option<TestFileName> {
         let stars = written.matches('*').count();
         if let Some(suffix) = written.strip_prefix('*') && stars == 1 && !suffix.is_empty() {
             return Some(TestFileName::EndsWith(suffix.to_owned()));
@@ -738,7 +735,7 @@ pub struct LeveledPair {
 impl LeveledPair {
     /// Splits both halves around their marker, and answers `None` if either is not written that
     /// way, if the two count different bytes, or if the opener ends in its run.
-    pub fn of(start: &str, end: &str) -> Option<LeveledPair> {
+    pub fn parse(start: &str, end: &str) -> Option<LeveledPair> {
         let (start_prefix, filler, start_suffix) = split_leveled_half(start)?;
         let (end_prefix, end_filler, end_suffix) = split_leveled_half(end)?;
         if end_filler != filler {
@@ -1068,8 +1065,8 @@ impl CountingModel {
 
 /// What was counted, for one language, one module or a whole run.
 ///
-/// The code and comment columns and the average size are methods rather than fields, so a stored
-/// copy cannot drift from the numbers it came from.
+/// The code and comment columns are methods, so a stored copy cannot drift from the numbers it
+/// came from.
 #[derive(Debug,PartialEq,Default,Clone)]
 pub struct Stats {
     /// How many files went into these figures.
@@ -1083,15 +1080,15 @@ pub struct Stats {
     /// How often each keyword was found, under the name its language gave the count. Added up over
     /// a run these are every keyword every language declared, which is what answers "how many
     /// classes are in this project" across the several languages that have such a thing.
-    pub keyword_occurences : HashMap<String,usize>
+    pub keyword_occurrences : HashMap<String,usize>
 }
 
 impl Stats {
     /// Figures the caller already has, from a log file or a document.
     pub fn new(files: usize, bytes: usize, lines: usize, classes: LineClasses,
-            keyword_occurences: HashMap<String,usize>) -> Self
+            keyword_occurrences: HashMap<String,usize>) -> Self
     {
-        Stats { files, bytes, lines, classes, keyword_occurences }
+        Stats { files, bytes, lines, classes, keyword_occurrences }
     }
 
     /// The code column under that model.
@@ -1120,13 +1117,13 @@ impl Stats {
         self.bytes += other.bytes;
         self.lines += other.lines;
         self.classes.add(&other.classes);
-        for (keyword, occurrences) in other.keyword_occurences.iter() {
-            *self.keyword_occurences.entry(keyword.clone()).or_default() += *occurrences;
+        for (keyword, occurrences) in other.keyword_occurrences.iter() {
+            *self.keyword_occurrences.entry(keyword.clone()).or_default() += *occurrences;
         }
     }
 
     /// Every language added together, which is what the last row of a report holds.
-    pub fn total_of(languages: &HashMap<String, Stats>) -> Self {
+    pub fn calculate_total_of(languages: &HashMap<String, Stats>) -> Self {
         let mut total = Stats::default();
         for stats in languages.values() {
             total.add(stats);
@@ -1154,9 +1151,9 @@ impl Stats {
         self.bytes += bytes;
         self.lines += stats.lines;
         self.classes.add(&stats.classes);
-        for (keyword_index, occurrences) in stats.keyword_occurences.iter().enumerate() {
+        for (keyword_index, occurrences) in stats.keyword_occurrences.iter().enumerate() {
             if *occurrences > 0 {
-                *self.keyword_occurences.entry(keywords[keyword_index].descriptive_name.clone())
+                *self.keyword_occurrences.entry(keywords[keyword_index].descriptive_name.clone())
                         .or_default() += *occurrences;
             }
         }
@@ -1168,7 +1165,7 @@ impl Stats {
 // language count nothing.
 impl From<&Language> for Stats {
     fn from(language: &Language) -> Self {
-        Stats { keyword_occurences: create_keyword_slots(language), ..Default::default() }
+        Stats { keyword_occurrences: create_keyword_slots(language), ..Default::default() }
     }
 }
 
@@ -1180,7 +1177,7 @@ impl From<&Language> for Stats {
 pub(crate) struct FileStats {
     pub lines : usize,
     pub classes : LineClasses,
-    pub keyword_occurences : Vec<usize>
+    pub keyword_occurrences : Vec<usize>
 }
 
 impl FileStats {
@@ -1188,14 +1185,14 @@ impl FileStats {
         FileStats {
             lines : 0,
             classes : LineClasses::default(),
-            keyword_occurences : vec![0; keywords.len()]
+            keyword_occurrences : vec![0; keywords.len()]
         }
     }
 
     pub(crate) fn subtract(&mut self, other: &FileStats) {
         self.lines = self.lines.saturating_sub(other.lines);
         self.classes.subtract(&other.classes);
-        for (slot, counted) in self.keyword_occurences.iter_mut().zip(&other.keyword_occurences) {
+        for (slot, counted) in self.keyword_occurrences.iter_mut().zip(&other.keyword_occurrences) {
             *slot = slot.saturating_sub(*counted);
         }
     }
@@ -1204,7 +1201,12 @@ impl FileStats {
 // 'AsRef<str>' and not 'Into<String>': everything ends up owned anyway, and the borrowed form also
 // takes a Cow off a path and a reference to any of them.
 pub(crate) fn owned_strings(items: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
-    items.into_iter().map(|x| x.as_ref().to_owned()).collect()
+    items.into_iter().filter(|x| !x.as_ref().is_empty()).map(|x| x.as_ref().to_owned()).collect()
+}
+
+fn owned_pairs(pairs: &[(impl AsRef<str>, impl AsRef<str>)]) -> Vec<(String, String)> {
+    pairs.iter().filter(|(start, end)| !start.as_ref().is_empty() && !end.as_ref().is_empty())
+            .map(|(start, end)| (start.as_ref().to_owned(), end.as_ref().to_owned())).collect()
 }
 
 // The half before the counted byte, that byte, and the one byte after its '*' if there is one. A
@@ -1318,9 +1320,9 @@ mod tests {
 
     #[test]
     fn a_test_file_name_takes_one_of_three_shapes_and_matches_the_case_it_is_written_in() {
-        let ends = TestFileName::of("*_test.go").unwrap();
-        let starts = TestFileName::of("test_*").unwrap();
-        let whole = TestFileName::of("tests.rs").unwrap();
+        let ends = TestFileName::parse("*_test.go").unwrap();
+        let starts = TestFileName::parse("test_*").unwrap();
+        let whole = TestFileName::parse("tests.rs").unwrap();
         assert_eq!(TestFileName::EndsWith("_test.go".to_owned()), ends);
         assert_eq!(TestFileName::StartsWith("test_".to_owned()), starts);
         assert_eq!(TestFileName::Exact("tests.rs".to_owned()), whole);
@@ -1331,7 +1333,7 @@ mod tests {
         assert_eq!(["*_test.go", "test_*", "tests.rs"], [ends.to_string(), starts.to_string(), whole.to_string()]);
 
         for wrong in ["", "*", "**", "a*b", "*a*", "test_*.rs*"] {
-            assert_eq!(None, TestFileName::of(wrong), "'{wrong}' was read as a shape");
+            assert_eq!(None, TestFileName::parse(wrong), "'{wrong}' was read as a shape");
         }
     }
 }

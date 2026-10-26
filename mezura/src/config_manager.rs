@@ -4,14 +4,13 @@ use colored::{ColoredString, Colorize};
 #[cfg(test)]
 use colored::Color;
 use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, PathPatterns, ScanSkip, Target, Threads,
-        validate_exclude_patterns, validate_test_patterns};
-use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE, MIN_PRODUCERS_VALUE};
-use mezura_core::engine::path_patterns::{absolutize_path_pattern, is_a_path_pattern, split_negation};
+        absolutize_path_pattern, is_a_path_pattern, split_negation, validate_exclude_patterns, validate_test_patterns};
 
 use super::config_files::InvalidField;
 use super::message_printer::{Formatted, wrap_message};
 use super::paths::LocalDir;
 use super::test_presets::{ExpandedPatterns, can_name_a_preset, expand_presets, is_a_shipped_name, write_user_preset};
+use super::warning_collector::{ProgramCode, ProgramWarning};
 use super::{message_printer, suggestions, theme::Theme};
 
 // Printed at startup and by '--version'. Also in mezura/Cargo.toml, and the two move together.
@@ -942,8 +941,8 @@ impl ConfigurationBuilder {
                 counting.get_other().get_third_quantity_name(), counting.as_str(),
                 counting.get_third_quantity_name());
         eprintln!("\n{}", wrap_message(&message).yellow());
-        super::warning_collector::keep(mezura_core::warnings::Warning::new(
-                mezura_core::warnings::Code::CommandIgnored, command, message));
+        super::warning_collector::keep(ProgramWarning::new(
+                ProgramCode::CommandIgnored, command, message));
     }
 
     // The only place that knows the flat form maps onto two halves. Everything above this stays one
@@ -976,16 +975,16 @@ impl ConfigurationBuilder {
             let message = format!("'--{SORT} {}' orders by a column '--{HIDE} {0}' takes out, so the report \
                     is sorted by lines.", sort_by.as_str());
             eprintln!("\n{}", wrap_message(&message).yellow());
-            super::warning_collector::keep(mezura_core::warnings::Warning::new(
-                    mezura_core::warnings::Code::CommandIgnored, SORT, message));
+            super::warning_collector::keep(ProgramWarning::new(
+                    ProgramCode::CommandIgnored, SORT, message));
             sort_by = SortCriterion::default();
         }
         if hidden.tests && self.test_patterns.as_ref().is_some_and(|x| !x.is_empty()) {
             let message = format!("'--{TESTS}' declares test code and '--{HIDE} tests' turns the detection \
                     off, so the patterns were not used.");
             eprintln!("\n{}", wrap_message(&message).yellow());
-            super::warning_collector::keep(mezura_core::warnings::Warning::new(
-                    mezura_core::warnings::Code::CommandIgnored, TESTS, message));
+            super::warning_collector::keep(ProgramWarning::new(
+                    ProgramCode::CommandIgnored, TESTS, message));
         }
         // Asked of the engine rather than kept as constants here, so that the help text and the
         // behaviour cannot answer differently
@@ -1202,8 +1201,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             FORCE_LANGUAGE => config_builder.forced_languages =
                     Some(parse_or_refuse(FORCE_LANGUAGE, arguments, super::args::parse_forced_languages)?),
             THREADS => config_builder.threads = Some(parse_or_refuse(THREADS, arguments,
-                    |x| super::args::parse_two_usize_values(x, MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE,
-                            MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE).map(Threads::from))?),
+                    |x| super::args::parse_two_usize_values(x, Threads::MIN_PRODUCERS, Threads::MAX_PRODUCERS,
+                            Threads::MIN_CONSUMERS, Threads::MAX_CONSUMERS).map(Threads::from))?),
             COUNTING => config_builder.counting = Some(parse_or_refuse(COUNTING, arguments, CountingModel::parse)?),
             SEARCH_IN_DOTTED => config_builder.should_search_in_dotted = Some(take_flag(command, SEARCH_IN_DOTTED)?),
             COUNT_MINIFIED => config_builder.count_minified = Some(take_flag(command, COUNT_MINIFIED)?),
@@ -1385,12 +1384,12 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
         match super::theme_files::load_theme(name, &crate::paths::PERSISTENT_APP_PATHS.themes_dir) {
             Some((styles, errors)) => {
                 for error in &errors {
-                    super::warning_collector::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConfigStyleInvalid, name,
+                    super::warning_collector::emit(ProgramWarning::new(ProgramCode::ConfigStyleInvalid, name,
                             format!("In theme '{name}': {}", error.format())));
                 }
                 config_builder.theme_styles = Some(styles);
             },
-            None => super::warning_collector::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ThemeUnavailable, name,
+            None => super::warning_collector::emit(ProgramWarning::new(ProgramCode::ThemeUnavailable, name,
                     format!("Theme '{name}' could not be loaded, the default styles will be used.")))
         }
     }
@@ -1624,9 +1623,9 @@ fn rebase_patterns_on(project_dir: &str, declared: PathPatterns) -> PathPatterns
     PathPatterns { patterns, read_from: Some(project_dir.to_owned()), reports_unmatched_names: false }
 }
 
-fn print_config_file_warnings(issues: &[(mezura_core::warnings::Code, String)], config_name: &str) {
+fn print_config_file_warnings(issues: &[(ProgramCode, String)], config_name: &str) {
     for (code, warning) in issues {
-        super::warning_collector::emit(mezura_core::warnings::Warning::new(*code, config_name,
+        super::warning_collector::emit(ProgramWarning::new(*code, config_name,
                 format!("In config '{config_name}': {warning}")));
     }
 }
@@ -1706,7 +1705,7 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
 
 fn report_ignored_config_value(field: &str, why: Option<&str>, config_name: &str) {
     let why = why.map(|why| format!(" {why}")).unwrap_or_default();
-    super::warning_collector::emit(mezura_core::warnings::Warning::new(mezura_core::warnings::Code::ConfigValueIgnored, field,
+    super::warning_collector::emit(ProgramWarning::new(ProgramCode::ConfigValueIgnored, field,
             format!("Invalid value for the command '--{field}', in config '{config_name}'.{why} The value will be ignored.")));
 }
 
@@ -1717,8 +1716,8 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(builder: &Config
     // kept as well, so that a machine consumer learns a command it gave was dropped
     let ignored = |command: &str, message: String| {
         eprintln!("\n{}", wrap_message(&message).yellow());
-        super::warning_collector::keep(mezura_core::warnings::Warning::new(
-                mezura_core::warnings::Code::CommandIgnored, command, message));
+        super::warning_collector::keep(ProgramWarning::new(
+                ProgramCode::CommandIgnored, command, message));
     };
 
     // A comparison is never logged, and saying so wins over the no-config sentence below: one
@@ -1751,13 +1750,13 @@ fn has_any_args(command: &str) -> bool {
 fn parse_targets(s: &str) -> Result<Vec<Target>, ArgParsingError> {
     let declared = super::args::parse_targets(s).map_err(ArgParsingError::MalformedTarget)?
             .into_iter().map(|(module, path)| Target { module, path }).collect::<Vec<_>>();
-    mezura_core::engine::targets::validate_and_absolutize(&declared).map_err(map_target_error)
+    mezura_core::validate_and_absolutize(&declared).map_err(map_target_error)
 }
 
 // The engine decides which paths are walkable; this turns what it says into the wording a person
 // reads on the command line.
-fn map_target_error(x: mezura_core::engine::targets::TargetError) -> ArgParsingError {
-    use mezura_core::engine::targets::TargetError;
+fn map_target_error(x: mezura_core::TargetError) -> ArgParsingError {
+    use mezura_core::TargetError;
     match x {
         TargetError::InvalidPath(p) => ArgParsingError::InvalidPath(p),
         TargetError::InvalidGlob(p) => ArgParsingError::InvalidGlobPattern(p),
@@ -1775,7 +1774,7 @@ fn map_target_error(x: mezura_core::engine::targets::TargetError) -> ArgParsingE
 fn create_targets_from_working_dir() -> Result<Vec<Target>, ArgParsingError> {
     if let Ok(path_buf) = std::env::current_dir()
         && let Some(path_str) = path_buf.to_str() {
-        return Ok(vec![Target::of(mezura_core::engine::targets::convert_to_absolute(path_str))]);
+        return Ok(vec![Target::of(mezura_core::convert_to_absolute(path_str))]);
     }
 
     Err(ArgParsingError::UnparsableWorkingDir)
@@ -1806,7 +1805,7 @@ mod tests {
     }
 
     fn new_conf(dir: &str) -> Configuration {
-        let targets = vec![Target::of(mezura_core::engine::targets::convert_to_absolute(dir))];
+        let targets = vec![Target::of(mezura_core::convert_to_absolute(dir))];
         let mut builder = ConfigurationBuilder { targets: Some(targets), ..Default::default() };
         if let Ok((default_config, _)) = super::super::config_files::parse_config_file(None, None) {
             builder.add_missing_fields(default_config);
@@ -2042,23 +2041,23 @@ mod tests {
         assert_eq!(Err(ArgParsingError::InvalidPath("a".to_owned())), parse_targets("a"));
         assert_eq!(Err(ArgParsingError::InvalidPath("a b c".to_owned())), parse_targets("a b c"));
 
-        assert_eq!(vec![mezura_core::engine::targets::convert_to_absolute("./")], parse_targets("./").unwrap());
-        assert_eq!(vec![mezura_core::engine::targets::convert_to_absolute("./src")], parse_targets("\"./src\"").unwrap());
+        assert_eq!(vec![mezura_core::convert_to_absolute("./")], parse_targets("./").unwrap());
+        assert_eq!(vec![mezura_core::convert_to_absolute("./src")], parse_targets("\"./src\"").unwrap());
 
         // Declared as written: a target inside another survives the parse, because the swallowing
         // of overlaps happens with the expansion, inside the run
-        assert_eq!(vec![mezura_core::engine::targets::convert_to_absolute("./"), mezura_core::engine::targets::convert_to_absolute(".././")],
+        assert_eq!(vec![mezura_core::convert_to_absolute("./"), mezura_core::convert_to_absolute(".././")],
                 parse_targets("./, .././").unwrap());
 
         // A space is not a separator while no module is named, so a path is allowed to contain one
         assert_eq!(Err(ArgParsingError::InvalidPath("./tests ./src".to_owned())), parse_targets("./tests ./src"));
-        assert_eq!(vec![mezura_core::engine::targets::convert_to_absolute("./")], parse_targets(&std::env::current_dir().unwrap().to_string_lossy()).unwrap());
+        assert_eq!(vec![mezura_core::convert_to_absolute("./")], parse_targets(&std::env::current_dir().unwrap().to_string_lossy()).unwrap());
     }
 
     #[test]
     fn a_target_can_be_declared_under_a_module_name() {
-        let src = mezura_core::engine::targets::convert_to_absolute("./src");
-        let tests = mezura_core::engine::targets::convert_to_absolute("./tests");
+        let src = mezura_core::convert_to_absolute("./src");
+        let tests = mezura_core::convert_to_absolute("./tests");
 
         // Only the command line's own half: a declared name reaches a Target with its path made
         // absolute, and the errors are worded here. The grammar itself belongs to 'args'.
@@ -2246,7 +2245,7 @@ mod tests {
 
         let mut saved_config = create_config_builder_from_args("--threads 1 5 --languages lang1, lang2 --save test000").unwrap();
         assert!(Path::new(test_file_path).exists());
-        assert_eq!(saved_config.targets.clone().unwrap()[0], Target::of(mezura_core::engine::targets::convert_to_absolute("./")));
+        assert_eq!(saved_config.targets.clone().unwrap()[0], Target::of(mezura_core::convert_to_absolute("./")));
         assert_eq!(saved_config.threads.unwrap(), Threads::new(1, 5));
         assert_eq!(saved_config.languages_of_interest.clone().unwrap(), vec!["lang1", "lang2"]);
 
@@ -2421,7 +2420,7 @@ mod tests {
         assert!(!rescued.engine.use_heuristics);
         assert!(!rescued.engine.detect_shebangs);
         assert_eq!(Some(ByFile::Capped(8)), rescued.view.by_file);
-        assert_eq!(vec![Target::of(mezura_core::engine::targets::convert_to_absolute("./"))], rescued.engine.targets);
+        assert_eq!(vec![Target::of(mezura_core::convert_to_absolute("./"))], rescued.engine.targets);
         assert_eq!(CountingModel::Region, rescued.view.counting);
         assert_eq!(SortCriterion::Name, rescued.view.sort_by);
         assert_eq!(Some(3), rescued.view.top_n);
@@ -2602,7 +2601,7 @@ mod tests {
         let typed_nothing = create_config_from_args("").unwrap();
 
         assert_eq!(create_config_from_args("--top 3").unwrap().engine.targets, typed_nothing.engine.targets);
-        assert_eq!(vec![Target::of(mezura_core::engine::targets::convert_to_absolute("./"))],
+        assert_eq!(vec![Target::of(mezura_core::convert_to_absolute("./"))],
                 typed_nothing.engine.targets, "a run that named nothing stopped counting the working directory");
     }
 
@@ -2699,7 +2698,8 @@ mod tests {
         assert!(!config.engine.detect_tests);
 
         let warned = crate::warning_collector::get_collected_warnings().into_iter()
-                .find(|x| x.code == mezura_core::warnings::Code::CommandIgnored && x.subject == TESTS).unwrap();
+                .find(|x| x.code == crate::warning_collector::AnyCode::Program(ProgramCode::CommandIgnored)
+                        && x.subject == TESTS).unwrap();
         assert!(warned.message.contains("'--hide tests' turns the detection off"), "{}", warned.message);
     }
 }

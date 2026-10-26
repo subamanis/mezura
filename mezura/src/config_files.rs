@@ -5,16 +5,13 @@ use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
 use colored::{ColoredString, Colorize};
-use mezura_core::engine::config::{Target, Threads};
-use mezura_core::engine::config::{MAX_CONSUMERS_VALUE, MAX_PRODUCERS_VALUE, MIN_CONSUMERS_VALUE,
-        MIN_PRODUCERS_VALUE};
-use mezura_core::{validate_exclude_patterns, validate_test_patterns};
-use mezura_core::PathPatterns;
+use mezura_core::{PathPatterns, Target, Threads, validate_exclude_patterns, validate_test_patterns};
 
 use super::config_manager::{self, ConfigurationBuilder};
 use super::config_manager::{MAX_COMPARE_LEVEL, MIN_COMPARE_LEVEL};
 use super::message_printer::{Formatted, wrap_message};
 use super::test_presets::expand_presets;
+use super::warning_collector::ProgramCode;
 use crate::paths::{DEFAULT_CONFIG_NAME, PERSISTENT_APP_PATHS};
 
 #[derive(Debug)]
@@ -52,7 +49,7 @@ pub struct ConfigFileIssues {
     pub invalid_fields: Vec<InvalidField>,
     // The code travels with the message from where the kind is known, so nothing downstream has to
     // recover it by looking for a phrase inside the English.
-    pub warnings: Vec<(mezura_core::warnings::Code, String)>
+    pub warnings: Vec<(ProgramCode, String)>
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -141,8 +138,8 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 },
                 config_manager::THREADS => read_parsed_value(&mut builder.threads, &mut reader, &mut buf,
                         config_manager::THREADS, &mut issues,
-                        |x| super::args::parse_two_usize_values(x, MIN_PRODUCERS_VALUE, MAX_PRODUCERS_VALUE,
-                                MIN_CONSUMERS_VALUE, MAX_CONSUMERS_VALUE).map(Threads::from)),
+                        |x| super::args::parse_two_usize_values(x, Threads::MIN_PRODUCERS, Threads::MAX_PRODUCERS,
+                                Threads::MIN_CONSUMERS, Threads::MAX_CONSUMERS).map(Threads::from)),
                 config_manager::COUNTING => read_parsed_value(&mut builder.counting, &mut reader, &mut buf,
                         config_manager::COUNTING, &mut issues, mezura_core::CountingModel::parse),
                 config_manager::SHOW_SKIPPED => read_flag_value(&mut builder.should_show_skipped_files,
@@ -193,7 +190,7 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                 config_manager::STYLE => {
                     let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]);
                     let (declared, errors) = super::theme::parse_overrides_leniently(&declared.join("\n"));
-                    issues.warnings.extend(errors.iter().map(|x| (mezura_core::warnings::Code::ConfigStyleInvalid, x.format())));
+                    issues.warnings.extend(errors.iter().map(|x| (ProgramCode::ConfigStyleInvalid, x.format())));
                     if !declared.is_empty() {
                         builder.config_styles = Some(declared);
                     }
@@ -203,12 +200,12 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
                         |x| super::args::parse_usize_value(x, MIN_COMPARE_LEVEL, MAX_COMPARE_LEVEL)),
                 _ => {
                     known = false;
-                    issues.warnings.push((mezura_core::warnings::Code::ConfigSectionUnknown,
+                    issues.warnings.push((ProgramCode::ConfigSectionUnknown,
                             format!("'{id}' is not something a configuration file can carry, the section is ignored.")));
                 }
             }
             if known && repeated {
-                issues.warnings.push((mezura_core::warnings::Code::ConfigSectionRepeated,
+                issues.warnings.push((ProgramCode::ConfigSectionRepeated,
                         format!("'{id}' is declared more than once in this configuration. Delete every \
                                 declaration of it but the one you want.")));
             }
@@ -291,7 +288,7 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     }
     if let Some(threads) = &config_builder.threads {
         write_block(&mut writer, config_manager::THREADS,
-                &format!("{} {}", threads.producers(), threads.consumers()))?;
+                &format!("{} {}", threads.get_producers(), threads.get_consumers()))?;
     }
     if let Some(counting) = &config_builder.counting {
         write_block(&mut writer, config_manager::COUNTING, counting.as_str())?;
@@ -634,7 +631,7 @@ mod tests {
         // the rest of the file still applies
         assert_eq!(Some(mezura_core::CountingModel::Region), options.counting);
         assert!(issues.warnings.iter().any(|(code, message)|
-                *code == mezura_core::warnings::Code::ConfigSectionUnknown && message.contains("'log'")),
+                *code == ProgramCode::ConfigSectionUnknown && message.contains("'log'")),
                 "the ignored section was not named: {:?}", issues.warnings);
 
         let mut loaded = ConfigurationBuilder::default();
@@ -655,7 +652,7 @@ mod tests {
         assert_eq!(Some(5), options.top_n);
         assert!(issues.invalid_fields.is_empty());
         assert!(issues.warnings.iter().any(|(code, message)|
-                *code == mezura_core::warnings::Code::ConfigSectionRepeated && message.contains("'top'")),
+                *code == ProgramCode::ConfigSectionRepeated && message.contains("'top'")),
                 "the repeated section was not named: {:?}", issues.warnings);
 
         std::fs::remove_file(&path)

@@ -1,10 +1,10 @@
 use std::path::Path;
 
-use crate::{EngineConfig, Language, LineClass, LineClasses, ScanSkip, Span, TestFileName};
+use crate::{EngineConfig, Language, LineClass, LineClasses, ScanSkip, Span, Target, TestFileName};
 use crate::domain::CommentPair;
 use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file, find_scan_skip, judge_tests_by_path};
 use crate::engine::path_patterns::{PathPatternMatcher, TakingBack};
-use crate::engine::targets::{convert_to_absolute, find_names_root_of_path, spell_out};
+use crate::engine::targets::{Targets, convert_to_absolute, find_names_root_of_path, is_inside_or_at, spell_out};
 use crate::engine::test_detection::{DirectoryScope, FilesOnDisk, OwnListing, PresetClimb, PresetsTakenBack, TestScope,
         TestsByPath, find_declaring_chain, find_test_directory_along};
 use crate::languages::Languages;
@@ -96,7 +96,7 @@ pub enum TestFileRule {
 impl TestFileRule {
     /// `test_directory`, `file_name`, `preset`, `declared`, `declared_not_tests`,
     /// `declared_module`, `file_marker` or `inner_attribute`.
-    pub fn get_name(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::TestDirectory { .. } => "test_directory",
             Self::FileName(_) => "file_name",
@@ -112,7 +112,6 @@ impl TestFileRule {
 
 /// One tool's part in a [`TestFileRule::Preset`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct MatchedPreset {
     /// The preset's name, `jest`.
     pub name: String,
@@ -125,13 +124,6 @@ pub struct MatchedPreset {
     /// The tool's configuration file in `directory` that declared the names in force, `pyproject.toml`.
     /// None where the preset's own names were.
     pub configured_by: Option<String>
-}
-
-impl MatchedPreset {
-    /// The type is non-exhaustive, so this is how a crate outside this one builds it.
-    pub fn new(name: String, directory: String, trigger_file: String, pattern: String, configured_by: Option<String>) -> Self {
-        MatchedPreset { name, directory, trigger_file, pattern, configured_by }
-    }
 }
 
 /// What one line of the file came to.
@@ -187,7 +179,7 @@ pub enum Carried {
 }
 
 /// Why a file could not be explained.
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum ExplainError {
     /// The languages were resolved against a configuration that selects a different set from the
@@ -196,8 +188,10 @@ pub enum ExplainError {
     LanguagesFromAnotherConfig,
     /// No language in play claims this file, so there are no symbols to read it with.
     UnclaimedFile,
-    /// The file could not be read, with what went wrong.
-    UnreadableFile(String),
+    /// The path is a directory, so there is no file to read.
+    IsADirectory,
+    /// The file could not be read, with what the operating system said.
+    UnreadableFile(std::io::Error),
     /// A pattern of [`crate::EngineConfig::test_patterns`] could not be read.
     InvalidTestPattern(crate::engine::path_patterns::PatternError),
 }
@@ -207,6 +201,7 @@ impl std::fmt::Display for ExplainError {
         match self {
             Self::LanguagesFromAnotherConfig => write!(f, "The languages were resolved against a configuration that selects a different set of them than the one this explanation was given, so the file would be read with the wrong symbols. Resolve them against the same configuration."),
             Self::UnclaimedFile => write!(f, "No language in play claims this file, so there is nothing to read it with."),
+            Self::IsADirectory => write!(f, "The path is a directory, so there is nothing to read line by line."),
             Self::UnreadableFile(x) => write!(f, "The file could not be read: {x}"),
             Self::InvalidTestPattern(x) => write!(f, "{x}")
         }
@@ -230,19 +225,25 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     if !languages.describe_the_same_selection_as(config) {
         return Err(ExplainError::LanguagesFromAnotherConfig);
     }
+    if path.is_dir() {
+        return Err(ExplainError::IsADirectory);
+    }
     let (by_name, lookups, nested_definitions) = languages.into_parts();
-    // Under the rules of the module the file was named in, so that '--explain ios=./a.m' answers
-    // with the same language the report would have counted it as. Matched against the target that
-    // is this very file, so a config naming several falls back to the rules of the whole run rather
-    // than to whichever target happens to be first.
-    let module = config.targets.iter().find(|target| Path::new(&target.path) == path)
-            .and_then(|target| target.module.as_deref());
+    let absolute = convert_to_absolute(&path.to_string_lossy());
+    let targets = crate::engine::targets::resolve(&config.targets, crate::ObeyedIgnoreFiles::of(config),
+            config.should_search_in_dotted).ok();
+    let module = match targets.as_ref().and_then(|targets| find_targets_holding(targets, &absolute)
+            .max_by_key(|target| target.path.len())) {
+        Some(target) => target.module.as_deref(),
+        None => config.targets.iter().find(|target| Path::new(&target.path) == path)
+                .and_then(|target| target.module.as_deref())
+    };
     let lookup = lookups.get_of_module_named(module);
     let Some(mut lang_name) = lookup.of_path_or_shebang(path) else {
         return Err(ExplainError::UnclaimedFile);
     };
     let contents = std::fs::read_to_string(path)
-            .map_err(|error| ExplainError::UnreadableFile(error.to_string()))?;
+            .map_err(ExplainError::UnreadableFile)?;
     let mut identified_by = None;
     let extension_rules = lookup.find_extension_rules(path);
     if let Some(contenders) = extension_rules.as_ref().and_then(|rules| rules.contenders.as_deref())
@@ -254,7 +255,8 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     let left_out_of_a_scan = find_scan_skip(&contents, extension_rules.as_deref(), config);
     let nested_lookup = NestedLanguageLookup::of(&by_name, &nested_definitions);
     let (tests_by_path, mut test_file_rule) = match config.detect_tests {
-        true => decide_whole_file(path, config, by_name.get(lang_name.as_ref()).unwrap(), &nested_lookup)?,
+        true => decide_whole_file(&absolute, config, targets.as_ref(), by_name.get(lang_name.as_ref()).unwrap(),
+                &nested_lookup)?,
         false => (TestsByPath::Nothing, None)
     };
     let (contents, report, log) = explain_parsed_file(contents, &lang_name, &nested_lookup, config, tests_by_path);
@@ -288,15 +290,13 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
             classes: whole.classes })
 }
 
-// The file is its own target, so a name pattern reads it from the folder above its own
-fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lookup: &NestedLanguageLookup)
-    -> Result<(TestsByPath, Option<TestFileRule>), ExplainError>
+fn decide_whole_file(absolute: &str, config: &EngineConfig, targets: Option<&Targets>, language: &Language,
+    lookup: &NestedLanguageLookup) -> Result<(TestsByPath, Option<TestFileRule>), ExplainError>
 {
     let patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed)
             .map_err(ExplainError::InvalidTestPattern)?;
-    let absolute = convert_to_absolute(&path.to_string_lossy());
-    let names_root = crate::find_names_root_of_target(&config.test_patterns, &absolute, find_names_root_of_path(&absolute, true));
-    let file = Path::new(&absolute);
+    let names_root = find_names_root_of_file(absolute, config, targets);
+    let file = Path::new(absolute);
     let folder = file.parent().unwrap_or(file);
     let climb = PresetClimb::new(PresetsTakenBack::of(&config.test_patterns.patterns));
     let checkout = config.checkout.as_ref().map(crate::engine::targets::resolve_checkout);
@@ -306,7 +306,7 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
     // and a declarer a pattern made whole seeds nothing of its own
     let is_whole = |candidate: &Path| {
         let spelled = spell_out(candidate);
-        let root = crate::find_names_root_of_target(&config.test_patterns, &spelled, find_names_root_of_path(&spelled, true));
+        let root = find_names_root_of_file(&spelled, config, targets);
         let candidate = Path::new(&spelled);
         let folder = candidate.parent().unwrap_or(candidate);
         DirectoryScope::of_target(folder, root, &patterns, &climb, OwnListing::Unread, checkout.as_ref())
@@ -321,7 +321,7 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
     let rule = match (decided_by, scope) {
         (Some(at), _) => {
             let pattern = config.test_patterns.patterns[at].trim().to_owned();
-            let matched_folder = patterns.find_place_matched_by(at, &absolute, names_root, true)
+            let matched_folder = patterns.find_place_matched_by(at, absolute, names_root, true)
                     .filter(|place| *place != absolute);
             Some(match scope {
                 TestScope::DeclaredNotTests => TestFileRule::DeclaredNotTests { pattern, matched_folder },
@@ -334,12 +334,12 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
                 build_files: found.build_files.iter().map(|file| spell_out(file)).collect()
             }),
             _ => {
-                let hits = holder.find_presets_deciding(&absolute, true);
+                let hits = holder.find_presets_deciding(absolute, true);
                 let matched_folder = hits.first().map(|hit| hit.place.clone()).filter(|place| *place != absolute);
                 (!hits.is_empty()).then(|| TestFileRule::Preset {
-                    presets: hits.into_iter().map(|hit| MatchedPreset::new(hit.preset.preset.name.to_owned(),
-                            hit.preset.directory.clone(), hit.preset.trigger_file.to_owned(), hit.pattern,
-                            hit.configured_by.map(str::to_owned))).collect(),
+                    presets: hits.into_iter().map(|hit| MatchedPreset { name: hit.preset.preset.name.to_owned(),
+                            directory: hit.preset.directory.clone(), trigger_file: hit.preset.trigger_file.to_owned(),
+                            pattern: hit.pattern, configured_by: hit.configured_by.map(str::to_owned) }).collect(),
                     matched_folder
                 })
             }
@@ -350,6 +350,19 @@ fn decide_whole_file(path: &Path, config: &EngineConfig, language: &Language, lo
         }
     };
     Ok((judge_tests_by_path(file, scope, language), rule))
+}
+
+fn find_names_root_of_file(absolute: &str, config: &EngineConfig, targets: Option<&Targets>) -> usize {
+    let outermost = targets.and_then(|targets| find_targets_holding(targets, absolute)
+            .min_by_key(|target| target.path.len()).map(|target| (target, targets.find_names_root_of(&target.path))));
+    match outermost {
+        Some((target, own)) => crate::find_names_root_of_target(&config.test_patterns, &target.path, own),
+        None => crate::find_names_root_of_target(&config.test_patterns, absolute, find_names_root_of_path(absolute, true))
+    }
+}
+
+fn find_targets_holding<'a>(targets: &'a [Target], absolute: &'a str) -> impl Iterator<Item = &'a Target> {
+    targets.iter().filter(move |target| is_inside_or_at(absolute, &target.path))
 }
 
 // The record holds symbol numbers, and what a reader gets is the symbol as the file spells it. The
@@ -552,12 +565,13 @@ mod tests {
         fs::write(&unclaimed, "text\n").unwrap();
 
         let config = EngineConfig::default();
-        assert_eq!(Err(ExplainError::UnclaimedFile),
-                explain_file(&unclaimed, &config, resolved_languages(&config))
-                        .map(|_| ()));
+        assert!(matches!(explain_file(&unclaimed, &config, resolved_languages(&config)).map(|_| ()),
+                Err(ExplainError::UnclaimedFile)));
         assert!(matches!(
                 explain_file(&root.join("missing.rs"), &config, resolved_languages(&config)).map(|_| ()),
                 Err(ExplainError::UnreadableFile(_))));
+        assert!(matches!(explain_file(&root, &config, resolved_languages(&config)).map(|_| ()),
+                Err(ExplainError::IsADirectory)), "a directory was not refused as one");
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -568,8 +582,8 @@ mod tests {
             ..EngineConfig::default()
         };
         let languages = resolved_languages(&narrowed);
-        assert_eq!(Err(ExplainError::LanguagesFromAnotherConfig),
-                explain_file(&PathBuf::from("a.rs"), &EngineConfig::default(), languages).map(|_| ()));
+        assert!(matches!(explain_file(&PathBuf::from("a.rs"), &EngineConfig::default(), languages).map(|_| ()),
+                Err(ExplainError::LanguagesFromAnotherConfig)));
     }
 
     // Keywords cannot move a class, so hiding them changes nothing here; asserted because the
@@ -688,8 +702,8 @@ mod tests {
             let explained = explain_file(&root.join(file), config, resolved_languages(config)).unwrap();
             (explained.test_file_rule, explained.lines.iter().map(|line| line.in_test).collect::<Vec<_>>())
         };
-        let matched = |name: &str, directory: &str, trigger_file: &str, pattern: &str| MatchedPreset::new(name.to_owned(), at(directory),
-                trigger_file.to_owned(), pattern.to_owned(), None);
+        let matched = |name: &str, directory: &str, trigger_file: &str, pattern: &str| MatchedPreset { name: name.to_owned(),
+                directory: at(directory), trigger_file: trigger_file.to_owned(), pattern: pattern.to_owned(), configured_by: None };
         let preset = |pattern: &str, matched_folder: Option<&str>| Some(TestFileRule::Preset {
                 presets: vec![matched("jest", "proj/app", "jest.config.ts", pattern)], matched_folder: matched_folder.map(at) });
         let default = EngineConfig::default();
@@ -719,11 +733,13 @@ mod tests {
                 matched_folder: Some(at("proj/go/web/test")) }),
                 explain("proj/go/web/test/testdata/input.js", &default).0,
                 "a build's test directory below the folder a preset took was named for the file");
-        assert_eq!(Some(TestFileRule::Preset { presets: vec![MatchedPreset::new("pytest".to_owned(), at("proj/py"), "conftest.py".to_owned(),
-                "test_*/__init__.py".to_owned(), Some("pyproject.toml".to_owned()))], matched_folder: None }),
+        assert_eq!(Some(TestFileRule::Preset { presets: vec![MatchedPreset { name: "pytest".to_owned(), directory: at("proj/py"),
+                trigger_file: "conftest.py".to_owned(), pattern: "test_*/__init__.py".to_owned(),
+                configured_by: Some("pyproject.toml".to_owned()) }], matched_folder: None }),
                 explain("proj/py/tests/test_a/__init__.py", &default).0, "the configuration that declared the name was not named");
-        assert_eq!(Some(TestFileRule::Preset { presets: vec![MatchedPreset::new("pytest".to_owned(), at("proj/py"), "conftest.py".to_owned(),
-                "conftest.py".to_owned(), None)], matched_folder: None }),
+        assert_eq!(Some(TestFileRule::Preset { presets: vec![MatchedPreset { name: "pytest".to_owned(), directory: at("proj/py"),
+                trigger_file: "conftest.py".to_owned(), pattern: "conftest.py".to_owned(), configured_by: None }],
+                matched_folder: None }),
                 explain("proj/py/conftest.py", &default).0, "the configuration was named for the 'conftest.py' it never declared");
         assert_eq!((Some(TestFileRule::DeclaredNotTests { pattern: "!*.test.ts".to_owned(), matched_folder: None }), vec![false]),
                 explain("proj/app/src/a.test.ts", &taken_back));
@@ -768,6 +784,33 @@ mod tests {
         assert_eq!(declared_by(&["proj/src/lib.rs"]), explain("proj/src/tests/mod.rs", &taken_back).0, "a '!' pattern undid the declaration");
         let detection_off = EngineConfig { detect_tests: false, ..EngineConfig::default() };
         assert_eq!((None, vec![false]), explain("proj/src/tests/mod.rs", &detection_off));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_file_inside_a_target_is_explained_with_that_targets_module_and_names() {
+        let root = std::env::temp_dir().join("a_file_inside_a_target_is_explained_with_that_targets_module_and_names");
+        let _ = fs::remove_dir_all(&root);
+        for file in ["ios/a.m", "analysis/b.m", "proj/src/a.rs"] {
+            let path = root.join(file);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "x = 1;\n").unwrap();
+        }
+        let at = |path: &str| format!("{}/{path}", spell_out(&root));
+        let explain = |file: &str, config: &EngineConfig| explain_file(&root.join(file), config, resolved_languages(config)).unwrap();
+
+        let modules = EngineConfig {
+            targets: vec![Target::named("ios", at("ios")), Target::named("analysis", at("analysis"))],
+            forced_languages: crate::ForcedLanguages::of([("m".to_owned(), "MATLAB".to_owned())].into(),
+                    [("ios".to_owned(), [("m".to_owned(), "Objective-C".to_owned())].into())]),
+            ..EngineConfig::default() };
+        let names = EngineConfig { targets: vec![Target::of(at("proj"))],
+                test_patterns: crate::PathPatterns::of(["proj/src/"]), ..EngineConfig::default() };
+
+        assert!(explain("proj/src/a.rs", &names).lines.iter().all(|line| line.in_test));
+        assert_eq!("Objective-C", explain("ios/a.m", &modules).language);
+        assert_eq!("MATLAB", explain("analysis/b.m", &modules).language);
 
         fs::remove_dir_all(&root).unwrap();
     }

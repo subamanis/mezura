@@ -6,14 +6,14 @@ New:
 
 - Test code can now be detected. `RunResult::tests` and `ModuleResult::tests` carry it per
   language and per module, as a `TestCode` holding the same `Stats` a language has plus
-  `whole_files`, and `FileEntry::tests` carries it per file as a `Stats`. Without being asked the
+  `whole_files`, and `FileEntry::tests` carries it per file as an `Option<Stats>`. Without being asked the
   engine takes what a language's markers open (Rust, D and Zig), the files a test annotation in
   their code makes test code whole (Java, Kotlin and C#), the file names a toolchain defines
   (`_test.go`, Perl's `.t`) and the directory a build tool compiles for tests alone beside its
   build file; `EngineConfig::test_patterns` declares the rest, a `!` pattern takes a file or a
   directory back, and `EngineConfig::detect_tests` turns the whole of it off. What each language
   gets right and what it misses is in `TEST_DETECTION.md` beside the main README.
-- `TestCode::total_of` adds every language's test code together, `TestCode::add` adds one to
+- `TestCode::calculate_total_of` adds every language's test code together, `TestCode::add` adds one to
   another, and `TestCode::calculate_production_of` gives what a language holds outside its test
   code. `RunResult` and `ModuleResult` give the same per language and in total with
   `calculate_production_per_language` and `calculate_production_total`, and their test code in
@@ -21,34 +21,36 @@ New:
   and `is_tests_whole` says whether all of it is test code.
 - `Language::test_markers`, `Language::test_file_names`, `Language::with_test_markers` and
   `Language::with_test_file_names`, read from the `Tests` block of a language file, and
-  `TestFileName` for the three shapes a name takes.
+  `TestFileName` for the three shapes a name takes, built from the written form with
+  `TestFileName::parse` and asked with `TestFileName::matches`.
   `Language::module_keyword` and `Language::with_module_keyword` carry the word that declares a
   module living in another file, `mod` for Rust, so that a file declared on a line of test code
   is test code whole. `Language::test_file_markers` and `Language::with_test_file_markers` carry
   the annotations that make a whole file test code, `@Test` for Java, read from `FILE MARKERS`.
 - `PathPatterns`, the patterns of the exclusions and of the test code together with the directory
-  their names are read from, and `PatternError` for one that does not parse. The warning code
-  `pattern-matched-nothing` reports a place missing from disk or outside every target, and a name
-  that nothing matched when `PathPatterns::reports_unmatched_names` says the list was typed for the
-  run. `validate_test_patterns` checks a list of test patterns as it
-  is typed, and `engine::path_patterns::is_a_path_pattern`, `absolutize_path_pattern`, `is_on_disk`
-  and `split_negation` beside it read the place a pattern names.
+  their names are read from, built with `PathPatterns::of`, and `PatternError` (`InvalidGlob`,
+  `Empty` or `TakesBack`) for one that does not parse. The warning code `pattern-matched-nothing`,
+  in the new `RunResult::warnings`, reports a place missing from disk or outside every target, and
+  a name that nothing matched when `PathPatterns::reports_unmatched_names` says the list was typed
+  for the run. `validate_test_patterns` checks a list of test patterns as it is typed, `run` and
+  `explain_file` refuse one that does not parse with `RunError::InvalidTestPattern` and
+  `ExplainError::InvalidTestPattern`, and `is_a_path_pattern`, `absolutize_path_pattern`,
+  `is_on_disk` and `split_negation` beside it read the place a pattern names.
 - `FileExplanation::test_file_rule` names the rule that made a whole file test code, or the `!`
   pattern that took it back, as a `TestFileRule`, and `ExplainedLine::in_test` marks each line of
   test code. `TestFileRule::DeclaredModule` names the files that declare it as a module, the one
   holding the marker last, `TestFileRule::FileMarker` the annotation found in its code with its
   line, and `TestFileRule::InnerAttribute` the `#![cfg(test)]` standing before every item of it.
-  `TestFileRule::get_name` gives the rule as one word, `preset` or `declared_not_tests`.
+  `TestFileRule::as_str` gives the rule as one word, `preset` or `declared_not_tests`.
 - Test presets. A `TestPreset` is a test tool's default names for its test files, `*.test.ts` and
   `__tests__/` for jest, with the files the tool keeps its configuration in, and `get_test_presets`
   gives the shipped table: jest, vitest, mocha, pytest, unittest, rspec, minitest, phpunit, dotnet,
   gradle, jvm, xt and odin. Where a directory listing holds one of a preset's trigger files, the
   scan applies the preset's names under that directory on its own, a `!` pattern of
   `EngineConfig::test_patterns` takes any of it back, and `RunResult::applied_presets` lists every
-  preset so turned on as an `AppliedPreset`, with its directory, the file that turned it on and
-  whether it decided any file. `TestFileRule::Preset` names every preset that decided a file, each
-  as a `MatchedPreset` with the file that turned it on and the pattern that matched. The warning
-  code `preset-file-shadowed` is for a caller's own preset carrying a shipped one's name.
+  preset so turned on as an `AppliedPreset`, which `AppliedPreset::new` builds, with its directory,
+  the file that turned it on and whether it decided any file. `TestFileRule::Preset` names every preset that decided a file, each
+  as a `MatchedPreset` with the file that turned it on and the pattern that matched.
   Pytest's own configuration is read for `testpaths` and `python_files`: a file naming `testpaths`
   turns the pytest preset on under those folders alone, and a declared `python_files` puts its
   names in place of the preset's. `TestPreset::files_declaring_tests` lists the files read, and
@@ -60,20 +62,28 @@ New:
 - `render::calculate_percentage` gives one number's share of a total, rounded the way
   `calculate_percentages_of_a_given_total` rounds each of its entries.
 - `.t` files are counted as Perl.
+- `ClaimKind::as_str` and `SettledBy::as_str`, each giving its value as the text it is written with.
+- `SortCriterion::sort_languages` orders a map of languages by the criterion, ties broken by name,
+  the way `RunResult::sort_languages_by` does.
+- `normalise_separators`, the forward-slash spelling of a path, for comparing a caller's own paths
+  with the ones this crate hands back.
+- `ExplainError::IsADirectory`, for a path that is a directory.
 - `MultilineString::escapes_by_doubling` and `StringRules::with_string_pairs_escaped_by_doubling`,
   read from `Paired strings escaped by doubling`, for a pair whose closer written twice is one quote
   of the text, `""` inside C#'s and F#'s `@"..."`.
 - `StringRules::with_leveled_pairs` and `get_leveled_pairs`, a string pair whose ends carry a
   counted run, read from a `*` in `Paired string openers`: Rust's `r#*"` with `"#*` and Lua's `[=*[`
-  with `]=*]`. `LeveledPair::of` reads the byte of the run from the written form, so a comment pair
-  may count a character other than `=`, and a closer may end in its run.
+  with `]=*]`. `LeveledPair::parse` takes any byte as the run, so a comment or string pair may count a
+  character other than `=`, and a string closer may end in its run.
 - A plain block comment pair may carry the same symbol at both ends, Smalltalk's `"` and
   CoffeeScript's `###`, and the next one met inside the block closes it. CoffeeScript and
   Smalltalk ship as languages. `comment-pair-never-closes` now reports only a self-nesting pair
   written that way.
 - `Language::heredoc` and `Language::with_heredoc`, read from `Heredoc`, naming the `HeredocRules`
-  a language's heredoc follows: the shell's, Perl's, Ruby's or PHP's. After the opener a word chosen
-  on the spot opens a string that ends at the line holding that word.
+  a language's heredoc follows, the shell's, Perl's, Ruby's or PHP's, which `HeredocRules::parse` reads
+  from the written name. After the opener a word chosen on the spot opens a string that ends at the
+  line holding that word. The enum is `non_exhaustive`, since languages with a heredoc of their
+  own will join it.
 - `MultilineString::delimited` and `StringRules::with_delimited_string_pairs`, read from `Paired
   strings with a delimiter`, for a pair whose writer may put a delimiter of up to sixteen
   characters inside both ends, C++'s `R"js(` closing only at `)js"`.
@@ -83,24 +93,53 @@ New:
   and `Language::with_whole_line_comments`, read from `Whole-line comment start` and `Whole-line
   comment end`, blocks whose ends count only as the whole of a line and nest, MATLAB's `%{` and `%}`.
   `Carried::Comment` names the start of either as the opener and carries the depth.
+- `LanguageNames::of_names` and `ForcedLanguages::of_rules` build either setting for the whole run
+  from plain names, and from pairs of an extension and the language it is counted as.
 
-Changed:
+Breaking:
 
-- The fields of `LeveledPair` are no longer public; `LeveledPair::of` is the way to build one. A
+- The fields of `LeveledPair` are no longer public; `LeveledPair::parse` is the way to build one. A
   `Carried::Str` opener is spelled with its run, `r##"` for a string opened that way.
-
+- `Stats::keyword_occurences` is spelled `keyword_occurrences`.
 - `EngineConfig::exclude_dirs` is now `exclude_patterns`, a `PathPatterns`. A name pattern matches
   at any depth below the folder that holds the target and no folder above it, a pattern starting
   with `./` or `../` or written as a full path names one place, a trailing `/` means a folder
   only, `x/**` means the folder `x`, and names are matched with their case.
 - `validate_exclude_patterns` moved from `engine::targets` to the crate root, beside
   `validate_test_patterns`. It returns a `PatternError` now, and it refuses a `!` pattern.
+- `RunError::InvalidExcludePattern` carries a `PatternError`, and a run whose exclusions hold a `!`
+  pattern is refused with it.
 - `EngineConfig`, `Language`, `ExplainedLine`, `FileExplanation`, `RunResult`, `ModuleResult`,
   `FileEntry` and `MultilineString` gained public fields, so a struct literal of any of them
   written outside the crate stops compiling until it names them.
 - `name` is now `as_str` on `Code`, `Affects`, `CountingModel`, `SortCriterion`, `ScanSkip`,
   `SpanKind`, `LineClass` and `ConflictBlock`, each giving its value as the text it is written
   with.
+- `Threads::producers` and `consumers` are `get_producers` and `get_consumers`. `Stats::total_of`
+  is `calculate_total_of`. `LanguageClaims::get_contested_claims` is `collect_contested_claims`,
+  and `ScopedByModule::get_all_names` is `collect_all_names`.
+- `NumberFormat`'s `integer`, `grouped`, `size_with_unit`, `percent`, `signed_percent` and
+  `with_decimal_mark` are `format_integer`, `group_digits`, `format_size`, `format_percent`,
+  `format_signed_percent` and `replace_decimal_mark`.
+- The `engine` module is no longer public. `convert_to_absolute`, `validate_and_absolutize`,
+  `is_a_path_pattern`, `absolutize_path_pattern`, `is_on_disk` and `split_negation` sit at the
+  crate root, and the thread limits are `Threads::MAX_PRODUCERS`, `MIN_PRODUCERS`,
+  `MAX_CONSUMERS` and `MIN_CONSUMERS`.
+- `FaultyFileDetails` and `UnreadableDirDetails` are plain structs with public fields, built by a
+  struct literal: their `new` and their `non_exhaustive` are gone, as on `AppliedPreset` and
+  `MatchedPreset`.
+- `MultilineString::escaping`, `raw` and `of` are no longer public; the `with_` methods of
+  `StringRules` build every shape a language file declares.
+- `parse_language` returns a `Result`, naming the line it stopped at through
+  `LanguageFileError::Malformed` as `parse_language_file` does.
+- `ExplainError::UnreadableFile` carries the `io::Error`, and `LanguageDirParseError::PathMissing`
+  is `Unreadable { path, error }`, carrying it too, so a missing directory and a refused one can be
+  told apart. `ExplainError` is no longer `PartialEq`.
+- `RunError::source` gives nothing, since its `Display` already carries the inner error.
+- `warnings::Code` holds only the codes this crate raises. `language-file-unreadable`,
+  `conflict-line-skipped`, `config-value-ignored`, `config-section-unknown`,
+  `config-section-repeated`, `command-ignored`, `config-style-invalid`, `theme-unavailable` and
+  `preset-file-shadowed` left it, since a program built on the crate raises those itself.
 
 Fixes:
 
@@ -109,14 +148,22 @@ Fixes:
   `./src` from `\\server\share\proj`, no longer fails.
 - An exclusion no longer matches a folder above the counted tree, so `tests/**` no longer drops a
   project that sits under a folder named `tests`, and a pattern starting with `./` excludes what
-  it names. A full path pattern works under a folder with brackets in its name and in any letter
-  case.
+  it names. A full path pattern works under a folder with brackets in its name and, on Windows and
+  macOS, in any letter case.
 - Comment symbols sharing bytes are read by the rules of the file's language: `/* x /*/` in C and
   `*/*/*/` closing three nested levels in Rust end the comment there, a `*//` in code starts a line
   comment, a `//*` inside a Rust comment opens one more level, and a `/*` after two stray `*/` in
   code opens its comment.
-- Dart, WGSL, Jai and Pascal declare their block comments as nesting, which all four are, Pascal
-  the way Free Pascal reads it.
+- Block comments nest in Dart, WGSL, Jai and Pascal (Pascal's as Free Pascal reads them).
+- Two `Language`s that differ only in their cancelled symbols or their identifying lines no longer
+  compare equal.
+- `parse_conflict_rules_file` keeps the rules of a file holding a byte that is not UTF-8.
+- The builders of `Language`, `StringRules` and `Keyword` drop an empty symbol and a pair with an
+  empty half, so a `""` from splitting an empty list no longer stops a run with `RunError::IncompleteRun`.
+- A language given to `Languages::shipped_with` under the name of a shipped one replaces it and
+  raises no `duplicate-language` warning.
+- `explain_file` reads a file inside a target with the module and the test patterns of that
+  target, as `run` does.
 
 -----------------------------------------------------------------------------------------------------------
 

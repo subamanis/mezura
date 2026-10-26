@@ -72,7 +72,7 @@ pub fn calculate_percentages_of_their_own_sum(numbers: &[usize]) -> Vec<f64> {
 /// was, whether or not everything there was is in the list.
 ///
 /// A share that rounds to zero comes back as the true small number rather than as zero, so whoever
-/// formats it can tell "none" from "too little to show". [`NumberFormat::percent`] writes `<0.01`
+/// formats it can tell "none" from "too little to show". [`NumberFormat::format_percent`] writes `<0.01`
 /// for anything positive that rounds away and [`apportion`] gives it no cell, both from the honest
 /// figure.
 pub fn calculate_percentages_of_a_given_total(numbers: &[usize], total: usize) -> Vec<f64> {
@@ -137,16 +137,16 @@ impl NumberFormat {
     }
 
     /// A whole number, grouped.
-    pub fn integer(&self, number: usize) -> String {
-        self.grouped(&number.to_string())
+    pub fn format_integer(&self, number: usize) -> String {
+        self.group_digits(&number.to_string())
     }
 
     /// Groups digits already written out. Applied to text that is already rounded, so that every
     /// rule about rounding stays written with a dot and only this last step decides what the reader
     /// sees.
-    pub fn grouped(&self, digits: &str) -> String {
+    pub fn group_digits(&self, digits: &str) -> String {
         let Some(separator) = self.thousands else {
-            return self.with_decimal_mark(digits);
+            return self.replace_decimal_mark(digits);
         };
 
         let (whole, rest) = match digits.split_once('.') {
@@ -173,20 +173,20 @@ impl NumberFormat {
     ///
     /// Only a divided value gets a decimal: a count of bytes is a whole number, and `430.0 B`
     /// would claim a precision the figure does not have.
-    pub fn size_with_unit(&self, bytes: usize) -> (String, &'static str) {
+    pub fn format_size(&self, bytes: usize) -> (String, &'static str) {
         for (limit, unit) in [(1_000_000_000, "GB"), (1_000_000, "MB"), (1_000, "KB")] {
             if bytes >= limit {
-                return (self.with_decimal_mark(&format!("{:.1}", bytes as f64 / limit as f64)), unit);
+                return (self.replace_decimal_mark(&format!("{:.1}", bytes as f64 / limit as f64)), unit);
             }
         }
-        (self.integer(bytes), "B")
+        (self.format_integer(bytes), "B")
     }
 
     /// A percentage: no decimals at a whole hundred, one from ten up, two below it, and `<0.01` for
     /// a share that is present but would round to `0.00`.
     // The comparison is on the formatted text rather than on the number, which keeps the rule
     // independent of how the formatter rounds a halfway value.
-    pub fn percent(&self, value: f64) -> String {
+    pub fn format_percent(&self, value: f64) -> String {
         if value == 0.0 {
             return "0".to_owned();
         }
@@ -194,25 +194,25 @@ impl NumberFormat {
                 else if value >= 10.0 || format!("{value:.2}") == "10.00" {format!("{value:.1}")}
                 else {format!("{value:.2}")};
 
-        self.with_decimal_mark(&if text == "0.00" {"<0.01".to_owned()} else {text})
+        self.replace_decimal_mark(&if text == "0.00" {"<0.01".to_owned()} else {text})
     }
 
     /// The same tiers, carrying the direction: what a comparison against an earlier run prints.
-    pub fn signed_percent(&self, value: f64) -> String {
+    pub fn format_signed_percent(&self, value: f64) -> String {
         let magnitude = value.abs();
         let sign = if value > 0.0 {"+"} else if value < 0.0 {"-"} else {""};
         if magnitude > 0.0 && magnitude < TINY_THRESHOLD {
-            return format!("{sign} <{}", self.percent(TINY_THRESHOLD));
+            return format!("{sign} <{}", self.format_percent(TINY_THRESHOLD));
         }
         if magnitude > HUGE_THRESHOLD {
-            return format!("{sign} >{}", self.percent(HUGE_THRESHOLD));
+            return format!("{sign} >{}", self.format_percent(HUGE_THRESHOLD));
         }
 
-        format!("{sign}{}", self.percent(magnitude))
+        format!("{sign}{}", self.format_percent(magnitude))
     }
 
     /// Swaps the dot for this format's decimal mark, for text a caller has already shaped itself.
-    pub fn with_decimal_mark(&self, text: &str) -> String {
+    pub fn replace_decimal_mark(&self, text: &str) -> String {
         match self.decimal {
             '.' => text.to_owned(),
             mark => text.replace('.', &mark.to_string())
@@ -323,7 +323,7 @@ mod tests {
         for numbers in [vec![500_000, 3, 299_997], vec![500_000, 299_997, 3]] {
             let shares = calculate_percentages_of_their_own_sum(&numbers);
             let tiny = numbers.iter().position(|x| *x == 3).unwrap();
-            assert_eq!("<0.01", format.percent(shares[tiny]), "for {numbers:?}");
+            assert_eq!("<0.01", format.format_percent(shares[tiny]), "for {numbers:?}");
             let cells = apportion(&shares, BAR);
             assert_eq!(0, cells[tiny], "a share too small to be printed must not claim a cell either");
             // The neighbouring test cannot carry this one: its rule is that every share above zero
@@ -333,7 +333,7 @@ mod tests {
 
         // One that really is absent stays a flat zero and keeps no cell
         let shares = calculate_percentages_of_their_own_sum(&[500_000, 299_997, 0]);
-        assert_eq!("0", format.percent(shares[2]));
+        assert_eq!("0", format.format_percent(shares[2]));
         assert_eq!(0, apportion(&shares, BAR)[2]);
 
         // The figure a caller reads is the true share and not a marker standing in for it
@@ -356,17 +356,17 @@ mod tests {
     #[test]
     fn every_percentage_fits_a_five_column_field() {
         let format = NumberFormat::default();
-        assert_eq!("0", format.percent(0.0));
-        assert_eq!("0.01", format.percent(0.01));
-        assert_eq!("9.99", format.percent(9.994));
-        assert_eq!("10.0", format.percent(9.996));
-        assert_eq!("12.3", format.percent(12.345));
-        assert_eq!("99.9", format.percent(99.94));
-        assert_eq!("100", format.percent(99.996));
-        assert_eq!("100", format.percent(100.0));
+        assert_eq!("0", format.format_percent(0.0));
+        assert_eq!("0.01", format.format_percent(0.01));
+        assert_eq!("9.99", format.format_percent(9.994));
+        assert_eq!("10.0", format.format_percent(9.996));
+        assert_eq!("12.3", format.format_percent(12.345));
+        assert_eq!("99.9", format.format_percent(99.94));
+        assert_eq!("100", format.format_percent(99.996));
+        assert_eq!("100", format.format_percent(100.0));
 
         for value in [0.0, 0.000375, 0.01, 9.9, 99.99, 100.0] {
-            assert!(format.percent(value).len() <= 5, "'{}' does not fit the column", format.percent(value));
+            assert!(format.format_percent(value).len() <= 5, "'{}' does not fit the column", format.format_percent(value));
         }
     }
 
@@ -374,12 +374,12 @@ mod tests {
     #[test]
     fn a_size_takes_the_largest_unit_that_leaves_a_figure_worth_reading() {
         let format = NumberFormat::default();
-        assert_eq!(("999".to_owned(), "B"), format.size_with_unit(999));
-        assert_eq!(("1.0".to_owned(), "KB"), format.size_with_unit(1_000));
-        assert_eq!(("1.0".to_owned(), "MB"), format.size_with_unit(1_000_000));
-        assert_eq!(("1.0".to_owned(), "GB"), format.size_with_unit(1_000_000_000));
-        assert_eq!(("2.4".to_owned(), "MB"), format.size_with_unit(2_417_403));
-        assert_eq!(("0".to_owned(), "B"), format.size_with_unit(0));
+        assert_eq!(("999".to_owned(), "B"), format.format_size(999));
+        assert_eq!(("1.0".to_owned(), "KB"), format.format_size(1_000));
+        assert_eq!(("1.0".to_owned(), "MB"), format.format_size(1_000_000));
+        assert_eq!(("1.0".to_owned(), "GB"), format.format_size(1_000_000_000));
+        assert_eq!(("2.4".to_owned(), "MB"), format.format_size(2_417_403));
+        assert_eq!(("0".to_owned(), "B"), format.format_size(0));
     }
 
     #[test]
@@ -394,47 +394,47 @@ mod tests {
     #[test]
     fn a_number_is_grouped_and_marked_the_way_the_caller_asked() {
         let plain = NumberFormat::new(None, '.');
-        assert_eq!("1234567", plain.integer(1234567));
-        assert_eq!("1.5", plain.grouped("1.5"));
+        assert_eq!("1234567", plain.format_integer(1234567));
+        assert_eq!("1.5", plain.group_digits("1.5"));
 
         let english = NumberFormat::new(Some(','), '.');
-        assert_eq!("123", english.integer(123));
-        assert_eq!("1,234", english.integer(1234));
-        assert_eq!("12,345", english.integer(12345));
-        assert_eq!("1,234,567", english.integer(1234567));
+        assert_eq!("123", english.format_integer(123));
+        assert_eq!("1,234", english.format_integer(1234));
+        assert_eq!("12,345", english.format_integer(12345));
+        assert_eq!("1,234,567", english.format_integer(1234567));
 
         // The grouping counts the digits before the mark and never the ones after it
         let european = NumberFormat::new(Some('.'), ',');
-        assert_eq!("1.234.567", european.integer(1234567));
-        assert_eq!("1.234,5", european.grouped("1234.5"));
-        assert_eq!("12,3", european.percent(12.345));
+        assert_eq!("1.234.567", european.format_integer(1234567));
+        assert_eq!("1.234,5", european.group_digits("1234.5"));
+        assert_eq!("12,3", european.format_percent(12.345));
 
         // The unit boundaries are the test above; here only that the mark reaches a size too
-        assert_eq!(("2,4".to_owned(), "MB"), european.size_with_unit(2_417_403));
+        assert_eq!(("2,4".to_owned(), "MB"), european.format_size(2_417_403));
 
         // and saying nothing is the same as asking for the one above, which is what the program prints
-        assert_eq!(english.integer(1234567), NumberFormat::default().integer(1234567));
-        assert_eq!("1,234,567", NumberFormat::default().integer(1234567));
+        assert_eq!(english.format_integer(1234567), NumberFormat::default().format_integer(1234567));
+        assert_eq!("1,234,567", NumberFormat::default().format_integer(1234567));
     }
 
     #[test]
     fn a_signed_percentage_carries_its_direction_and_names_the_tiny_and_the_huge_ones() {
         let format = NumberFormat::default();
-        assert_eq!("0", format.signed_percent(calculate_relative_change(100, 100)));
-        assert_eq!("-10.0", format.signed_percent(calculate_relative_change(100, 90)));
-        assert_eq!("+100", format.signed_percent(calculate_relative_change(100, 200)));
-        assert_eq!("+123", format.signed_percent(123.456));
-        assert_eq!("-34.9", format.signed_percent(-34.87));
-        assert_eq!("+10.0", format.signed_percent(9.996));
-        assert_eq!("+100", format.signed_percent(99.996));
-        assert_eq!("+ <0.01", format.signed_percent(calculate_relative_change(22819, 22820)));
-        assert_eq!("+0.01", format.signed_percent(0.01));
-        assert_eq!("+999", format.signed_percent(999.0));
-        assert_eq!("+ >999", format.signed_percent(calculate_relative_change(1, 213)));
+        assert_eq!("0", format.format_signed_percent(calculate_relative_change(100, 100)));
+        assert_eq!("-10.0", format.format_signed_percent(calculate_relative_change(100, 90)));
+        assert_eq!("+100", format.format_signed_percent(calculate_relative_change(100, 200)));
+        assert_eq!("+123", format.format_signed_percent(123.456));
+        assert_eq!("-34.9", format.format_signed_percent(-34.87));
+        assert_eq!("+10.0", format.format_signed_percent(9.996));
+        assert_eq!("+100", format.format_signed_percent(99.996));
+        assert_eq!("+ <0.01", format.format_signed_percent(calculate_relative_change(22819, 22820)));
+        assert_eq!("+0.01", format.format_signed_percent(0.01));
+        assert_eq!("+999", format.format_signed_percent(999.0));
+        assert_eq!("+ >999", format.format_signed_percent(calculate_relative_change(1, 213)));
 
         for value in [0.0, 0.000375, -34.87, 999.0, 999.5, 21200.0, 999900.0] {
-            assert!(format.signed_percent(value).chars().count() <= 7,
-                    "'{}' does not fit the column", format.signed_percent(value));
+            assert!(format.format_signed_percent(value).chars().count() <= 7,
+                    "'{}' does not fit the column", format.format_signed_percent(value));
         }
     }
 }

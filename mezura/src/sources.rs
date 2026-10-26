@@ -211,7 +211,7 @@ fn move_patterns_into_checkout(checkout: &str, repository: &str, patterns: &Path
 
     PathPatterns {
         patterns: patterns.patterns.iter().map(|pattern| {
-            let (negation, place) = mezura_core::engine::path_patterns::split_negation(pattern);
+            let (negation, place) = mezura_core::split_negation(pattern);
             format!("{negation}{}", moved(place))
         }).collect(),
         read_from: patterns.read_from.as_deref().map(moved),

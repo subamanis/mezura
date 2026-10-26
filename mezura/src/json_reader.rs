@@ -425,8 +425,8 @@ fn parse_faulty_files(entries: &[Value]) -> Result<Vec<FaultyFileDetails>, Docum
         let at = format!("faulty_files[{i}]");
         let entry = read_object(entry, &at)?;
 
-        Ok(FaultyFileDetails::new(read_text(entry, "path", &at)?, read_text(entry, "error", &at)?,
-                read_number(entry, "bytes", &at)? as u64))
+        Ok(FaultyFileDetails { path: read_text(entry, "path", &at)?, error_msg: read_text(entry, "error", &at)?,
+                size: read_number(entry, "bytes", &at)? as u64 })
     }).collect()
 }
 
@@ -435,7 +435,7 @@ fn parse_unreadable_dirs(entries: &[Value]) -> Result<Vec<UnreadableDirDetails>,
         let at = format!("unreadable_dirs[{i}]");
         let entry = read_object(entry, &at)?;
 
-        Ok(UnreadableDirDetails::new(read_text(entry, "path", &at)?, read_text(entry, "error", &at)?))
+        Ok(UnreadableDirDetails { path: read_text(entry, "path", &at)?, error_msg: read_text(entry, "error", &at)? })
     }).collect()
 }
 
@@ -459,8 +459,8 @@ fn parse_applied_presets(scope: &Map<String, Value>) -> Result<Vec<AppliedPreset
         let at = format!("scope.test_presets[{i}]");
         let entry = read_object(entry, &at)?;
 
-        Ok(AppliedPreset::new(read_text(entry, "name", &at)?, read_text(entry, "directory", &at)?,
-                read_text(entry, "trigger_file", &at)?, read_flag(entry, "matched", &at)?))
+        Ok(AppliedPreset { name: read_text(entry, "name", &at)?, directory: read_text(entry, "directory", &at)?,
+                trigger_file: read_text(entry, "trigger_file", &at)?, matched: read_flag(entry, "matched", &at)? })
     }).collect()
 }
 
@@ -573,23 +573,27 @@ mod tests {
                 whole_files: 1 }];
 
         let result = RunResult {
-            total: Stats::total_of(&per_language),
+            total: Stats::calculate_total_of(&per_language),
             modules: vec![
-                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::total_of(&hashmap!["Rust".to_owned() => stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), nested_languages: HashMap::new(), tests: tests.clone(), files: HashMap::new() },
-                ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::total_of(&hashmap!["HTML".to_owned() => html]), nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new() }],
+                ModuleResult { name: Some("backend".to_owned()), per_language: hashmap!["Rust".to_owned() => rust], total: Stats::calculate_total_of(&hashmap!["Rust".to_owned() => stats(2, 5000, 100, 70, 10, hashmap!["structs".to_owned() => 3, "enums".to_owned() => 0])]), nested_languages: HashMap::new(), tests: tests.clone(), files: HashMap::new() },
+                ModuleResult { name: None, per_language: hashmap!["HTML".to_owned() => html.clone()], total: Stats::calculate_total_of(&hashmap!["HTML".to_owned() => html]), nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new() }],
             per_language,
             nested_languages: hashmap!["HTML".to_owned() => hashmap!["JavaScript".to_owned() =>
                     stats(1, 300, 20, 18, 0, hashmap!["classes".to_owned() => 1])]],
             tests,
-            applied_presets: vec![AppliedPreset::new("jest".to_owned(), "D:/dev/web".to_owned(), "jest.config.ts".to_owned(), true),
-                    AppliedPreset::new("pytest".to_owned(), "D:/dev/web/tools".to_owned(), "conftest.py".to_owned(), false)],
-            faulty_files: vec![FaultyFileDetails::new("D:\\dev\\a \"b\".rs".to_owned(), "stream did not contain valid UTF-8".to_owned(), 412)],
+            applied_presets: vec![AppliedPreset { name: "jest".to_owned(), directory: "D:/dev/web".to_owned(),
+                            trigger_file: "jest.config.ts".to_owned(), matched: true },
+                    AppliedPreset { name: "pytest".to_owned(), directory: "D:/dev/web/tools".to_owned(),
+                            trigger_file: "conftest.py".to_owned(), matched: false }],
+            faulty_files: vec![FaultyFileDetails { path: "D:\\dev\\a \"b\".rs".to_owned(),
+                    error_msg: "stream did not contain valid UTF-8".to_owned(), size: 412 }],
             skipped_files: SkippedFiles::default(),
             files_present: FilesPresent { total_files: 9, relevant_files: 3, excluded_files: 4 },
             performance: Performance { duration_millis: 1180, threads: Threads::new(2, 8) },
             targets: vec![Target::named("backend", "D:/dev/api"), Target::named("backend", "D:/dev/api-v2"),
                     Target::of("D:/dev/web")],
-            unreadable_dirs: vec![UnreadableDirDetails::new("D:/dev/locked".to_owned(), "Access is denied. (os error 5)".to_owned())],
+            unreadable_dirs: vec![UnreadableDirDetails { path: "D:/dev/locked".to_owned(),
+                    error_msg: "Access is denied. (os error 5)".to_owned() }],
             warnings: Vec::new()
         };
 
@@ -683,13 +687,13 @@ mod tests {
         config.view.hidden.timing = false;
         config.view.hidden.keywords = true;
         let read = parse(&create_document(&result, &Local::now(), &config)).unwrap();
-        assert!(read.result.per_language["Rust"].keyword_occurences.is_empty());
-        assert!(read.result.total.keyword_occurences.is_empty());
+        assert!(read.result.per_language["Rust"].keyword_occurrences.is_empty());
+        assert!(read.result.total.keyword_occurrences.is_empty());
         assert!(!read.scope.keywords_counted);
 
         let mut short = populated().0;
-        short.faulty_files = vec![mezura_core::FaultyFileDetails::new("a.rs".to_owned(), "no".to_owned(), 1)];
-        short.unreadable_dirs = vec![mezura_core::UnreadableDirDetails::new("D:/locked".to_owned(), "no".to_owned())];
+        short.faulty_files = vec![mezura_core::FaultyFileDetails { path: "a.rs".to_owned(), error_msg: "no".to_owned(), size: 1 }];
+        short.unreadable_dirs = vec![mezura_core::UnreadableDirDetails { path: "D:/locked".to_owned(), error_msg: "no".to_owned() }];
         config.view.set_should_show_faulty_files(false);
         let undetailed = parse(&create_document(&short, &Local::now(), &config)).unwrap();
         assert!(undetailed.result.faulty_files.is_empty() && undetailed.result.unreadable_dirs.is_empty());

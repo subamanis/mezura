@@ -208,7 +208,7 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
     let per_language = hashmap!(NAME.to_owned() => Stats::new(FILES, BYTES, classes.calculate_lines(), classes, keywords));
     let tests = hashmap!(NAME.to_owned() => TestCode { whole_files: 118,
             stats: Stats::new(TEST_FILES, TEST_BYTES, test_classes.calculate_lines(), test_classes, HashMap::new()) });
-    let total = Stats::total_of(&per_language);
+    let total = Stats::calculate_total_of(&per_language);
     let groups = vec![Group {name: None, languages: vec![NAME.to_owned()], hidden: 0,
             per_language: Cow::Borrowed(&per_language), nested: &NO_NESTED, tests: &tests, tests_breakdown: TestsBreakdown::Share,
             files: HashMap::new(), total: Cow::Borrowed(&total), baseline: None}];
@@ -241,16 +241,7 @@ pub fn create_theme_sample_rows(theme: &Theme, layout: Layout, model: CountingMo
 pub(crate) fn get_sorted_language_names(per_language: &HashMap<String, Stats>, criterion: SortCriterion,
     model: CountingModel) -> Vec<String>
 {
-    let value_of = |name: &String| per_language.get(name).map_or(0, |x| criterion.get_value_of(x, model));
-
-    let mut names = per_language.keys().cloned().collect::<Vec<_>>();
-    if criterion == SortCriterion::Name {
-        names.sort_by_key(|x| x.to_lowercase());
-    } else {
-        names.sort_by(|a, b| value_of(b).cmp(&value_of(a)).then_with(|| a.to_lowercase().cmp(&b.to_lowercase())));
-    }
-
-    names
+    criterion.sort_languages(per_language, model).into_iter().map(|(name, _)| name.to_owned()).collect()
 }
 
 // The one place that decides which languages survive '--top', so a file row can never hang under a
@@ -928,7 +919,7 @@ fn format_figure_cells(theme: &Theme, figures: &RowFigures, kind: RowKind) -> [B
     let RowFigures { files, lines, code, comments, bytes, against_files, against_lines } = *figures;
     let nothing = figures.is_of_nothing();
     let count = |value| format_count(value, nothing);
-    let (size, unit) = super::number_formatter::get_active().size_with_unit(bytes);
+    let (size, unit) = super::number_formatter::get_active().format_size(bytes);
     let size = if nothing {NO_FIGURE.to_owned()} else {size + " " + &find_size_unit_style(theme, kind).paint(unit).to_string()};
     let (code_percentage, comment_percentage) = calculate_code_and_comment_percentages(lines, code, comments);
     [cell(count(files), format_share(files, against_files)),
@@ -1368,7 +1359,7 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
     }
     rows.push(ComparedRow { name: TOTAL_NAME.to_owned(), kind: RowKind::Total, depth: 0,
             baseline: run_before.total.into_owned(), subject: run_now.total.into_owned() });
-    let (tests_before, tests_now) = (TestCode::total_of(&baseline.tests), TestCode::total_of(&subject.tests));
+    let (tests_before, tests_now) = (TestCode::calculate_total_of(&baseline.tests), TestCode::calculate_total_of(&subject.tests));
     if !config.view.hidden.tests && !without_tests && (tests_before.stats.files > 0 || tests_now.stats.files > 0) {
         rows.push(ComparedRow { name: format!("{BRANCH_INDENT}{}{TESTS_NAME}", find_branch_marker(true)),
                 kind: RowKind::Tests, depth: 0, baseline: tests_before.stats, subject: tests_now.stats });
@@ -1554,7 +1545,7 @@ fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: View
                             {paint_change(theme, was, is, &format_signed_difference(was, is))}
                     else {paint_change(theme, was, is, &format!("{}  {}", format_signed_difference(was, is), format_change(was, is)))}
         };
-        let (size, unit) = super::number_formatter::get_active().size_with_unit(now.bytes);
+        let (size, unit) = super::number_formatter::get_active().format_size(now.bytes);
         // The file count moves in whole things, so its slot carries the move and no percentage.
         let files = BoxedCell {
             number: format_with_separators(now.files),
@@ -1631,7 +1622,7 @@ fn build_comparison_cells<'a>(theme: &'a Theme, rows: &[ComparedRow], view: View
             row.push(paint_change(theme, was, is, &format_signed_difference(was, is)));
             row.push(paint_change(theme, was, is, &format_change(was, is)));
         }
-        let (size, unit) = super::number_formatter::get_active().size_with_unit(now.bytes);
+        let (size, unit) = super::number_formatter::get_active().format_size(now.bytes);
         row.push(size + " " + &find_size_unit_style(theme, kind).paint(unit).to_string());
         row.push(paint_change(theme, before.bytes, now.bytes, &format_signed_size(theme, before.bytes, now.bytes)));
         row
@@ -1688,7 +1679,7 @@ fn format_signed_size(theme: &Theme, before: usize, now: usize) -> String {
     if before == now {
         return NO_CHANGE.to_owned();
     }
-    let (text, unit) = super::number_formatter::get_active().size_with_unit(now.abs_diff(before));
+    let (text, unit) = super::number_formatter::get_active().format_size(now.abs_diff(before));
     let sign = if now > before {"+"} else {"-"};
 
     format!("{sign}{text} {}", theme.size_unit.paint(unit))
@@ -1701,7 +1692,7 @@ fn format_change(before: usize, now: usize) -> String {
     match super::diff::change_of(before, now) {
         super::diff::Change::Appeared => "new".to_owned(),
         super::diff::Change::Gone => "gone".to_owned(),
-        super::diff::Change::Percent(x) => super::number_formatter::get_active().signed_percent(x) + "%"
+        super::diff::Change::Percent(x) => super::number_formatter::get_active().format_signed_percent(x) + "%"
     }
 }
 
@@ -2260,7 +2251,7 @@ fn format_language_lines(theme: &Theme, group: &Group, lang_name: &str, columns:
                 &find_shown_stats_of(file, group.leaves_tests_out()), RowKind::File, block_width));
     }
     if should_print_keywords {
-        let keywords = get_keywords_as_str(theme, &content_info.keyword_occurences, None, columns.calculate_words_start(), block_width);
+        let keywords = get_keywords_as_str(theme, &content_info.keyword_occurrences, None, columns.calculate_words_start(), block_width);
         if !keywords.is_empty() {
             lines.push(keywords);
         }
@@ -2532,8 +2523,8 @@ fn gather_keyword_rows<'a>(theme: &Theme, groups: &'a [Group])
         -> Vec<(&'a Group<'a>, Vec<(&'a String, String)>)>
 {
     groups.iter().map(|group| (group, group.languages.iter().filter_map(|name| {
-            let was = group.baseline.and_then(|x| x.get(name)).map(|x| &x.keyword_occurences);
-            let occurrences = &group.per_language.get(name).unwrap().keyword_occurences;
+            let was = group.baseline.and_then(|x| x.get(name)).map(|x| &x.keyword_occurrences);
+            let occurrences = &group.per_language.get(name).unwrap().keyword_occurrences;
             if occurrences.values().all(|x| *x == 0) && was.is_none_or(|x| x.values().all(|y| *y == 0)) {
                 return None;
             }
@@ -2654,7 +2645,7 @@ fn create_keyword_entries(keyword_occurencies: &HashMap<String,usize>) -> Vec<(S
 fn create_keyword_sum_map(per_language: &HashMap<String,Stats>) -> HashMap<String,usize> {
     let mut sums : HashMap<String,usize> = HashMap::new();
     for stats in per_language.values() {
-        for (keyword, count) in stats.keyword_occurences.iter().filter(|(_, count)| **count > 0) {
+        for (keyword, count) in stats.keyword_occurrences.iter().filter(|(_, count)| **count > 0) {
             *sums.entry(keyword.clone()).or_insert(0) += count;
         }
     }
@@ -2768,14 +2759,14 @@ fn fold_rest_into_others(sorted_language_names: &[String],
     // Whatever the kept ones do not account for, which is what keeps the shares of the overview
     // shares of the whole run and not of the few it draws
     let mut others = total.clone();
-    let shown = Stats::total_of(&per_language);
+    let shown = Stats::calculate_total_of(&per_language);
     others.files -= shown.files;
     others.bytes -= shown.bytes;
     others.lines -= shown.lines;
     // The classes go with them, or the row would hold lines that no class of it accounts for and
     // whichever column is folded from them would read zero for everything that was folded away
     others.classes.subtract(&shown.classes);
-    others.keyword_occurences.clear();
+    others.keyword_occurrences.clear();
     per_language.insert(OTHERS_NAME.to_string(), others);
 
     (sorted_language_names, per_language)
@@ -2974,7 +2965,7 @@ fn split_minutes_to_D_H_M(mut minutes: i64) -> (i64, i64, i64) {
 }
 
 fn format_signed_percentage_difference(older: usize, newer: usize) -> String {
-    super::number_formatter::get_active().signed_percent(render::calculate_relative_change(older, newer))
+    super::number_formatter::get_active().format_signed_percent(render::calculate_relative_change(older, newer))
 }
 
 fn print_lines(lines: &[String]) {
@@ -2988,7 +2979,7 @@ fn calculate_widest_visible_line(text: &str) -> usize {
 }
 
 fn format_size(theme: &Theme, bytes: usize) -> String {
-    let (size, unit) = super::number_formatter::get_active().size_with_unit(bytes);
+    let (size, unit) = super::number_formatter::get_active().format_size(bytes);
 
     format!("{} {}", theme.total_size_number.paint(&size), theme.size_unit.paint(unit))
 }
@@ -2999,13 +2990,13 @@ fn format_count(value: usize, of_nothing: bool) -> String {
 
 // The same text in the tokens of a row hanging under a language
 fn format_sub_row_size(styles: &SubRowStyles, bytes: usize) -> String {
-    let (size, unit) = super::number_formatter::get_active().size_with_unit(bytes);
+    let (size, unit) = super::number_formatter::get_active().format_size(bytes);
 
     format!("{} {}", styles.size.paint(&size), styles.size_unit.paint(unit))
 }
 
 fn calculate_size_text_width(bytes: usize) -> usize {
-    let (size, unit) = super::number_formatter::get_active().size_with_unit(bytes);
+    let (size, unit) = super::number_formatter::get_active().format_size(bytes);
 
     size.len() + unit.len() + 1
 }
@@ -3019,7 +3010,7 @@ fn format_percent_or_blank(value: f64) -> String {
 }
 
 fn format_percent_text(value: f64) -> String {
-    super::number_formatter::get_active().percent(value)
+    super::number_formatter::get_active().format_percent(value)
 }
 
 // The overview's percentages take a token of their own, being the datum of that section rather
@@ -3059,7 +3050,7 @@ mod tests {
                     hashmap!["classes".to_owned() => 2, "decorators".to_owned() => 0]),
             "Java".to_owned() => crate::test_support::plain_stats_of(1, 900, 80, 60, 5,
                     hashmap!["classes".to_owned() => 2, "interfaces".to_owned() => 1])];
-        let total = Stats::total_of(&per_language);
+        let total = Stats::calculate_total_of(&per_language);
         let sorted = get_sorted_language_names(&per_language, SortCriterion::Lines, CountingModel::Content);
 
         (sorted, per_language, total)
@@ -3071,7 +3062,7 @@ mod tests {
         let (_, content_info, _) = sample_data();
         let of = |name: Option<&str>, languages: &[&str]| {
             let per_language = languages.iter().map(|x| ((*x).to_owned(), content_info[*x].clone())).collect::<HashMap<_,_>>();
-            let total = Stats::total_of(&per_language);
+            let total = Stats::calculate_total_of(&per_language);
             ModuleResult {name: name.map(str::to_owned), per_language, total,
                     nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}
         };
@@ -3086,7 +3077,7 @@ mod tests {
     fn earlier_modules() -> Vec<ModuleResult> {
         let of = |name: Option<&str>, languages: Vec<(&str, Stats)>| {
             let per_language = languages.into_iter().map(|(x, stats)| (x.to_owned(), stats)).collect::<HashMap<_,_>>();
-            ModuleResult {name: name.map(str::to_owned), total: Stats::total_of(&per_language), per_language,
+            ModuleResult {name: name.map(str::to_owned), total: Stats::calculate_total_of(&per_language), per_language,
                     nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}
         };
 
@@ -3119,13 +3110,13 @@ mod tests {
     fn without_modules(modules: &[ModuleResult]) -> Vec<ModuleResult> {
         let per_language = merged(modules);
 
-        vec![ModuleResult {name: None, total: Stats::total_of(&per_language), per_language,
+        vec![ModuleResult {name: None, total: Stats::calculate_total_of(&per_language), per_language,
                 nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}]
     }
 
     fn reading_of(name: &str, taken: &str, modules: Vec<ModuleResult>) -> crate::diff::Reading {
         let per_language = merged(&modules);
-        let total = Stats::total_of(&per_language);
+        let total = Stats::calculate_total_of(&per_language);
         let files_present = FilesPresent {total_files: total.files, relevant_files: total.files, excluded_files: 0};
 
         crate::diff::Reading {
@@ -3156,7 +3147,7 @@ mod tests {
         result.modules = modules.iter().map(|x| ModuleResult {
             name: x.name.clone(),
             per_language: x.per_language.clone(),
-            total: Stats::total_of(&x.per_language),
+            total: Stats::calculate_total_of(&x.per_language),
             nested_languages: HashMap::new(),
             tests: HashMap::new(),
             files: HashMap::new()
@@ -3621,7 +3612,7 @@ mod tests {
                     words_in_code: 60, string_content: 3, comment_words_beside_code: 2,
                     words_in_comment: 15, punctuation_in_code: 8, punctuation_in_comment: 1,
                     blank: 10, blank_in_comment: 4, blank_in_string: 2 }, hashmap![])];
-        let every_class_total = Stats::total_of(&every_class);
+        let every_class_total = Stats::calculate_total_of(&every_class);
         let both_models = vec![Group { name: None, hidden: 0,
                 languages: get_sorted_language_names(&every_class, SortCriterion::Lines, content),
                 per_language: Cow::Borrowed(&every_class), nested: &NO_NESTED, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share,
@@ -3658,7 +3649,7 @@ mod tests {
         colored::control::set_override(false);
 
         let content_info = hashmap!["D".to_owned() => crate::test_support::plain_stats_of(1, 24, 2, 2, 0, hashmap![])];
-        let total = Stats::total_of(&content_info);
+        let total = Stats::calculate_total_of(&content_info);
         fn group<'a>(name: Option<&'a str>, content_info: &'a HashMap<String, Stats>,
                 total: &'a Stats) -> Group<'a> {
             Group {name, languages: vec!["D".to_owned()], hidden: 0, per_language: Cow::Borrowed(content_info),
@@ -3690,7 +3681,7 @@ mod tests {
         let of = |name: &str, structs: usize| {
             let per_language = hashmap!["Rust".to_owned() =>
                     crate::test_support::plain_stats_of(2, 4000, 100, 70, 10, hashmap!["structs".to_owned() => structs])];
-            ModuleResult {name: Some(name.to_owned()), total: Stats::total_of(&per_language), per_language,
+            ModuleResult {name: Some(name.to_owned()), total: Stats::calculate_total_of(&per_language), per_language,
                     nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}
         };
         let (before, now) = (reading_of("older.json", "2026-07-30T14:22:07+03:00", vec![of("api", 20), of("web", 12)]),
@@ -3720,7 +3711,7 @@ mod tests {
             warnings: Vec::new(), applied_presets: Vec::new(),
             performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
         let single = || vec![ModuleResult {name: None, per_language: content_info.clone(),
-                total: Stats::total_of(&content_info), nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}];
+                total: Stats::calculate_total_of(&content_info), nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}];
 
         for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
             // One past the five languages of the sample, so the boundary where nothing is hidden is
@@ -3759,7 +3750,7 @@ mod tests {
         let of_module = |name: Option<&str>, languages: &[&str]| {
             let per_language = languages.iter().map(|x| ((*x).to_owned(), content_info[*x].clone()))
                     .collect::<HashMap<_,_>>();
-            ModuleResult { name: name.map(str::to_owned), total: Stats::total_of(&per_language),
+            ModuleResult { name: name.map(str::to_owned), total: Stats::calculate_total_of(&per_language),
                     per_language, nested_languages: HashMap::new(), tests: HashMap::new(),
                     files: entries.iter().filter(|(language, _)| languages.contains(&language.as_str()))
                             .map(|(language, files)| (language.clone(), files.clone())).collect() }
@@ -3912,7 +3903,7 @@ mod tests {
         let a_run = || RunResult {
             per_language: content_info.clone(),
             modules: vec![ModuleResult { name: None, per_language: content_info.clone(),
-                    total: Stats::total_of(&content_info), nested_languages: nested.clone(), tests: HashMap::new(),
+                    total: Stats::calculate_total_of(&content_info), nested_languages: nested.clone(), tests: HashMap::new(),
                     files: HashMap::new() }],
             nested_languages: nested.clone(), tests: HashMap::new(), total: total.clone(), faulty_files: Vec::new(),
             skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
@@ -3974,7 +3965,7 @@ mod tests {
 
         let own = calculate_own_share(&whole, Some(&sections), Some(&tests));
         assert_eq!((3, 250), (own.files, own.lines));
-        assert_eq!(hashmap!["structs".to_owned() => 6, "enums".to_owned() => 2], own.keyword_occurences);
+        assert_eq!(hashmap!["structs".to_owned() => 6, "enums".to_owned() => 2], own.keyword_occurrences);
     }
 
     #[test]
@@ -4072,7 +4063,7 @@ mod tests {
 
         let (_, content_info, _) = sample_data();
         let (sections, tests) = (sample_sections(), sample_tests());
-        let module = ModuleResult { name: None, per_language: content_info.clone(), total: Stats::total_of(&content_info),
+        let module = ModuleResult { name: None, per_language: content_info.clone(), total: Stats::calculate_total_of(&content_info),
                 nested_languages: sections.clone(), tests: tests.clone(), files: HashMap::new() };
         let mut run = crate::test_support::plain_result_of(content_info, vec![module], Vec::new());
         run.nested_languages = sections;
@@ -4120,7 +4111,7 @@ mod tests {
         let files = hashmap![
             "Rust".to_owned() => vec![file("D:/x/src/lib.rs", 400, 300), file("D:/x/tests/all.rs", 600, 600)],
             "Go".to_owned() => vec![file("D:/x/main.go", 500, 0)]];
-        let module = ModuleResult { name: None, per_language: per_language.clone(), total: Stats::total_of(&per_language),
+        let module = ModuleResult { name: None, per_language: per_language.clone(), total: Stats::calculate_total_of(&per_language),
                 nested_languages: HashMap::new(), tests: tests.clone(), files };
         let mut run = crate::test_support::plain_result_of(per_language, vec![module], vec![mezura_core::Target::of("D:/x")]);
         run.tests = tests;
@@ -4154,9 +4145,9 @@ mod tests {
         let tests_of_code = hashmap!["Rust".to_owned() => TestCode { stats: stats(2, 900), whole_files: 1 }];
         let tests_of_only_tests = hashmap!["Java".to_owned() => TestCode { stats: stats(1, 90), whole_files: 1 }];
         let modules = vec![
-            ModuleResult { name: Some("code".to_owned()), per_language: code.clone(), total: Stats::total_of(&code),
+            ModuleResult { name: Some("code".to_owned()), per_language: code.clone(), total: Stats::calculate_total_of(&code),
                     nested_languages: HashMap::new(), tests: tests_of_code.clone(), files: HashMap::new() },
-            ModuleResult { name: Some("tst".to_owned()), per_language: only_tests.clone(), total: Stats::total_of(&only_tests),
+            ModuleResult { name: Some("tst".to_owned()), per_language: only_tests.clone(), total: Stats::calculate_total_of(&only_tests),
                     nested_languages: HashMap::new(), tests: tests_of_only_tests.clone(), files: HashMap::new() }];
         let mut per_language = code;
         per_language.extend(only_tests);
@@ -4393,7 +4384,7 @@ mod tests {
             "d".to_owned() => crate::test_support::plain_stats_of(7, 30000, 700, 500, 0, hashmap![]),
             "e".to_owned() => crate::test_support::plain_stats_of(6, 20000, 600, 400, 0, hashmap![])
         ];
-        let total = Stats::total_of(&per_language);
+        let total = Stats::calculate_total_of(&per_language);
 
         let (folded_names, folded_per_language) = fold_rest_into_others(
                 &sorted_language_names, &per_language, &total, None);
@@ -4414,9 +4405,9 @@ mod tests {
             ], folded_per_language);
 
         // and what was folded plus what was kept is still the whole
-        assert_eq!(total.lines, Stats::total_of(&folded_per_language).lines);
-        assert_eq!(total.files, Stats::total_of(&folded_per_language).files);
-        assert_eq!(total.bytes, Stats::total_of(&folded_per_language).bytes);
+        assert_eq!(total.lines, Stats::calculate_total_of(&folded_per_language).lines);
+        assert_eq!(total.files, Stats::calculate_total_of(&folded_per_language).files);
+        assert_eq!(total.bytes, Stats::calculate_total_of(&folded_per_language).bytes);
     }
 
     #[test]

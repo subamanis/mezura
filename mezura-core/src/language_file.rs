@@ -68,7 +68,7 @@ impl ConflictBlock {
             ConflictBlock::NotCodeLineContains];
 
     /// The key under which this block files a rule's first word, folded the way the parser folds it.
-    pub fn key_of(self, claimed: &str) -> String {
+    pub(crate) fn key_of(self, claimed: &str) -> String {
         match self {
             ConflictBlock::ContestedExtensions | ConflictBlock::NotCodeLineStarts
                     | ConflictBlock::NotCodeLineContains => ClaimKind::Extension.key_of(claimed),
@@ -155,8 +155,13 @@ pub enum LanguageDirParseError {
     NoFilesFound,
     /// It holds files and not one of them parses.
     NoFilesFormattedProperly,
-    /// The directory itself could not be opened, quoted here.
-    PathMissing(String)
+    /// The directory itself could not be opened, with what the operating system said.
+    Unreadable {
+        /// The directory, as it was given.
+        path: String,
+        /// Why it would not open.
+        error: std::io::Error
+    }
 }
 
 impl std::fmt::Display for LanguageDirParseError {
@@ -166,7 +171,7 @@ impl std::fmt::Display for LanguageDirParseError {
 {REGENERATE_LANGUAGES_HINT}"),
             Self::NoFilesFormattedProperly => write!(f, "No language file is formatted properly, so none could be parsed.
 {REGENERATE_LANGUAGES_HINT}"),
-            Self::PathMissing(path) => write!(f, "The languages directory ({path}) is not there.
+            Self::Unreadable { path, error } => write!(f, "The languages directory ({path}) could not be opened: {error}
 {REGENERATE_LANGUAGES_HINT}")
         }
     }
@@ -221,8 +226,9 @@ pub struct FaultyLanguageFile {
 pub fn parse_languages_in_dir(target_path: impl AsRef<Path>)
 -> Result<(Vec<Language>, Vec<FaultyLanguageFile>), LanguageDirParseError> {
     let target_path = target_path.as_ref();
-    let Ok(entries) = fs::read_dir(target_path) else {
-        return Err(LanguageDirParseError::PathMissing(target_path.display().to_string()));
+    let entries = match fs::read_dir(target_path) {
+        Ok(entries) => entries,
+        Err(error) => return Err(LanguageDirParseError::Unreadable { path: target_path.display().to_string(), error })
     };
 
     // A listing already says which of its entries are plain files. Only for the rest, a symbolic
@@ -268,10 +274,10 @@ pub fn parse_language_file(path: impl AsRef<Path>) -> Result<Language, LanguageF
 /// refused whole, or `Multiline comment start` written for `Multi line comment start` passes as a
 /// language with no block comments and no keywords, which counts its comments as code.
 ///
-/// `None` rather than a panic on anything unrecognised, so that a file edited into nonsense can be
-/// answered for rather than taking the run down.
-pub fn parse_language(contents: &str) -> Option<Language> {
-    parse_language_or_faulty_line(contents).ok()
+/// Refused with the line it stopped at on anything unrecognised, as [`parse_language_file`] is, so
+/// that a file edited into nonsense is answered for and never takes the run down.
+pub fn parse_language(contents: &str) -> Result<Language, LanguageFileError> {
+    parse_language_or_faulty_line(contents).map_err(LanguageFileError::Malformed)
 }
 
 // The same reading, with the line the parser stopped at when it refuses. The blocks are read in one
@@ -382,7 +388,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         if !open.contains('*') && !close.contains('*') {
             return true;
         }
-        match LeveledPair::of(open, close) {
+        match LeveledPair::parse(open, close) {
             Some(pair) => leveled_strings.push(pair),
             None => half_a_marker = true
         }
@@ -414,7 +420,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
 
     let mut heredoc = None;
     if header == HEREDOC {
-        heredoc = Some(HeredocRules::of(read_value_line(lines)?.trim())?);
+        heredoc = Some(HeredocRules::parse(read_value_line(lines)?.trim())?);
         header = read_next_header(lines)?;
     }
 
@@ -516,7 +522,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         if !start.contains("=*") && !end.contains("=*") {
             return true;
         }
-        match LeveledPair::of(start, end) {
+        match LeveledPair::parse(start, end) {
             Some(pair) if pair.end_suffix.is_some() => leveled_comments.push(pair),
             _ => half_a_marker = true
         }
@@ -620,7 +626,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         if header.as_deref() == Some(TEST_FILE_NAMES) {
             let written = split_line_on_whitespace(&read_value_line(lines)?);
             if written.is_empty() {return None;}
-            test_file_names = written.iter().map(|name| TestFileName::of(name)).collect::<Option<Vec<_>>>()?;
+            test_file_names = written.iter().map(|name| TestFileName::parse(name)).collect::<Option<Vec<_>>>()?;
             header = read_next_header(lines);
         }
         if test_markers.is_empty() && module_keyword.is_none() && test_file_markers.is_empty() && test_file_names.is_empty() {return None;}
@@ -683,11 +689,12 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
 
 /// Reads the file that settles contested extensions, and the lines of it that did not parse.
 ///
-/// A missing file is not a mistake and comes back as no rules at all: the only consequence is that
-/// a contested extension falls back to the alphabetical tiebreak, which announces itself anyway.
+/// A missing file is not a mistake and comes back as no rules at all, and a file that cannot be read
+/// is treated as missing. A contested extension then falls back to the alphabetical tiebreak, which
+/// announces itself anyway. A byte that is not UTF-8 is replaced and costs only the line it sits on.
 pub fn parse_conflict_rules_file(path: impl AsRef<Path>) -> (ConflictRules, Vec<(ConflictBlock, String)>) {
-    match fs::read_to_string(path) {
-        Ok(contents) => parse_conflict_rules(&contents),
+    match fs::read(path) {
+        Ok(bytes) => parse_conflict_rules(&String::from_utf8_lossy(&bytes)),
         Err(_) => (ConflictRules::default(), Vec::new())
     }
 }
@@ -849,6 +856,10 @@ mod tests {
     use crate::MultilineString;
     use crate::test_paths::{DATA_DIR, FIXTURES_DIR, LANGUAGES_DIR};
 
+    fn parse(contents: &str) -> Option<Language> {
+        parse_language(contents).ok()
+    }
+
     // The real shipped files and not a hand-written string that copies the format, which would be a
     // second source of truth that rots.
     #[test]
@@ -873,7 +884,7 @@ mod tests {
         let padded = "Language\nJava\n\n\nExtensions\njava\n\n\n\nString symbols\n\"\n\n\
                 Escape character\n\\\n\n\
                 Comment symbols\n//\n\n\nKeyword\n    NAME\n    classes\n    ALIASES\n    class\n";
-        let java = parse_language(padded).expect("an extra blank line broke the parse");
+        let java = parse(padded).expect("an extra blank line broke the parse");
         assert_eq!(vec!["classes"], java.keywords.iter().map(|k| k.descriptive_name.clone()).collect::<Vec<_>>());
     }
     #[test]
@@ -973,10 +984,10 @@ pl      Perl, Prolog
     fn a_language_that_does_not_parse_comes_back_as_none() {
         let good = "Language\nLua\n\nExtensions\nlua\n\nString symbols\n\" '\n\n\
                 Escape character\n\\\n\nComment symbols\n--\n";
-        assert!(parse_language(good).is_some());
+        assert!(parse(good).is_some());
         // and the carriage returns of a windows checkout change nothing about it
-        assert_eq!(parse_language(good),
-                parse_language(&good.replace('\n', "\r\n")));
+        assert_eq!(parse(good),
+                parse(&good.replace('\n', "\r\n")));
 
         let broken = [
             String::new(),
@@ -987,14 +998,14 @@ pl      Perl, Prolog
             good.replace("lua\n\n", "\n\n")
         ];
         for contents in broken {
-            assert!(parse_language(&contents).is_none(), "accepted:\n{contents}");
+            assert!(parse(&contents).is_none(), "accepted:\n{contents}");
         }
 
         // Declaring no string symbol is not a mistake, it is what HTML does.
-        assert!(parse_language(&good.replace("\" '\n", "\n")).is_some());
+        assert!(parse(&good.replace("\" '\n", "\n")).is_some());
 
         // a stray blank line between blocks does not cost a language its definition
-        assert!(parse_language(&good.replace("lua\n", "lua\n\n")).is_some());
+        assert!(parse(&good.replace("lua\n", "lua\n\n")).is_some());
     }
     // Every case below is a plausible typo in a file somebody edited by hand, and each one, kept
     // rather than refused, is a language with no multiline comments and no keywords, which counts a
@@ -1004,7 +1015,7 @@ pl      Perl, Prolog
         // A shipped file and not a copy of the format written here, so the shape being mutated
         // below is whatever the program actually reads today.
         let good = std::fs::read_to_string(LANGUAGES_DIR.to_owned() + "Java.txt").unwrap();
-        let parsed = parse_language(&good).expect("the control file must parse");
+        let parsed = parse(&good).expect("the control file must parse");
         assert!(!parsed.multiline_comments.is_empty() && !parsed.keywords.is_empty(),
                 "Java.txt no longer declares the two blocks this test truncates, so pick another file");
 
@@ -1037,7 +1048,7 @@ pl      Perl, Prolog
         ];
         for (name, contents) in truncating {
             assert_ne!(good.trim(), contents.trim(), "the '{name}' mutation changed nothing");
-            assert!(parse_language(&contents).is_none(),
+            assert!(parse(&contents).is_none(),
                     "'{name}' was accepted, and everything under it dropped:\n{contents}");
         }
     }
@@ -1046,7 +1057,7 @@ pl      Perl, Prolog
     #[test]
     fn the_shebangs_block_parses_where_it_belongs_and_nowhere_else() {
         let good = std::fs::read_to_string(LANGUAGES_DIR.to_owned() + "Shell.txt").unwrap();
-        let parsed = parse_language(&good).expect("the control file must parse");
+        let parsed = parse(&good).expect("the control file must parse");
         assert_eq!(vec!["sh", "bash", "zsh", "ksh", "dash"],
                 parsed.shebangs.iter().map(String::as_str).collect::<Vec<_>>());
 
@@ -1055,7 +1066,7 @@ pl      Perl, Prolog
 
         let mut blanked = lines.clone();
         blanked[at + 1] = "";
-        assert!(parse_language(&blanked.join("\n")).is_none(),
+        assert!(parse(&blanked.join("\n")).is_none(),
                 "a 'Shebangs' block with nothing under it was accepted");
 
         // moved below the string symbols, which is the late arrival the fixed order refuses
@@ -1065,12 +1076,12 @@ pl      Perl, Prolog
         for (offset, line) in block.into_iter().enumerate() {
             moved.insert(after_strings + offset, line);
         }
-        assert!(parse_language(&moved.join("\n")).is_none(),
+        assert!(parse(&moved.join("\n")).is_none(),
                 "a 'Shebangs' block after the string symbols was accepted");
 
         let mut without = lines.clone();
         without.drain(at..at + 2);
-        let parsed = parse_language(&without.join("\n"))
+        let parsed = parse(&without.join("\n"))
                 .expect("a file without the optional block must still parse");
         assert!(parsed.shebangs.is_empty());
 
@@ -1079,7 +1090,7 @@ pl      Perl, Prolog
         let extensions_value = lines.iter().position(|x| x.trim() == EXTENSIONS).unwrap() + 1;
         let mut shebang_only = lines.clone();
         shebang_only[extensions_value] = "";
-        let parsed = parse_language(&shebang_only.join("\n"))
+        let parsed = parse(&shebang_only.join("\n"))
                 .expect("a shebang-only language file was refused");
         assert!(parsed.extensions.is_empty());
         assert_eq!(vec!["sh", "bash", "zsh", "ksh", "dash"],
@@ -1087,7 +1098,7 @@ pl      Perl, Prolog
 
         let mut claimless = shebang_only.clone();
         claimless.drain(at..at + 2);
-        assert!(parse_language(&claimless.join("\n")).is_none(),
+        assert!(parse(&claimless.join("\n")).is_none(),
                 "a language claiming nothing at all was accepted");
     }
     #[test]
@@ -1142,9 +1153,9 @@ pl      Perl, Prolog
         assert!(!'\u{feff}'.is_whitespace());
 
         let with_mark = "\u{feff}".to_owned() + &good;
-        assert_eq!(parse_language(&good), parse_language(&with_mark),
+        assert_eq!(parse(&good), parse(&with_mark),
                 "the same definition read differently depending on how the editor saved it");
-        assert!(parse_language(&with_mark).is_some());
+        assert!(parse(&with_mark).is_some());
     }
 
     // Here the failure is silent: nothing lands among the faulty lines, since a line that is never
@@ -1169,14 +1180,14 @@ pl      Perl, Prolog
         let two_pairs = "Language\nPascalish\n\nExtensions\npax\n\nString symbols\n'\n\n\
                 Escape character\nnone\n\n\
                 Comment symbols\n//\n\nMulti line comment start\n{ (*\nMulti line comment end\n} *)\n";
-        let parsed = parse_language(two_pairs).expect("two pairs must parse");
+        let parsed = parse(two_pairs).expect("two pairs must parse");
         assert_eq!(vec![("{".to_owned(), "}".to_owned()), ("(*".to_owned(), "*)".to_owned())],
                 parsed.multiline_comments);
 
         let one_end = two_pairs.replace("} *)", "}");
-        assert!(parse_language(&one_end).is_none(), "one end for two starts was accepted");
+        assert!(parse(&one_end).is_none(), "one end for two starts was accepted");
         let one_start = two_pairs.replace("{ (*", "{");
-        assert!(parse_language(&one_start).is_none(), "one start for two ends was accepted");
+        assert!(parse(&one_start).is_none(), "one start for two ends was accepted");
 
         // and the shipped files that need a second pair declare it; D's second pair is the nesting
         // one, which is the case that makes the distinction per pair
@@ -1195,15 +1206,15 @@ pl      Perl, Prolog
                 Escape character\n\\\n\n\
                 Comment symbols\n//\nMulti line comment start\n<*\nMulti line comment end\n*>\n\n\
                 Cancelled symbols\n<* *>\nCancelled after\n[ <\n";
-        let parsed = parse_language(vectorish).expect("the declaration must parse");
+        let parsed = parse(vectorish).expect("the declaration must parse");
         assert_eq!(vec![("<*".to_owned(), b'['), ("*>".to_owned(), b'<')], parsed.cancelled_symbols);
 
         let unknown = vectorish.replace("Cancelled symbols\n<*", "Cancelled symbols\n/*");
-        assert!(parse_language(&unknown).is_none(), "a symbol this language never declared was accepted");
+        assert!(parse(&unknown).is_none(), "a symbol this language never declared was accepted");
         let uneven = vectorish.replace("[ <", "[");
-        assert!(parse_language(&uneven).is_none(), "two symbols with one cancelling character were accepted");
+        assert!(parse(&uneven).is_none(), "two symbols with one cancelling character were accepted");
         let two_bytes = vectorish.replace("[ <", "[[ <");
-        assert!(parse_language(&two_bytes).is_none(), "a cancelling character of two bytes was accepted");
+        assert!(parse(&two_bytes).is_none(), "a cancelling character of two bytes was accepted");
 
         let c3 = parse_language_file(LANGUAGES_DIR.to_owned() + "C3.txt").unwrap();
         assert_eq!(2, c3.cancelled_symbols.len(), "C3.txt no longer declares its vector exception");
@@ -1213,20 +1224,20 @@ pl      Perl, Prolog
     fn a_string_symbol_is_declared_in_one_list_and_the_crossing_ones_are_numbered_last() {
         let good = "Language\nPylike\n\nExtensions\npyl\n\nString symbols\n\" '\n\n\
                 Multi line string symbols\n\"\"\"\n\nEscape character\n\\\n\nComment symbols\n#\n";
-        let parsed = parse_language(good).expect("the declaration must parse");
+        let parsed = parse(good).expect("the declaration must parse");
         assert_eq!(vec!["\"".to_owned(), "'".to_owned()], parsed.strings.get_symbols());
         assert_eq!(vec![MultilineString::escaping("\"\"\"")], parsed.strings.get_multiline_strings());
 
         let twice = good.replace("String symbols\n\" '", "String symbols\n\" ' \"\"\"");
-        assert!(parse_language(&twice).is_none(),
+        assert!(parse(&twice).is_none(),
                 "a symbol declared in both lists was accepted, leaving two answers to argue");
         let empty = good.replace("Multi line string symbols\n\"\"\"", "Multi line string symbols\n");
-        assert!(parse_language(&empty).is_none());
+        assert!(parse(&empty).is_none());
 
         // a language that writes no string at all is allowed, which is what HTML needs
         let stringless = good.replace("String symbols\n\" '", "String symbols\n")
                 .replace("Multi line string symbols\n\"\"\"\n\n", "");
-        let parsed = parse_language(&stringless).expect("a language with no strings must parse");
+        let parsed = parse(&stringless).expect("a language with no strings must parse");
         assert!(parsed.strings.get_symbols().is_empty() && parsed.strings.get_multiline_strings().is_empty());
 
         // and the shipped files that declare crossing strings still do
@@ -1242,26 +1253,26 @@ pl      Perl, Prolog
     fn a_crossing_string_declares_whether_a_backslash_cancels_its_closer() {
         let good = "Language\nGolike\n\nExtensions\ngol\n\nString symbols\n\"\n\n\
                 Multi line raw string symbols\n`\n\nEscape character\n\\\n\nComment symbols\n//\n";
-        let parsed = parse_language(good).expect("the declaration must parse");
+        let parsed = parse(good).expect("the declaration must parse");
         assert_eq!(vec![MultilineString::raw("`")], parsed.strings.get_multiline_strings());
 
         // both blocks at once, numbered in the order the file declares them
         let both = good.replace("Multi line raw string symbols\n`",
                 "Multi line string symbols\n\"\"\"\n\nMulti line raw string symbols\n`");
-        let parsed = parse_language(&both).expect("both blocks must parse");
+        let parsed = parse(&both).expect("both blocks must parse");
         assert_eq!(vec![MultilineString::escaping("\"\"\""), MultilineString::raw("`")],
                 parsed.strings.get_multiline_strings());
 
         let twice = good.replace("Multi line raw string symbols\n`",
                 "Multi line string symbols\n`\n\nMulti line raw string symbols\n`");
-        assert!(parse_language(&twice).is_none(),
+        assert!(parse(&twice).is_none(),
                 "a symbol declared raw and escaping at once was accepted");
         let with_pair = good.replace("Multi line raw string symbols\n`",
                 "Multi line raw string symbols\n`\n\nPaired string openers\n`\nPaired string closers\n'");
-        assert!(parse_language(&with_pair).is_none(),
+        assert!(parse(&with_pair).is_none(),
                 "a symbol declared raw and as a pair opener at once was accepted");
         let empty = good.replace("Multi line raw string symbols\n`", "Multi line raw string symbols\n");
-        assert!(parse_language(&empty).is_none());
+        assert!(parse(&empty).is_none());
 
         // and the shipped files whose crossing form escapes nothing say so
         for name in ["Go.txt", "Odin.txt", "D.txt", "Kotlin.txt", "Shell.txt", "PowerShell.txt"] {
@@ -1276,16 +1287,16 @@ pl      Perl, Prolog
         let good = "Language\nVerbatimlike\n\nExtensions\nvbl\n\nString symbols\n\"\n\n\
                 Paired string openers\n@\" r\"\nPaired string closers\n\" \"\n\
                 Paired strings escaped by doubling\n@\"\n\nEscape character\n\\\n\nComment symbols\n//\n";
-        let parsed = parse_language(good).expect("the declaration must parse");
+        let parsed = parse(good).expect("the declaration must parse");
         let doubling = MultilineString { escapes_by_doubling: true, ..MultilineString::of("@\"", "\"") };
         assert_eq!(vec![doubling, MultilineString::of("r\"", "\"")], parsed.strings.get_multiline_strings());
 
         let undeclared = good.replace("doubling\n@\"", "doubling\n$\"");
-        assert!(parse_language(&undeclared).is_none(), "an opener no pair declared was accepted");
+        assert!(parse(&undeclared).is_none(), "an opener no pair declared was accepted");
         let empty = good.replace("doubling\n@\"", "doubling\n");
-        assert!(parse_language(&empty).is_none());
+        assert!(parse(&empty).is_none());
         let without_pairs = good.replace("Paired string openers\n@\" r\"\nPaired string closers\n\" \"\n", "");
-        assert!(parse_language(&without_pairs).is_none(), "the block was accepted with no pair above it");
+        assert!(parse(&without_pairs).is_none(), "the block was accepted with no pair above it");
 
         for name in ["C#.txt", "F#.txt"] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
@@ -1298,8 +1309,8 @@ pl      Perl, Prolog
     fn a_heredoc_names_its_rules_after_the_strings_and_its_opener_is_never_also_a_string_symbol() {
         let good = "Language\nShlike\n\nExtensions\nshl\n\nString symbols\n\n\
                 Multi line raw string symbols\n'\n\nHeredoc\nshell\n\nEscape character\n\\\n\nComment symbols\n#\n";
-        assert_eq!(Some(HeredocRules::Shell), parse_language(good).expect("the declaration must parse").heredoc);
-        assert_eq!(Some(HeredocRules::Php), parse_language(&good.replace("Heredoc\nshell", "Heredoc\nphp"))
+        assert_eq!(Some(HeredocRules::Shell), parse(good).expect("the declaration must parse").heredoc);
+        assert_eq!(Some(HeredocRules::Php), parse(&good.replace("Heredoc\nshell", "Heredoc\nphp"))
                 .expect("the declaration must parse").heredoc);
 
         for (refused, why) in [(good.replace("Heredoc\nshell", "Heredoc\n"), "an empty value"),
@@ -1308,10 +1319,10 @@ pl      Perl, Prolog
                 (good.replace("raw string symbols\n'", "raw string symbols\n<<"), "an opener that is also a raw string symbol"),
                 (good.replace("Multi line raw string symbols\n'\n\n", "").replace("Escape character\n\\\n\n", ""),
                         "a heredoc with no escape character")] {
-            assert!(parse_language(&refused).is_none(), "{why} was accepted");
+            assert!(parse(&refused).is_none(), "{why} was accepted");
         }
         let after_the_escape = good.replace("Heredoc\nshell\n\nEscape character\n\\", "Escape character\n\\\n\nHeredoc\nshell");
-        assert!(parse_language(&after_the_escape).is_none(), "the block was accepted after the escape character");
+        assert!(parse(&after_the_escape).is_none(), "the block was accepted after the escape character");
 
         for (name, rules) in [("Shell.txt", HeredocRules::Shell), ("Perl.txt", HeredocRules::Perl),
                 ("Ruby.txt", HeredocRules::Ruby), ("PHP.txt", HeredocRules::Php)] {
@@ -1325,20 +1336,20 @@ pl      Perl, Prolog
         let good = "Language\nRawlike\n\nExtensions\nrwl\n\nString symbols\n\"\n\n\
                 Paired string openers\nR\"( @\"\nPaired string closers\n)\" \"\n\
                 Paired strings with a delimiter\nR\"(\n\nEscape character\n\\\n\nComment symbols\n//\n";
-        let parsed = parse_language(good).expect("the declaration must parse");
+        let parsed = parse(good).expect("the declaration must parse");
         let delimited = MultilineString { delimited: true, ..MultilineString::of("R\"(", ")\"") };
         assert_eq!(vec![delimited, MultilineString::of("@\"", "\"")], parsed.strings.get_multiline_strings());
 
         let undeclared = good.replace("delimiter\nR\"(", "delimiter\nL\"(");
-        assert!(parse_language(&undeclared).is_none(), "an opener no pair declared was accepted");
+        assert!(parse(&undeclared).is_none(), "an opener no pair declared was accepted");
         let empty = good.replace("delimiter\nR\"(", "delimiter\n");
-        assert!(parse_language(&empty).is_none());
+        assert!(parse(&empty).is_none());
         let one_character = good.replace("delimiter\nR\"(", "delimiter\n@\"");
-        assert!(parse_language(&one_character).is_none(), "a pair whose closer has no room for a delimiter was accepted");
+        assert!(parse(&one_character).is_none(), "a pair whose closer has no room for a delimiter was accepted");
         let both = good.replace("Paired strings with a delimiter", "Paired strings escaped by doubling\nR\"(\nPaired strings with a delimiter");
-        assert!(parse_language(&both).is_none(), "a pair escaped by doubling and delimited at once was accepted");
+        assert!(parse(&both).is_none(), "a pair escaped by doubling and delimited at once was accepted");
         let before_doubling = good.replace("Paired strings with a delimiter\nR\"(\n", "Paired strings with a delimiter\nR\"(\nPaired strings escaped by doubling\n@\"\n");
-        assert!(parse_language(&before_doubling).is_none(), "the block was accepted ahead of the doubling one");
+        assert!(parse(&before_doubling).is_none(), "the block was accepted ahead of the doubling one");
 
         for name in ["C++.txt", "C++ Header.txt"] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
@@ -1352,7 +1363,7 @@ pl      Perl, Prolog
         let good = "Language\nPerlish\n\nExtensions\npx\n\nString symbols\n\"\n\nEscape character\n\\\n\nComment symbols\n#\n\n\
                 Line-start comment start\n= =begin\nLine-start comment end\n=cut =end\n\
                 Whole-line comment start\n%{\nWhole-line comment end\n%}\n";
-        let parsed = parse_language(good).expect("the declaration must parse");
+        let parsed = parse(good).expect("the declaration must parse");
         let pair = |start: &str, end: &str| (start.to_owned(), end.to_owned());
         assert_eq!(vec![pair("=", "=cut"), pair("=begin", "=end")], parsed.line_start_comments);
         assert_eq!(vec![pair("%{", "%}")], parsed.whole_line_comments);
@@ -1361,7 +1372,7 @@ pl      Perl, Prolog
                 (good.replace("end\n%}\n", "end\n%{\n"), "a whole-line pair with one symbol at both ends"),
                 (good.replace("Line-start comment start\n= =begin\nLine-start comment end\n=cut =end\n", "")
                         + "Line-start comment start\n=\nLine-start comment end\n=cut\n", "the two blocks in the other order")] {
-            assert!(parse_language(&refused).is_none(), "{why} was accepted");
+            assert!(parse(&refused).is_none(), "{why} was accepted");
         }
         let shipped = |name: &str| parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
         assert_eq!(vec![pair("=", "=cut")], shipped("Perl.txt").line_start_comments, "Perl.txt lost its POD");
@@ -1376,19 +1387,19 @@ pl      Perl, Prolog
         let good = "Language\nPerlish\n\nExtensions\npx\n\n\
                 Identifying line starts\nuse strict, my $, =head\n\nIdentifying line contains\n:-, std::\n\n\
                 String symbols\n\"\n\nEscape character\n\\\n\nComment symbols\n#\n";
-        let parsed = parse_language(good).expect("the declaration must parse");
+        let parsed = parse(good).expect("the declaration must parse");
         assert_eq!(vec!["use strict".to_owned(), "my $".to_owned(), "=head".to_owned()],
                 parsed.identifying_line_starts);
         assert_eq!(vec![":-".to_owned(), "std::".to_owned()], parsed.identifying_line_contains);
 
         let alone = good.replace("Identifying line starts\nuse strict, my $, =head\n\n", "");
         assert_eq!(vec![":-".to_owned(), "std::".to_owned()],
-                parse_language(&alone).expect("one block alone must parse").identifying_line_contains);
+                parse(&alone).expect("one block alone must parse").identifying_line_contains);
         let empty = good.replace("use strict, my $, =head", " ,, ");
-        assert!(parse_language(&empty).is_none(), "a declared block holding nothing was accepted");
+        assert!(parse(&empty).is_none(), "a declared block holding nothing was accepted");
         let without = good.replace("Identifying line starts\nuse strict, my $, =head\n\n", "")
                 .replace("Identifying line contains\n:-, std::\n\n", "");
-        assert!(parse_language(&without).expect("optional blocks may be absent")
+        assert!(parse(&without).expect("optional blocks may be absent")
                 .identifying_line_starts.is_empty());
     }
 
@@ -1397,31 +1408,31 @@ pl      Perl, Prolog
         let good = "Language\nWeblike\n\nExtensions\nwbl\n\nString symbols\n\n\nComment symbols\n\n\
                 Multi line comment start\n<!--\nMulti line comment end\n-->\n\n\
                 Nested language start\n<script <style\nNested language end\n</script> </style>\nNested language default\njs css\n";
-        let parsed = parse_language(good).expect("the declaration must parse");
+        let parsed = parse(good).expect("the declaration must parse");
         assert_eq!(vec![NestedLanguage::of("<script", "</script>", "js"),
                 NestedLanguage::of("<style", "</style>", "css")], parsed.nested_languages);
 
         let short = good.replace("Nested language default\njs css", "Nested language default\njs");
-        assert!(parse_language(&short).is_none(),
+        assert!(parse(&short).is_none(),
                 "a region without its default was accepted");
         let no_ends = good.replace("Nested language end\n</script> </style>\n", "");
-        assert!(parse_language(&no_ends).is_none());
+        assert!(parse(&no_ends).is_none());
         let empty = good.replace("<script <style", "");
-        assert!(parse_language(&empty).is_none());
+        assert!(parse(&empty).is_none());
 
         // A section is looked for where a tag begins, so an opener that is not one could never match
         let fenced = good.replace("<script <style", "```py <style").replace("</script> </style>", "``` </style>");
-        assert!(parse_language(&fenced).is_none(),
+        assert!(parse(&fenced).is_none(),
                 "an opener that is not a tag was accepted");
         let fenced_end = good.replace("</script> </style>", "``` </style>");
-        assert!(parse_language(&fenced_end).is_none(),
+        assert!(parse(&fenced_end).is_none(),
                 "a closer that is not a tag was accepted");
 
         // out of place it refuses the file whole, like every other block
         let misplaced = "Language\nWeblike\n\nExtensions\nwbl\n\n\
                 Nested language start\n<script\nNested language end\n</script>\nNested language default\njs\n\n\
                 String symbols\n\n\nComment symbols\n\n";
-        assert!(parse_language(misplaced).is_none());
+        assert!(parse(misplaced).is_none());
     }
 
     #[test]
@@ -1429,7 +1440,7 @@ pl      Perl, Prolog
         let good = "Language\nRustlike\n\nExtensions\nrsl\n\nString symbols\n\n\nComment symbols\n//\n\n\
                 Tests\n    MARKERS\n    #[ #![\n    MODULES\n    mod\n    FILE NAMES\n    tests.rs *_test.rs test_*\n\n\
                 Keyword\n    NAME\n    structs\n    ALIASES\n    struct\n";
-        let parsed = parse_language(good).expect("the declaration must parse");
+        let parsed = parse(good).expect("the declaration must parse");
         assert_eq!(vec!["#[".to_owned(), "#![".to_owned()], parsed.test_markers);
         assert_eq!(Some("mod".to_owned()), parsed.module_keyword);
         assert_eq!(vec![TestFileName::Exact("tests.rs".to_owned()), TestFileName::EndsWith("_test.rs".to_owned()),
@@ -1437,50 +1448,50 @@ pl      Perl, Prolog
         assert_eq!(1, parsed.keywords.len(), "the keywords after the block were lost");
 
         let markers_alone = good.replace("    MODULES\n    mod\n    FILE NAMES\n    tests.rs *_test.rs test_*\n", "");
-        let parsed = parse_language(&markers_alone).expect("one part alone must parse");
+        let parsed = parse(&markers_alone).expect("one part alone must parse");
         assert!(parsed.test_file_names.is_empty() && parsed.module_keyword.is_none());
         let names_alone = good.replace("    MARKERS\n    #[ #![\n    MODULES\n    mod\n", "");
-        assert!(parse_language(&names_alone).expect("one part alone must parse").test_markers.is_empty());
+        assert!(parse(&names_alone).expect("one part alone must parse").test_markers.is_empty());
         let modules_alone = good.replace("    MARKERS\n    #[ #![\n", "").replace("    FILE NAMES\n    tests.rs *_test.rs test_*\n", "");
-        assert!(parse_language(&modules_alone).is_none(), "MODULES without MARKERS was accepted");
+        assert!(parse(&modules_alone).is_none(), "MODULES without MARKERS was accepted");
         let modules_and_names = good.replace("    MARKERS\n    #[ #![\n", "");
-        assert!(parse_language(&modules_and_names).is_none(), "MODULES without MARKERS was accepted beside FILE NAMES");
+        assert!(parse(&modules_and_names).is_none(), "MODULES without MARKERS was accepted beside FILE NAMES");
         let none = good.replace("    MARKERS\n    #[ #![\n    MODULES\n    mod\n    FILE NAMES\n    tests.rs *_test.rs test_*\n", "");
-        assert!(parse_language(&none).is_none(), "a block holding nothing was accepted");
+        assert!(parse(&none).is_none(), "a block holding nothing was accepted");
         let empty_markers = good.replace("    #[ #![\n", "    \n");
-        assert!(parse_language(&empty_markers).is_none());
+        assert!(parse(&empty_markers).is_none());
         let two_words = good.replace("    mod\n", "    mod module\n");
-        assert!(parse_language(&two_words).is_none(), "two module words were accepted");
+        assert!(parse(&two_words).is_none(), "two module words were accepted");
         let empty_word = good.replace("    mod\n", "    \n");
-        assert!(parse_language(&empty_word).is_none(), "an empty module word was accepted");
+        assert!(parse(&empty_word).is_none(), "an empty module word was accepted");
         let no_word = good.replace("    MODULES\n    mod\n", "    MODULES\n");
-        assert!(parse_language(&no_word).is_none(), "MODULES with nothing under it was accepted");
+        assert!(parse(&no_word).is_none(), "MODULES with nothing under it was accepted");
         let out_of_order = good.replace("    MARKERS\n    #[ #![\n    MODULES\n    mod\n", "    MODULES\n    mod\n    MARKERS\n    #[ #![\n");
-        assert!(parse_language(&out_of_order).is_none(), "MODULES before MARKERS was accepted");
+        assert!(parse(&out_of_order).is_none(), "MODULES before MARKERS was accepted");
         for wrong in ["a*b", "*", "**test", "test_*.rs*"] {
             let shape = good.replace("tests.rs *_test.rs test_*", wrong);
-            assert!(parse_language(&shape).is_none(), "'{wrong}' is no shape a file name takes and was accepted");
+            assert!(parse(&shape).is_none(), "'{wrong}' is no shape a file name takes and was accepted");
         }
 
         let misplaced = "Language\nRustlike\n\nExtensions\nrsl\n\nTests\n    MARKERS\n    #[\n\n\
                 String symbols\n\n\nComment symbols\n//\n";
-        assert!(parse_language(misplaced).is_none());
+        assert!(parse(misplaced).is_none());
 
         let file_markers_alone = good.replace("    MARKERS\n    #[ #![\n    MODULES\n    mod\n    FILE NAMES\n    tests.rs *_test.rs test_*\n",
                 "    FILE MARKERS\n    @Test [Fact\n");
-        let parsed = parse_language(&file_markers_alone).expect("file markers alone must parse");
+        let parsed = parse(&file_markers_alone).expect("file markers alone must parse");
         assert_eq!(vec!["@Test".to_owned(), "[Fact".to_owned()], parsed.test_file_markers);
         assert!(parsed.test_markers.is_empty() && parsed.test_file_names.is_empty());
         let beside_markers_and_names = good.replace("    MODULES\n    mod\n    FILE NAMES\n", "    FILE MARKERS\n    @Test\n    FILE NAMES\n");
-        let parsed = parse_language(&beside_markers_and_names).expect("file markers between the markers and the names must parse");
+        let parsed = parse(&beside_markers_and_names).expect("file markers between the markers and the names must parse");
         assert_eq!((vec!["@Test".to_owned()], 2, 3), (parsed.test_file_markers, parsed.test_markers.len(), parsed.test_file_names.len()));
         let beside_modules = good.replace("    FILE NAMES\n", "    FILE MARKERS\n    @Test\n    FILE NAMES\n");
-        assert!(parse_language(&beside_modules).is_none(), "FILE MARKERS beside MODULES was accepted");
+        assert!(parse(&beside_modules).is_none(), "FILE MARKERS beside MODULES was accepted");
         let empty_file_markers = beside_markers_and_names.replace("    @Test\n", "    \n");
-        assert!(parse_language(&empty_file_markers).is_none(), "FILE MARKERS with nothing under it was accepted");
+        assert!(parse(&empty_file_markers).is_none(), "FILE MARKERS with nothing under it was accepted");
         let after_the_names = good.replace("    MODULES\n    mod\n", "")
                 .replace("    tests.rs *_test.rs test_*\n", "    tests.rs *_test.rs test_*\n    FILE MARKERS\n    @Test\n");
-        assert!(parse_language(&after_the_names).is_none(), "FILE MARKERS after FILE NAMES was accepted");
+        assert!(parse(&after_the_names).is_none(), "FILE MARKERS after FILE NAMES was accepted");
 
         let rust = parse_language_file(LANGUAGES_DIR.to_owned() + "Rust.txt").unwrap();
         assert_eq!((vec!["#[".to_owned(), "#![".to_owned()], Some("mod".to_owned())), (rust.test_markers, rust.module_keyword));
@@ -1499,16 +1510,16 @@ pl      Perl, Prolog
         let good = "Language\nRustlike\n\nExtensions\nrsl\n\nString symbols\n\n\n\
                 Character literal symbols\n'\n\nMulti line string symbols\n\"\n\n\
                 Escape character\n\\\n\nComment symbols\n//\n";
-        let parsed = parse_language(good).expect("the declaration must parse");
+        let parsed = parse(good).expect("the declaration must parse");
         assert_eq!(vec!["'".to_owned()], parsed.strings.get_char_literals());
         assert_eq!(vec![MultilineString::escaping("\"")], parsed.strings.get_multiline_strings());
 
         // declared in two lists it refuses the file, empty it refuses the file
         let twice = good.replace("String symbols\n\n", "String symbols\n'\n");
-        assert!(parse_language(&twice).is_none(),
+        assert!(parse(&twice).is_none(),
                 "a symbol that is both a string and a character literal was accepted");
         let empty = good.replace("Character literal symbols\n'\n\n", "Character literal symbols\n\n\n");
-        assert!(parse_language(&empty).is_none());
+        assert!(parse(&empty).is_none());
 
         // the shipped declarations that use the block
         for name in ["Rust.txt", "D.txt", "Java.txt", "Kotlin.txt", "C#.txt"] {
@@ -1522,23 +1533,23 @@ pl      Perl, Prolog
     fn a_language_that_declares_a_string_has_to_say_what_escapes_it() {
         let good = "Language\nEsclike\n\nExtensions\nesc\n\nString symbols\n\"\n\n\
                 Escape character\n\\\n\nComment symbols\n//\n";
-        assert_eq!(Some(b'\\'), parse_language(good).expect("the declaration must parse").strings.get_escape());
+        assert_eq!(Some(b'\\'), parse(good).expect("the declaration must parse").strings.get_escape());
 
         let backtick = good.replace("Escape character\n\\", "Escape character\n`");
-        assert_eq!(Some(b'`'), parse_language(&backtick).unwrap().strings.get_escape());
+        assert_eq!(Some(b'`'), parse(&backtick).unwrap().strings.get_escape());
         let nothing = good.replace("Escape character\n\\", "Escape character\nnone");
-        assert_eq!(None, parse_language(&nothing).unwrap().strings.get_escape());
+        assert_eq!(None, parse(&nothing).unwrap().strings.get_escape());
 
         let missing = good.replace("Escape character\n\\\n\n", "");
-        assert!(parse_language(&missing).is_none(),
+        assert!(parse(&missing).is_none(),
                 "a language declaring a string was accepted without saying what escapes it");
         // more than one byte is not a character, and the test walks backwards a byte at a time
         let two = good.replace("Escape character\n\\", "Escape character\n\\\\");
-        assert!(parse_language(&two).is_none());
+        assert!(parse(&two).is_none());
 
         let stringless = good.replace("String symbols\n\"", "String symbols\n")
                 .replace("Escape character\n\\\n\n", "");
-        assert!(parse_language(&stringless).is_some(), "a language with no strings was refused");
+        assert!(parse(&stringless).is_some(), "a language with no strings was refused");
 
         // and the shipped files that declare each of the three answers
         for (name, escape) in [("Shell.txt", Some(b'\\')), ("PowerShell.txt", Some(b'`')),
@@ -1554,16 +1565,16 @@ pl      Perl, Prolog
         let good = "Language\nLualike\n\nExtensions\nlux\n\nString symbols\n\" '\n\n\
                 Escape character\n\\\n\n\
                 Comment symbols\n--\nMulti line comment start\n--[=*[\nMulti line comment end\n]=*]\n";
-        let parsed = parse_language(good).expect("the leveled declaration must parse");
+        let parsed = parse(good).expect("the leveled declaration must parse");
         assert!(parsed.multiline_comments.is_empty());
         assert_eq!(1, parsed.leveled_comments.len());
         assert_eq!(("--[", b'['), (parsed.leveled_comments[0].start_prefix.as_str(), parsed.leveled_comments[0].start_suffix));
         assert_eq!(("]", Some(b']')), (parsed.leveled_comments[0].end_prefix.as_str(), parsed.leveled_comments[0].end_suffix));
 
         let half = good.replace("]=*]", "]]");
-        assert!(parse_language(&half).is_none(), "one leveled half was accepted");
+        assert!(parse(&half).is_none(), "one leveled half was accepted");
         let open_ended = good.replace("]=*]", "]=*");
-        assert!(parse_language(&open_ended).is_none(), "a comment end with nothing after its run was accepted");
+        assert!(parse(&open_ended).is_none(), "a comment end with nothing after its run was accepted");
 
         let lua = parse_language_file(LANGUAGES_DIR.to_owned() + "Lua.txt").unwrap();
         assert_eq!(1, lua.leveled_comments.len(), "Lua.txt no longer declares its long bracket");
@@ -1576,7 +1587,7 @@ pl      Perl, Prolog
         let good = "Language\nRawlike\n\nExtensions\nrwl\n\nString symbols\n\"\n\n\
                 Paired string openers\nr#*\" @\"\nPaired string closers\n\"#* \"\n\n\
                 Escape character\n\\\n\nComment symbols\n//\n";
-        let parsed = parse_language(good).expect("the leveled declaration must parse");
+        let parsed = parse(good).expect("the leveled declaration must parse");
         assert_eq!(vec![MultilineString::of("@\"", "\"")], parsed.strings.get_multiline_strings());
         let pair = &parsed.strings.get_leveled_pairs()[0];
         assert_eq!(("r", b'"', "\"", None, b'#'),
@@ -1592,11 +1603,11 @@ pl      Perl, Prolog
         ];
         for (name, contents) in wrong {
             assert_ne!(good, contents, "the '{name}' mutation changed nothing");
-            assert!(parse_language(&contents).is_none(), "'{name}' was accepted");
+            assert!(parse(&contents).is_none(), "'{name}' was accepted");
         }
         let only_leveled = good.replace("String symbols\n\"", "String symbols\n").replace("r#*\" @\"", "r#*\"")
                 .replace("\"#* \"\n", "\"#*\n").replace("Escape character\n\\\n\n", "");
-        assert!(parse_language(&only_leveled).is_none(), "a language whose only string is leveled skipped its escape");
+        assert!(parse(&only_leveled).is_none(), "a language whose only string is leveled skipped its escape");
 
         let rust = parse_language_file(LANGUAGES_DIR.to_owned() + "Rust.txt").unwrap();
         assert_eq!(3, rust.strings.get_leveled_pairs().len(), "Rust.txt no longer declares its three raw prefixes");
@@ -1608,6 +1619,19 @@ pl      Perl, Prolog
     fn a_missing_conflicts_file_is_not_a_mistake() {
         let (rules, faulty) = parse_conflict_rules_file("a/path/that/is/not/there.txt");
         assert_eq!((ConflictRules::default(), Vec::<(ConflictBlock, String)>::new()), (rules, faulty));
+    }
+
+    #[test]
+    fn a_latin_1_byte_in_a_comment_line_keeps_the_rules_of_the_conflicts_file() {
+        let dir = std::env::temp_dir().join("a_latin_1_byte_in_a_comment_line_keeps_the_rules_of_the_conflicts_file");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(crate::LANGUAGE_CONFLICTS_FILE_NAME);
+        fs::write(&path, b"Edited by Jos\xe9\n===> contested-extensions\nm    Objective-C, MATLAB\n").unwrap();
+
+        let (rules, _) = parse_conflict_rules_file(&path);
+        fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(Some(&vec!["Objective-C".to_owned(), "MATLAB".to_owned()]), rules.by_extension.get("m"));
     }
     // The C++ fixture is a definition that is correct everywhere except for one stray line under the
     // language name, which is the mistake somebody editing a file by hand actually makes. Its

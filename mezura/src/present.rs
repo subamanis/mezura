@@ -372,11 +372,11 @@ mod tests {
             modules: Vec::new(), nested_languages: HashMap::new(), tests: HashMap::new(), targets: Vec::new(),
             files_present: FilesPresent {total_files: 2 + faulty, relevant_files: 1 + faulty, excluded_files: 0},
             performance: Performance {duration_millis: 0, threads: Threads::new(1, 1)},
-            faulty_files: (0..faulty).map(|i| mezura_core::FaultyFileDetails::new(
-                    format!("a{i}.rs"), "no".to_owned(), 1)).collect(),
+            faulty_files: (0..faulty).map(|i| mezura_core::FaultyFileDetails {
+                    path: format!("a{i}.rs"), error_msg: "no".to_owned(), size: 1 }).collect(),
             skipped_files: mezura_core::SkippedFiles::default(),
-            unreadable_dirs: (0..unreadable).map(|i| UnreadableDirDetails::new(
-                    format!("D:/d{i}"), "Access is denied. (os error 5)".to_owned())).collect(),
+            unreadable_dirs: (0..unreadable).map(|i| UnreadableDirDetails {
+                    path: format!("D:/d{i}"), error_msg: "Access is denied. (os error 5)".to_owned() }).collect(),
             warnings: Vec::new(),
             applied_presets: Vec::new()
         }
@@ -384,8 +384,8 @@ mod tests {
 
     #[test]
     fn the_presets_list_shows_the_outermost_folders_of_a_preset_to_the_width_and_leaves_out_one_that_decided_nothing() {
-        let applied = |name: &str, directory: &str, trigger_file: &str, matched| AppliedPreset::new(name.to_owned(),
-                directory.to_owned(), trigger_file.to_owned(), matched);
+        let applied = |name: &str, directory: &str, trigger_file: &str, matched| AppliedPreset { name: name.to_owned(),
+                directory: directory.to_owned(), trigger_file: trigger_file.to_owned(), matched };
         let mut result = result_with(0, 0);
         result.targets = vec![Target::of("D:/proj")];
         result.applied_presets = (0..20).map(|i| applied("jest", &format!("D:/proj/packages/package-{i:02}"), "jest.config.js", true))
@@ -425,7 +425,8 @@ mod tests {
         assert_eq!(suggested, collect_test_preset_notes(&result, &config));
         config.typed_explicitly.tests = true;
         assert!(collect_test_preset_notes(&result, &config).is_empty(), "a run that typed '--tests' was told about presets");
-        result.applied_presets = vec![AppliedPreset::new("vitest".to_owned(), "D:/".to_owned(), "vitest.config.ts".to_owned(), true)];
+        result.applied_presets = vec![AppliedPreset { name: "vitest".to_owned(), directory: "D:/".to_owned(),
+                trigger_file: "vitest.config.ts".to_owned(), matched: true }];
         assert!(find_names_of_presets_to_suggest(&result).is_empty(), "a preset that found the tests was suggested again");
 
         result.applied_presets = Vec::new();

@@ -1,8 +1,8 @@
 //! The machinery that turns a set of targets into a result.
 
-pub mod config;
-pub mod path_patterns;
-pub mod targets;
+pub(crate) mod config;
+pub(crate) mod path_patterns;
+pub(crate) mod targets;
 
 pub(crate) mod consumer;
 pub(crate) mod file_parser;

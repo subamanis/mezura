@@ -1106,9 +1106,9 @@ mod tests {
     fn build_row(path: &str, module: ModuleId, lines: usize, partial_lines: Option<usize>, declarations: Vec<Declaration>) -> ModuleRow {
         let classes_of = |lines| LineClasses { words_in_code: lines, ..LineClasses::default() };
         ModuleRow { path: join_as_the_scan_does(path), module, language_name: "Rust".into(),
-                stats: FileStats { lines, classes: classes_of(lines), keyword_occurences: Vec::new() }, bytes: lines * 10, declarations,
+                stats: FileStats { lines, classes: classes_of(lines), keyword_occurrences: Vec::new() }, bytes: lines * 10, declarations,
                 partial: partial_lines.map(|partial| TestReport { bytes: partial * 10,
-                        stats: FileStats { lines: partial, classes: classes_of(partial), keyword_occurences: Vec::new() } }) }
+                        stats: FileStats { lines: partial, classes: classes_of(partial), keyword_occurrences: Vec::new() } }) }
     }
 
     fn rust_only() -> HashMap<String, Language> {
@@ -1238,13 +1238,13 @@ mod tests {
     fn a_promoted_file_moves_its_keywords_with_it_less_what_its_own_marker_counted() {
         let mut rows = vec![build_row("p/src/lib.rs", 0, 5, Some(2), vec![build_declaration("cases", &[], true)]),
                 build_row("p/src/cases.rs", 0, 9, Some(3), vec![])];
-        rows[1].stats.keyword_occurences = vec![4];
-        rows[1].partial.as_mut().unwrap().stats.keyword_occurences = vec![1];
+        rows[1].stats.keyword_occurrences = vec![4];
+        rows[1].partial.as_mut().unwrap().stats.keyword_occurrences = vec![1];
         let mut tests = vec![HashMap::new()];
         let mut files = vec![HashMap::new()];
         assert_eq!(Promotion { seeds: 1, promoted: 1 }, promote_declared_test_modules(&rows, &mut tests, &mut files, &rust_only(), &mut Tree::default()));
         let share = &tests[0]["Rust"];
-        assert_eq!((6, hashmap!("structs".to_owned() => 3)), (share.stats.lines, share.stats.keyword_occurences.clone()));
+        assert_eq!((6, hashmap!("structs".to_owned() => 3)), (share.stats.lines, share.stats.keyword_occurrences.clone()));
     }
 
     #[test]

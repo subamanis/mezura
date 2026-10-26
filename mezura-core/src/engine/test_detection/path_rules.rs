@@ -869,7 +869,7 @@ mod tests {
         assert!(BuildFilesSeen::is_a_build_file(b"Cargo.toml"));
         assert!(!BuildFilesSeen::is_a_build_file(b"Cargo.lock"));
 
-        let names = [TestFileName::of("*_test.go").unwrap()];
+        let names = [TestFileName::parse("*_test.go").unwrap()];
         assert_eq!(TestsByPath::WholeFile, Tests.judge_file("main.go", &names));
         assert_eq!(TestsByPath::WholeFile, Ordinary.judge_file("parser_test.go", &names));
         assert_eq!(TestsByPath::WholeFile, JvmSources.judge_file("parser_test.go", &names));

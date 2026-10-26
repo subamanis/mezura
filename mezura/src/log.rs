@@ -158,7 +158,7 @@ fn format_tests(tests: &HashMap<String, TestCode>, config: &Configuration) -> St
     if !config.engine.detect_tests {
         return String::from("null");
     }
-    let tests = TestCode::total_of(tests);
+    let tests = TestCode::calculate_total_of(tests);
     format!("{{\"files\":{},\"whole_files\":{},\"bytes\":{},\"lines\":{},\"classes\":{}}}",
             tests.stats.files, tests.whole_files, tests.stats.bytes, tests.stats.lines, format_classes(&tests.stats.classes))
 }

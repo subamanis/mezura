@@ -33,27 +33,9 @@ pub enum Code {
     /// A nesting block comment whose opening and closing symbols are the same text, which cannot
     /// be told apart, so the pair never fires and its comments are counted as code.
     CommentPairNeverCloses,
-    /// A language file could not be read or does not parse, so that whole language is missing.
-    LanguageFileUnreadable,
-    /// A line of the file that settles contested extensions does not parse and was skipped.
-    ConflictLineSkipped,
-    /// A configuration file holds a value that could not be used.
-    ConfigValueIgnored,
-    /// A configuration file holds a section this version does not know.
-    ConfigSectionUnknown,
-    /// A configuration file declares the same section more than once.
-    ConfigSectionRepeated,
-    /// A command was given that this run has no use for.
-    CommandIgnored,
-    /// A style line does not parse and was skipped, the rest of its file applying.
-    ConfigStyleInvalid,
-    /// The theme that was asked for is not installed, so the default was used.
-    ThemeUnavailable,
     /// A pattern of the exclusions or of the test code changed nothing. It names nothing on disk,
     /// a place outside every target, or a name no file or directory of the scan matched.
-    PatternMatchedNothing,
-    /// A test preset of the user's own carries the name of a shipped one, so it is never read.
-    PresetFileShadowed
+    PatternMatchedNothing
 }
 
 impl Code {
@@ -71,16 +53,7 @@ impl Code {
             Self::LanguageClaimsNothing => "language-claims-nothing",
             Self::LanguageLostEveryClaim => "language-lost-every-claim",
             Self::CommentPairNeverCloses => "comment-pair-never-closes",
-            Self::LanguageFileUnreadable => "language-file-unreadable",
-            Self::ConflictLineSkipped => "conflict-line-skipped",
-            Self::ConfigValueIgnored => "config-value-ignored",
-            Self::ConfigSectionUnknown => "config-section-unknown",
-            Self::ConfigSectionRepeated => "config-section-repeated",
-            Self::CommandIgnored => "command-ignored",
-            Self::ConfigStyleInvalid => "config-style-invalid",
-            Self::ThemeUnavailable => "theme-unavailable",
-            Self::PatternMatchedNothing => "pattern-matched-nothing",
-            Self::PresetFileShadowed => "preset-file-shadowed"
+            Self::PatternMatchedNothing => "pattern-matched-nothing"
         }
     }
 
@@ -90,15 +63,10 @@ impl Code {
     pub fn affects(self) -> Affects {
         match self {
             Self::LanguageTiebreak | Self::DuplicateLanguage | Self::LanguageWithoutName
-            | Self::LanguageFileUnreadable | Self::UnknownSectionLanguage
-            | Self::CommentPairNeverCloses => Affects::Counts,
+            | Self::UnknownSectionLanguage | Self::CommentPairNeverCloses => Affects::Counts,
             Self::UnknownForcedLanguage | Self::UnknownLanguage | Self::UnknownExcludedLanguage
-            | Self::UnknownModuleScope
-            | Self::LanguageClaimsNothing | Self::LanguageLostEveryClaim
-            | Self::ConflictLineSkipped | Self::ConfigValueIgnored
-            | Self::ConfigSectionUnknown | Self::ConfigSectionRepeated
-            | Self::CommandIgnored | Self::ConfigStyleInvalid
-            | Self::ThemeUnavailable | Self::PatternMatchedNothing | Self::PresetFileShadowed => Affects::Settings
+            | Self::UnknownModuleScope | Self::LanguageClaimsNothing | Self::LanguageLostEveryClaim
+            | Self::PatternMatchedNothing => Affects::Settings
         }
     }
 }

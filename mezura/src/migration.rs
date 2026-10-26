@@ -701,7 +701,7 @@ fn get_shipped_files() -> Vec<(String, &'static [u8])> {
 // the replacing honest: the only differences that survive it are the ones that change a count.
 fn means_the_same(on_disk: &[u8], shipped: &[u8]) -> bool {
     let (theirs, ours) = (String::from_utf8_lossy(on_disk), String::from_utf8_lossy(shipped));
-    match (mezura_core::language_file::parse_language(&theirs), mezura_core::language_file::parse_language(&ours)) {
+    match (mezura_core::language_file::parse_language(&theirs).ok(), mezura_core::language_file::parse_language(&ours).ok()) {
         (Some(theirs), Some(ours)) => theirs == ours,
         // Ours always parses, so this is a file edited into something that no longer does, and
         // replacing it is a repair

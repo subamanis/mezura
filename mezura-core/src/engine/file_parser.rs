@@ -656,6 +656,9 @@ pub(crate) struct ParseBuffers {
 // and REMOVE is a command that has to count as one. Only a symbol whose own ends are word characters
 // asks the question at all, so '//' and '#' pay nothing for it.
 fn stands_as_its_own_word(line: &[u8], start: usize, width: usize) -> bool {
+    if width == 0 {
+        return false;
+    }
     let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
     let glued_before = is_word(line[start]) && start > 0 && is_word(line[start - 1]);
     let glued_after = is_word(line[start + width - 1])
@@ -2841,11 +2844,11 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
             let before = if *at > from { bytes.get(*at - 1) } else { None };
             let after = if at + alias_len < to { bytes.get(at + alias_len) } else { None };
             if is_acceptable_before(before) && is_acceptable_after(after) {
-                file_stats.keyword_occurences[*keyword_index] += 1;
+                file_stats.keyword_occurrences[*keyword_index] += 1;
                 if let Some((ranges, test_stats)) = &mut tests {
                     while range < ranges.len() && (ranges[range].1 as usize) <= *at { range += 1; }
                     if range < ranges.len() && (ranges[range].0 as usize) <= *at {
-                        test_stats.keyword_occurences[*keyword_index] += 1;
+                        test_stats.keyword_occurrences[*keyword_index] += 1;
                     }
                 }
             }
@@ -3245,7 +3248,7 @@ mod tests {
                 keywords: HashMap<String, usize>, config: &EngineConfig, buf: &mut Vec<u8>| {
             let file_stats = parse_file_whole(&sample_file(file), lang, buf, config).unwrap();
             assert_eq!(counts, content_counts(&file_stats), "{file} as {lang}");
-            assert_eq!(keywords, content_info_of(file_stats, lang).keyword_occurences, "{file} as {lang}");
+            assert_eq!(keywords, content_info_of(file_stats, lang).keyword_occurrences, "{file} as {lang}");
             buf.clear();
         };
 
@@ -3377,7 +3380,7 @@ mod tests {
         assert!(info.has_code);
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
         count_keywords(line, &spans, &matcher, &mut file_stats, &mut Vec::new(), None);
-        assert_eq!(0, file_stats.keyword_occurences[0]);
+        assert_eq!(0, file_stats.keyword_occurrences[0]);
 
         // and the same word, whole, still counts
         let line = "struct a;";
@@ -3388,7 +3391,7 @@ mod tests {
         assert!(info.has_code);
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
         count_keywords(line, &spans, &matcher, &mut file_stats, &mut Vec::new(), None);
-        assert_eq!(1, file_stats.keyword_occurences[0]);
+        assert_eq!(1, file_stats.keyword_occurrences[0]);
     }
 
     #[test]
@@ -3469,7 +3472,7 @@ mod tests {
         FileStats {
             lines: 0,
             classes: LineClasses::default(),
-            keyword_occurences : get_keyword_map(class_occurances, interface_occurances)
+            keyword_occurrences : get_keyword_map(class_occurances, interface_occurances)
         }
     }
 
@@ -3558,6 +3561,17 @@ mod tests {
 
         // And the same line closes the string as soon as one unescaped occurrence is there
         assert_eq!(vec![3], str_delimiters("\"\\''", &PYTHON, open_single).0);
+    }
+
+    #[test]
+    fn an_empty_symbol_is_dropped_and_never_matches() {
+        let built = Language::new("empty", ["e"], StringRules::escaping_nothing(), [""], &[("<#", "")], []);
+        assert!(built.comment_symbols.is_empty() && built.multiline_comments.is_empty(), "{built:?}");
+        assert_eq!((2, 2, 0), content_counts(&parse_lines_whole("a <# b\nc\n", &built)));
+
+        let mut pushed = Language::new("pushed", ["p"], StringRules::escaping_nothing(), ["#"], &[], []);
+        pushed.comment_symbols.push(String::new());
+        assert_eq!((2, 1, 1), content_counts(&parse_lines_whole("a # b\n# c\n", &pushed)));
     }
 
     // Batch is the one shipped language that opens a comment with letters, and a language whose
@@ -3726,7 +3740,7 @@ mod tests {
     // the run of '=' is counted at the opener and only an end with the same count closes.
     static LUA_LEVELED : LazyLock<Language> = LazyLock::new(|| Language::new(
             "lua-leveled", ["lua"], StringRules::escaping_with(b'\\').with_symbols(["\"", "'"]), ["--"], &[], [])
-            .with_leveled_comments(&[crate::LeveledPair::of("--[=*[", "]=*]").unwrap()]));
+            .with_leveled_comments(&[crate::LeveledPair::parse("--[=*[", "]=*]").unwrap()]));
 
     #[test]
     fn a_leveled_pair_closes_only_at_an_end_carrying_the_same_count() {
@@ -4135,14 +4149,14 @@ mod tests {
             "rust-leveled", ["rs"], StringRules::escaping_with(b'\\').with_char_literals(["'"])
                     .with_multiline_strings(["\""])
                     .with_leveled_pairs(&["r#*\"", "br#*\"", "cr#*\""]
-                            .map(|opener| crate::LeveledPair::of(opener, "\"#*").unwrap())),
+                            .map(|opener| crate::LeveledPair::parse(opener, "\"#*").unwrap())),
             ["//"], &[], []).with_nesting_comments(&[("/*", "*/")]));
 
     static LUA_LONG_STRINGS : LazyLock<Language> = LazyLock::new(|| Language::new(
             "lua-long-strings", ["lua"], StringRules::escaping_with(b'\\').with_symbols(["\"", "'"])
-                    .with_leveled_pairs(&[crate::LeveledPair::of("[=*[", "]=*]").unwrap()]),
+                    .with_leveled_pairs(&[crate::LeveledPair::parse("[=*[", "]=*]").unwrap()]),
             ["--"], &[], [])
-            .with_leveled_comments(&[crate::LeveledPair::of("--[=*[", "]=*]").unwrap()]));
+            .with_leveled_comments(&[crate::LeveledPair::parse("--[=*[", "]=*]").unwrap()]));
 
     #[test]
     fn a_raw_string_closes_at_the_first_quote_followed_by_as_many_hashes_as_it_opened_with() {
@@ -4731,7 +4745,7 @@ mod tests {
         let js = &report.sections[0];
         assert_eq!("JS", js.language.as_str());
         assert_eq!((2, 1, 1), content_counts(&js.stats));
-        assert_eq!(vec![1], js.stats.keyword_occurences, "the js keywords count inside the js section");
+        assert_eq!(vec![1], js.stats.keyword_occurrences, "the js keywords count inside the js section");
         let css = &report.sections[1];
         assert_eq!("CSS", css.language.as_str());
         assert_eq!((1, 0, 1), content_counts(&css.stats));
@@ -4976,7 +4990,7 @@ mod tests {
         let count_of = |line: &str| {
             let mut file_stats = FileStats::with_keywords(std::slice::from_ref(&DEFN));
             keywords_of(line, &matcher, &mut file_stats);
-            file_stats.keyword_occurences[0]
+            file_stats.keyword_occurrences[0]
         };
 
         assert_eq!(1, count_of("(defn foo [x] x)"));
@@ -5000,7 +5014,7 @@ mod tests {
         let defns = |line: &str| {
             let mut file_stats = FileStats::with_keywords(std::slice::from_ref(&DEFN));
             keywords_of(line, &clojure, &mut file_stats);
-            file_stats.keyword_occurences[0]
+            file_stats.keyword_occurrences[0]
         };
 
         assert_eq!(0, defns("(defn(defn"));
@@ -5017,7 +5031,7 @@ mod tests {
         let braces = |line: &str| {
             let mut file_stats = FileStats::with_keywords(std::slice::from_ref(&braced));
             keywords_of(line, &matcher, &mut file_stats);
-            file_stats.keyword_occurences[0]
+            file_stats.keyword_occurrences[0]
         };
 
         assert_eq!(1, braces("{x{"));
@@ -5623,7 +5637,7 @@ mod tests {
                 ("extra".to_owned(), lines - code - comments),
             ]);
             for (index, keyword) in language.keywords.iter().enumerate() {
-                actual.insert(keyword.descriptive_name.clone(), stats.keyword_occurences[index]);
+                actual.insert(keyword.descriptive_name.clone(), stats.keyword_occurrences[index]);
             }
 
             for (key, expected_value) in &expected {
@@ -5641,7 +5655,7 @@ mod tests {
             // A keyword the fixture does not mention must be absent, otherwise a fixture could
             // quietly stop covering a keyword the moment someone forgets to declare it
             for (index, keyword) in language.keywords.iter().enumerate() {
-                let occurrences = stats.keyword_occurences[index];
+                let occurrences = stats.keyword_occurrences[index];
                 if occurrences > 0 && !expected.contains_key(&keyword.descriptive_name) {
                     failures.push(format!("{name} ({lang_name}): found {occurrences} '{}' but the header does not declare them",
                             keyword.descriptive_name));
@@ -6306,8 +6320,8 @@ mod tests {
         let (report, log) = parse(marked, TestsByPath::Nothing, &EngineConfig::default());
         let tests = report.tests.as_ref().unwrap();
         assert_eq!((6, marked.len()), (tests.stats.lines, tests.bytes));
-        assert_eq!((&report.shell.classes, &report.shell.keyword_occurences), (&tests.stats.classes, &tests.stats.keyword_occurences));
-        assert!(!tests.stats.keyword_occurences.is_empty(), "the keywords of the file were not copied to its tests");
+        assert_eq!((&report.shell.classes, &report.shell.keyword_occurrences), (&tests.stats.classes, &tests.stats.keyword_occurrences));
+        assert!(!tests.stats.keyword_occurrences.is_empty(), "the keywords of the file were not copied to its tests");
         assert!(log.records().iter().all(|record| record.in_test));
         assert_eq!(Some((marked.find("@Test\n").unwrap(), 0)), log.get_file_marker());
 
@@ -6371,7 +6385,7 @@ mod tests {
             "}\n");
         let language = LANGUAGE_MAP_REF.get("Rust").unwrap();
         let parse = |by_path, config: &EngineConfig| parse_lines_report(source, language, &shipped_lookup(), config, by_path);
-        let counted = |stats: FileStats| content_info_of(stats, "Rust").keyword_occurences;
+        let counted = |stats: FileStats| content_info_of(stats, "Rust").keyword_occurrences;
         let of = |structs, enums| hashmap!("structs".to_owned() => structs, "enums".to_owned() => enums, "traits".to_owned() => 0);
 
         let marked = parse(TestsByPath::Nothing, &EngineConfig::default());
@@ -6379,11 +6393,11 @@ mod tests {
         assert_eq!(of(4, 1), counted(marked.shell));
 
         let whole = parse(TestsByPath::WholeFile, &EngineConfig::default());
-        assert_eq!(whole.shell.keyword_occurences, whole.tests.as_ref().unwrap().stats.keyword_occurences);
+        assert_eq!(whole.shell.keyword_occurrences, whole.tests.as_ref().unwrap().stats.keyword_occurrences);
         assert_eq!(of(4, 1), counted(whole.tests.unwrap().stats));
 
         let hidden = parse(TestsByPath::Nothing, &EngineConfig { count_keywords: false, ..EngineConfig::default() });
-        assert!(hidden.tests.unwrap().stats.keyword_occurences.is_empty());
+        assert!(hidden.tests.unwrap().stats.keyword_occurrences.is_empty());
     }
 
     #[test]

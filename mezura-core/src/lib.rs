@@ -46,7 +46,7 @@ mod phase_timing;
 mod progress;
 mod result;
 
-pub mod engine;
+mod engine;
 pub mod language_file;
 pub mod languages;
 pub mod render;
@@ -58,8 +58,9 @@ pub use domain::{Bucket, CountingModel, HeredocRules, Keyword, Language, Leveled
 pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, PathPatterns, RepositoryCheckout,
         ScopedByModule, Target, Threads, format_module_scope, split_off_module_scope};
 pub use engine::identity::{Claim, ClaimKind, SettledBy};
-pub use engine::path_patterns::{PatternError, validate_exclude_patterns, validate_test_patterns};
-pub use engine::targets::TargetError;
+pub use engine::path_patterns::{PatternError, absolutize_path_pattern, is_a_path_pattern, is_on_disk, split_negation,
+        validate_exclude_patterns, validate_test_patterns};
+pub use engine::targets::{TargetError, convert_to_absolute, normalise_separators, validate_and_absolutize};
 pub use engine::test_detection::TestPreset;
 pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, MatchedPreset, TestFileRule, explain_file};
 pub use languages::{LanguageClaims, Languages};
@@ -91,8 +92,8 @@ use engine::test_detection::TEST_PRESETS;
 ///
 /// Nothing in this crate reads or writes it: a caller keeps that file wherever it keeps the rest,
 /// parses it with [`language_file::parse_conflict_rules_file`] and hands the rules to
-/// [`Languages::resolve`]. The name is here because the warning about an unsettled extension is
-/// written here and points the reader at the file.
+/// [`Languages::resolve`]. The name is here because it is the one the shipped copy from
+/// [`languages::get_shipped_conflict_rules_raw`] is written out under.
 pub const LANGUAGE_CONFLICTS_FILE_NAME : &str = "language_conflicts.txt";
 /// The name of the report row holding everything no target was given a name for.
 pub const UNNAMED_MODULE_NAME : &str = "(unnamed)";
@@ -190,8 +191,8 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let unreadable_dirs = Arc::new(Mutex::new(Vec::new()));
     let applied_presets: AppliedPresetsMut = Arc::new(Mutex::new(presets_above_the_targets));
 
-    let mut producer_handles = Vec::with_capacity(config.threads.producers());
-    let mut consumer_handles = Vec::with_capacity(config.threads.consumers());
+    let mut producer_handles = Vec::with_capacity(config.threads.get_producers());
+    let mut consumer_handles = Vec::with_capacity(config.threads.get_consumers());
     // Producers stop when the idle count reaches this, so until every spawn is done it holds a value
     // that count can never reach: against a total still growing, the first producer to go idle would
     // see itself as the last one standing.
@@ -204,7 +205,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let mut last_refusal = None;
     // Each producer keeps the subdirectories it finds and every other one can take them off it, so
     // the queues have to exist before any thread starts.
-    let workers = (0..config.threads.producers())
+    let workers = (0..config.threads.get_producers())
             .map(|_| Worker::<TraversedDir>::new_lifo()).collect::<Vec<_>>();
     let stealers = Arc::new(workers.iter().map(Worker::stealer).collect::<Vec<_>>());
     for (i, worker) in workers.into_iter().enumerate() {
@@ -227,7 +228,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let consumer_exits = Arc::new((AtomicU64::new(u64::MAX), AtomicU64::new(0)));
     // Decided by the counting and not by the walk, so they are read after the joins below
     let skipped_files: Arc<Mutex<SkippedFiles>> = Arc::new(Mutex::new(SkippedFiles::default()));
-    for i in 0..config.threads.consumers() {
+    for i in 0..config.threads.get_consumers() {
         match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
                 stats_per_module.clone(), nested_per_module.clone(), tests_per_module.clone(),
                 files_per_module.clone(), module_rows.clone(),
@@ -292,7 +293,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     if *phase_timing::ENABLED {
         eprintln!("[phase] producers alive: {} ms | drain after producers: {} ms | queue size at producer exit: {}",
             producers_done_millis, parsing_duration_millis - producers_done_millis, queued_at_producer_exit);
-        eprintln!("{}", phase_timing::report(threads_used.consumers(), parsing_duration_millis));
+        eprintln!("{}", phase_timing::report(threads_used.get_consumers(), parsing_duration_millis));
         if let Some(spread) = phase_timing::format_consumer_exit_spread(
                 consumer_exits.0.load(Ordering::Relaxed), consumer_exits.1.load(Ordering::Relaxed)) {
             eprintln!("{spread}");
@@ -351,7 +352,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     // every language the run selected, including the ones no file was written in. The figures are
     // the same either way, since an empty language adds nothing.
     remove_languages_with_0_files(&mut per_language);
-    let total = Stats::total_of(&per_language);
+    let total = Stats::calculate_total_of(&per_language);
 
     let nested_languages = merge_nested_over_modules(nested_by_module);
     let tests = merge_over_modules(tests_by_module, TestCode::add);
@@ -363,7 +364,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
         // would read as a mistake in the report.
         ModuleResult {
             name: modules.name_of(id as ModuleId).map(str::to_owned),
-            total: Stats::total_of(&of_this_module),
+            total: Stats::calculate_total_of(&of_this_module),
             per_language: of_this_module,
             nested_languages: std::mem::take(&mut nested_by_module[id]),
             tests: std::mem::take(&mut tests_by_module[id]),
@@ -841,7 +842,7 @@ mod tests {
             "b".to_owned() => Stats::new(10, 50_000, 1000, counted(800, 50), hashmap!["classes".to_owned() => 2]),
             "c".to_owned() => Stats::new(10, 50_000, 1000, counted(800, 50), hashmap!["structs".to_owned() => 5])
         ];
-        let total = Stats::total_of(&languages);
+        let total = Stats::calculate_total_of(&languages);
 
         assert_eq!(40, total.files);
         assert_eq!(200_000, total.bytes);
@@ -850,11 +851,11 @@ mod tests {
         assert_eq!(200, total.calculate_comment_lines(CountingModel::Content));
         assert_eq!(800, total.calculate_extra_lines(CountingModel::Content));
         // 'classes' is declared by two of the three, so its total is 7 + 2
-        assert_eq!(Some(&9), total.keyword_occurences.get("classes"));
-        assert_eq!(Some(&5), total.keyword_occurences.get("structs"));
+        assert_eq!(Some(&9), total.keyword_occurrences.get("classes"));
+        assert_eq!(Some(&5), total.keyword_occurrences.get("structs"));
 
-        // nothing to add up is a total of nothing; 'average_size' over no files is asserted in 'domain'
-        assert_eq!(0, Stats::total_of(&HashMap::new()).files);
+        // nothing to add up is a total of nothing
+        assert_eq!(0, Stats::calculate_total_of(&HashMap::new()).files);
     }
 }
 
