@@ -635,8 +635,8 @@ pub(crate) struct ScanBuffers {
     com_starts: Vec<(usize, u8, u32)>,
     com_ends: Vec<(usize, u8, u32)>,
     // Past each line scanned before, so what those lines left is below every position of this one
-    // and the slots are never cleared: 'consumed_from' is where this line begins, 'consumed_to'
-    // where the next one will
+    // and the slots carry over from line to line: 'consumed_from' is where this line begins,
+    // 'consumed_to' where the next one will
     consumed: Vec<usize>,
     consumed_from: usize,
     consumed_to: usize,
@@ -759,6 +759,7 @@ fn scan_line(line: &str, candidates: Candidates, language: &Language, open_str_s
             take_symbols_at(at, line_bytes, plan, buffers, escape)
         },
         Candidates::Unsearched => {
+            // Split over two passes, a string's closer can come out before its opener, so every closer is taken
             buffers.pair_open |= plan.strings_split;
             for chunk in &plan.chunks {
                 match chunk.len {
@@ -1226,7 +1227,7 @@ impl<'a> MaskedLines<'a> {
                 }
                 self.start = self.block_at + last + 1;
                 plain &= plain - 1;
-                self.newlines &= plain | !(u64::MAX >> (63 - last));
+                self.newlines &= !(u64::MAX >> (63 - last));
             }
             if self.candidates != 0 || self.block_at + BLOCK_BYTES >= bytes.len() { return }
             // The rest of the block is the start of a line that ends further on
@@ -1238,7 +1239,7 @@ impl<'a> MaskedLines<'a> {
         }
     }
 
-    // Out of line, since most files never carry a string from one line to the next
+    // Out of line, since few files carry a string from one line to the next
     #[inline(never)]
     fn book_string_lines(&mut self, up_to: usize, code_spans: &mut Vec<(u32, u32)>) {
         self.book_plain_lines(Inside::CrossingString, up_to, false, code_spans);
@@ -3053,12 +3054,12 @@ fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_sy
         if at < consumed_up_to {
             continue;
         }
+        let shape = shapes[symbol as usize];
         // A cancelled opener stands inside a comment, so the bytes it spans are comment text too
         if (role == ROLE_OPEN || role == ROLE_DELIMITED) && cancelled.contains(&at) {
-            consumed_up_to = at + language.calculate_string_opener_width(symbol, level);
+            consumed_up_to = at + shape.opener as usize + level as usize;
             continue;
         }
-        let shape = shapes[symbol as usize];
         let (at, length, level) = match open {
             Some((open_symbol, open_level)) => {
                 if role == ROLE_OPEN || role == ROLE_DELIMITED || match shape.leveled {
@@ -3356,7 +3357,7 @@ mod tests {
     }
 
     // A file in the full loop for its tests books the lines the test walk and the declarations reader
-    // leave alone; the explaining walk books none, so the two agree line for line or the booking
+    // leave alone; the explaining walk walks every line, so the two agree line for line or the booking
     // took a line one of them reads
     #[test]
     fn lines_booked_in_the_full_loop_read_as_the_walked_ones() {
