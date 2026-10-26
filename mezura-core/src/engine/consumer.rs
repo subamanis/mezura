@@ -5,7 +5,7 @@ use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crossbeam_deque::{Injector, Steal, Worker};
+use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 
 use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, FileEntry, FilesPerModuleMut,
         Language, ModuleRowsMut, NestedLanguageMapMut, ParsableFile, ScanProgress, ScanSkip, SkippedFiles, Stats,
@@ -17,7 +17,8 @@ use crate::languages::NestedLanguageDefinitions;
 
 const INITIAL_FILE_BUFFER_BYTES : usize = 150;
 
-pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
+pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, worker: Worker<ParsableFile>,
+        peers: Arc<Vec<Stealer<ParsableFile>>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
         stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, tests_per_module: TestCodeMapMut,
         files_per_module: FilesPerModuleMut, module_rows: ModuleRowsMut,
         language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
@@ -27,7 +28,7 @@ pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<Parsab
         progress: Arc<ScanProgress>) -> std::io::Result<JoinHandle<()>>
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
-        start_parsing_files(files_injector, faulty_files, finish_condition, stats_per_module,
+        start_parsing_files(id, files_injector, worker, &peers, faulty_files, finish_condition, stats_per_module,
                 nested_per_module, tests_per_module, files_per_module, module_rows, language_map, nested_definitions,
                 language_lookups, config, &skipped_files, &progress);
         // The last thing this thread does, and the only honest answer to how long the counting took:
@@ -43,7 +44,8 @@ pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<Parsab
     })
 }
 
-fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
+fn start_parsing_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, worker: Worker<ParsableFile>,
+    peers: &[Stealer<ParsableFile>], faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
     stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, tests_per_module: TestCodeMapMut,
     files_per_module: FilesPerModuleMut, module_rows: ModuleRowsMut,
     language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
@@ -70,12 +72,16 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
     // A batch and not one file at a time. With several of these threads per core they all reach for the
     // same queue head between files, and a contended steal comes back as Retry, which the arm below
     // answers by yielding: a whole scheduling round per file. A batch is half of what is left, so
-    // the last files still spread out rather than queueing behind one thread.
-    let worker = Worker::new_fifo();
+    // the last files still spread out rather than queueing behind one thread. Once the walk is over, a
+    // batch of large files in a row, the way one directory queues them, is taken back off its thread
+    // by the idle ones.
     loop {
         let next = match worker.pop() {
             Some(parsable_file) => Steal::Success(parsable_file),
-            None => files_injector.steal_batch_and_pop(&worker)
+            None => match files_injector.steal_batch_and_pop(&worker) {
+                Steal::Empty if finish_condition.load(Ordering::Relaxed) => steal_from_peers(id, peers, &worker),
+                taken => taken
+            }
         };
         match next {
             Steal::Success(parsable_file) => {
@@ -261,4 +267,17 @@ fn start_parsing_files(files_injector: Arc<Injector<ParsableFile>>, faulty_files
     if !local_rows.is_empty() {
         module_rows.lock().unwrap().append(&mut local_rows);
     }
+}
+
+fn steal_from_peers(id: usize, peers: &[Stealer<ParsableFile>], worker: &Worker<ParsableFile>) -> Steal<ParsableFile> {
+    let mut answer = Steal::Empty;
+    for (at, peer) in peers.iter().enumerate() {
+        if at == id { continue }
+        match peer.steal_batch_and_pop(worker) {
+            Steal::Success(parsable_file) => return Steal::Success(parsable_file),
+            Steal::Retry => answer = Steal::Retry,
+            Steal::Empty => ()
+        }
+    }
+    answer
 }

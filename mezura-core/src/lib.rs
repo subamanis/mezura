@@ -228,8 +228,12 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let consumer_exits = Arc::new((AtomicU64::new(u64::MAX), AtomicU64::new(0)));
     // Decided by the counting and not by the walk, so they are read after the joins below
     let skipped_files: Arc<Mutex<SkippedFiles>> = Arc::new(Mutex::new(SkippedFiles::default()));
-    for i in 0..config.threads.get_consumers() {
-        match engine::consumer::start_parser_thread(i, files_injector.clone(), faulty_files_ref.clone(), finish_condition_ref.clone(),
+    let consumer_workers = (0..config.threads.get_consumers())
+            .map(|_| Worker::<ParsableFile>::new_fifo()).collect::<Vec<_>>();
+    let consumer_peers = Arc::new(consumer_workers.iter().map(Worker::stealer).collect::<Vec<_>>());
+    for (i, worker) in consumer_workers.into_iter().enumerate() {
+        match engine::consumer::start_parser_thread(i, files_injector.clone(), worker, consumer_peers.clone(),
+                faulty_files_ref.clone(), finish_condition_ref.clone(),
                 stats_per_module.clone(), nested_per_module.clone(), tests_per_module.clone(),
                 files_per_module.clone(), module_rows.clone(),
                 language_map_ref.clone(), nested_definitions.clone(), language_lookups.clone(), config.clone(),

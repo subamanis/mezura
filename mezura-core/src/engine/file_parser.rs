@@ -634,7 +634,12 @@ pub(crate) struct ScanBuffers {
     // level is as wide as the line allows, since neither Lua nor CMake bounds the run that sets it
     com_starts: Vec<(usize, u8, u32)>,
     com_ends: Vec<(usize, u8, u32)>,
+    // Past each line scanned before, so what those lines left is below every position of this one
+    // and the slots are never cleared: 'consumed_from' is where this line begins, 'consumed_to'
+    // where the next one will
     consumed: Vec<usize>,
+    consumed_from: usize,
+    consumed_to: usize,
     // Offsets into the line, where 'ParseBuffers::code_spans' holds offsets into the whole file
     code_ranges: Vec<(usize, usize)>,
     // How far into the raw line the trimmed line begins, written for every line that holds anything
@@ -647,7 +652,7 @@ pub(crate) struct ScanBuffers {
 }
 
 impl ScanBuffers {
-    fn reset(&mut self, slots: usize) {
+    fn reset(&mut self, slots: usize, line_len: usize) {
         self.raw_strings.clear();
         self.strings.clear();
         self.string_symbols.clear();
@@ -655,8 +660,9 @@ impl ScanBuffers {
         self.comments.clear();
         self.com_starts.clear();
         self.com_ends.clear();
-        self.consumed.clear();
-        self.consumed.resize(slots, 0);
+        self.consumed_from = self.consumed_to;
+        self.consumed_to += line_len + 1;
+        if self.consumed.len() < slots { self.consumed.resize(slots, 0) }
         self.code_ranges.clear();
     }
 }
@@ -743,7 +749,7 @@ fn scan_line(line: &str, candidates: Candidates, language: &Language, open_str_s
     let plan = get_or_build_plan_of(language);
     let line_bytes = line.as_bytes();
     let escape = language.strings.get_escape();
-    buffers.reset(plan.slots.len());
+    buffers.reset(plan.slots.len(), line_bytes.len());
     buffers.pair_open = open_str_symbol.is_some();
 
     match candidates {
@@ -796,6 +802,7 @@ fn scan_line(line: &str, candidates: Candidates, language: &Language, open_str_s
 fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut ScanBuffers,
     escape: Option<u8>)
 {
+    let consumed_from = buffers.consumed_from;
     let mut cursor = plan.first[line_bytes[at] as usize];
     while cursor != NO_SLOT {
         let index = cursor as usize;
@@ -811,7 +818,7 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
         // A counted slot is exempt: every level shares the one slot, so ']]' and ']=]' are two
         // different symbols rather than one overlapping itself, and the shorter would hide the
         // longer that begins inside it.
-        if slot.filler == 0 && start < buffers.consumed[index] { continue }
+        if slot.filler == 0 && consumed_from + start < buffers.consumed[index] { continue }
         let matched = match (slot.anchor, slot.len) {
             (0, 1) if slot.filler == 0 => true,
             (0, 2) if slot.filler == 0 => line_bytes.get(at + 1) == Some(&slot.second),
@@ -878,16 +885,16 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
                 cursor = candidate + 1;
             };
             let Some(closed_at) = closed_at else {
-                buffers.consumed[index] = start + width;
+                buffers.consumed[index] = consumed_from + start + width;
                 continue;
             };
             buffers.raw_strings.push((start, slot.symbol, ROLE_OPEN, 0));
             buffers.raw_strings.push((closed_at, slot.symbol, ROLE_CLOSE, 0));
-            buffers.consumed[index] = closed_at + width;
+            buffers.consumed[index] = consumed_from + closed_at + width;
             continue;
         }
 
-        buffers.consumed[index] = start + width;
+        buffers.consumed[index] = consumed_from + start + width;
         match slot.kind {
             STRINGS => buffers.raw_strings.push((start, slot.symbol, role, level)),
             COMMENTS => if stands_as_its_own_word(line_bytes, start, width) {
