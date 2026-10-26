@@ -1202,11 +1202,12 @@ impl<'a> MaskedLines<'a> {
 
     // The lines from the next one up to the first that holds a searched byte, booked off the masks
     // without being handed out. A line running into the next block is followed there, and the run
-    // stops at the start of a line holding a searched byte, or of the last line of the file, which
-    // the iterator hands out as it would have. Inside an open block comment or a string crossing
-    // lines the same lines stay inside it, since every closer begins at a searched byte.
+    // stops at the start of a line holding a searched byte, or ending past 'up_to', or of the last
+    // line of the file, which the iterator hands out as it would have. Inside an open block comment
+    // or a string crossing lines the same lines stay inside it, since every closer begins at a
+    // searched byte.
     #[inline(always)]
-    fn book_plain_lines(&mut self, inside: Inside, collecting_spans: bool, code_spans: &mut Vec<(u32, u32)>) {
+    fn book_plain_lines(&mut self, inside: Inside, up_to: usize, collecting_spans: bool, code_spans: &mut Vec<(u32, u32)>) {
         let bytes = self.contents.as_bytes();
         if self.start.wrapping_sub(self.block_at) >= BLOCK_BYTES { return }
         loop {
@@ -1214,6 +1215,7 @@ impl<'a> MaskedLines<'a> {
             let mut plain = self.newlines & before_candidate;
             while plain != 0 {
                 let last = plain.trailing_zeros() as usize;
+                if self.block_at + last > up_to { return }
                 let line = &bytes[self.start..self.block_at + last];
                 let from_start = trim_indentation(line);
                 let has_words = has_word_byte(from_start);
@@ -1238,11 +1240,11 @@ impl<'a> MaskedLines<'a> {
 
     // Out of line, since most files never carry a string from one line to the next
     #[inline(never)]
-    fn book_string_lines(&mut self, code_spans: &mut Vec<(u32, u32)>) {
-        self.book_plain_lines(Inside::CrossingString, false, code_spans);
+    fn book_string_lines(&mut self, up_to: usize, code_spans: &mut Vec<(u32, u32)>) {
+        self.book_plain_lines(Inside::CrossingString, up_to, false, code_spans);
     }
 
-    fn add_booked_lines(&self, file_stats: &mut FileStats) {
+    fn move_booked_lines_to(&mut self, file_stats: &mut FileStats) {
         let [[blank, punctuation, words], [blank_in_comment, punctuation_in_comment, words_in_comment],
                 [blank_in_string, punctuation_in_string, words_in_string]] = self.booked;
         file_stats.lines += self.booked.iter().flatten().sum::<usize>();
@@ -1255,6 +1257,7 @@ impl<'a> MaskedLines<'a> {
         classes.words_in_comment += words_in_comment;
         classes.blank_in_string += blank_in_string;
         classes.string_content += punctuation_in_string + words_in_string;
+        self.booked = [[0; 3]; 3];
     }
 
     fn positions(&self) -> &[u32] {
@@ -1616,15 +1619,20 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
     let mut openers = if FULL { plan.heredoc.as_ref().map(|(finder, _, _)| finder.find_iter(contents.as_bytes())) } else { None };
     let mut next_opener = openers.as_mut().and_then(Iterator::next);
     let declares_line_bound_comments = FULL && language.declares_line_bound_comments();
+    // A file in the full loop for its tests or declarations alone books the lines up to where those
+    // two look next, the way the lean loop books all of them
+    let books_lines = !FULL || (!EXPLAIN && language.heredoc.is_none() && !language.declares_line_bound_comments()
+            && language.nested_languages.is_empty());
     let mut lines = MaskedLines::of(contents, &plan.finder);
     let mut handed_back = None;
     loop {
         // A string that ends with its line and a line comment carried by a continuation are left to the walk
-        if !FULL && !shell.continued_comment {
+        if books_lines && !shell.continued_comment {
+            let up_to = if FULL { quiet_until } else { usize::MAX };
             match (shell.open_comment, shell.open_str_symbol) {
                 (_, None) => lines.book_plain_lines(match shell.open_comment { None => Inside::Code, Some(_) => Inside::BlockComment },
-                        collecting_spans, code_spans),
-                (None, Some((symbol, _))) if language.string_crosses_lines(symbol) => lines.book_string_lines(code_spans),
+                        up_to, collecting_spans, code_spans),
+                (None, Some((symbol, _))) if language.string_crosses_lines(symbol) => lines.book_string_lines(up_to, code_spans),
                 _ => ()
             }
         }
@@ -1659,6 +1667,8 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
         };
         let whole_line = [(line_start, usize::MAX)];
         let mut test_spans: &[(usize, usize)] = &[];
+        // A test region is counted off the shell's count before and after it
+        if ranges_wanted { lines.move_booked_lines_to(&mut shell_stats); }
         if ranges_wanted && let Some(walk) = &mut test_walk {
             if line_end > walk.quiet_until() {
                 let bytes = end_of_line(contents, line_start, raw_line) - line_start;
@@ -1750,7 +1760,7 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
         }
     }
 
-    if !FULL { lines.add_booked_lines(&mut shell_stats); }
+    lines.move_booked_lines_to(&mut shell_stats);
     if let Some(quiet) = quiet_lines {
         let claimed = tests.book_quiet_lines(&quiet, &shell_stats, contents.len());
         if collecting_spans { extend_test_ranges(test_ranges, quiet.from, contents.len()); }
@@ -3341,6 +3351,38 @@ mod tests {
                 let booked = parse_lines_whole(&contents, language);
                 assert_eq!((walked.shell.lines, walked.shell.classes), (booked.lines, booked.classes),
                         "{contents:?} in {}", language.name);
+            }
+        }
+    }
+
+    // A file in the full loop for its tests books the lines the test walk and the declarations reader
+    // leave alone; the explaining walk books none, so the two agree line for line or the booking
+    // took a line one of them reads
+    #[test]
+    fn lines_booked_in_the_full_loop_read_as_the_walked_ones() {
+        let shapes: [(&str, &[&str]); 3] = [
+            ("Rust", &["#[cfg(test)]", "mod tests {", "#[test]", "fn a() {", "}", "let x = 1;", "use super::*;", "mod a;",
+                    "#[cfg(any(test, x))]", "// c", "/* c", "*/", "\"s\"", "x", "    ", "\t"]),
+            ("Java", &["@Test", "import org.junit.Test;", "class A {", "void t() {", "}", "int x = 1;", "// c", "/*", "*/",
+                    "\"s\"", "x", "    "]),
+            ("C#", &["[Test]", "[Fact]", "using Xunit;", "class A {", "public void T() {", "}", "var x = 1;", "// c", "/*",
+                    "*/", "\"s\"", "x", "    "])];
+        let config = EngineConfig { count_keywords: true, ..EngineConfig::default() };
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+        for (name, pieces) in shapes {
+            let language = &LANGUAGE_MAP_REF[name];
+            for _ in 0..700 {
+                let mut contents = String::new();
+                for _ in 0..next() % 60 {
+                    for _ in 0..next() % 4 { contents.push_str(pieces[(next() % pieces.len() as u64) as usize]); }
+                    contents.push('\n');
+                }
+                let (walked, _) = parse_lines_explained(&contents, language, &empty_lookup(), &config, TestsByPath::Nothing);
+                let booked = parse_lines_report(&contents, language, &empty_lookup(), &config, TestsByPath::Nothing);
+                let counts_of = |report: &FileReport| (report.shell.lines, report.shell.classes.clone(),
+                        report.tests.as_ref().map(|tests| (tests.stats.lines, tests.stats.classes.clone(), tests.bytes)));
+                assert_eq!(counts_of(&walked), counts_of(&booked), "{name}: {contents:?}");
             }
         }
     }
