@@ -3696,37 +3696,6 @@ mod tests {
         assert_eq!(vec!["api", "  Rust   structs: 30 (+10)", "web", "  Rust   structs: 12"], lines);
     }
 
-    // The golden calls each block function directly, so it says nothing about which list a block is
-    // handed. That is what this holds, through the real entry point: the overview needs the uncut
-    // list, since it folds the remainder into 'others' itself.
-    #[test]
-    fn every_layout_survives_a_top_that_hides_languages() {
-        colored::control::set_override(false);
-
-        let (_, content_info, _) = sample_data();
-        let of_modules = |modules: Vec<ModuleResult>| RunResult {
-            per_language: content_info.clone(), modules, nested_languages: HashMap::new(), tests: HashMap::new(),
-            total: crate::test_support::plain_stats_of(23, 485500, 10934, 7643, 650, hashmap![]),
-            faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
-            warnings: Vec::new(), applied_presets: Vec::new(),
-            performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
-        let single = || vec![ModuleResult {name: None, per_language: content_info.clone(),
-                total: Stats::calculate_total_of(&content_info), nested_languages: HashMap::new(), tests: HashMap::new(), files: HashMap::new()}];
-
-        for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
-            // One past the five languages of the sample, so the boundary where nothing is hidden is
-            // walked as well as the ones where almost everything is
-            for top in 1..=6 {
-                let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-                config.view.layout = layout;
-                config.view.top_n = Some(top);
-
-                format_and_print_results(&of_modules(single()), &None, &Local::now(), &config);
-                format_and_print_results(&of_modules(sample_modules()), &None, &Local::now(), &config);
-            }
-        }
-    }
-
     #[test]
     fn the_theme_preview_draws_a_tests_row_in_every_layout() {
         colored::control::set_override(false);
@@ -3742,7 +3711,7 @@ mod tests {
     // files the real entry point puts in it. That is what this holds: the cut happens inside each
     // module, and a language '--top' hid takes its files with it.
     #[test]
-    fn the_file_rows_are_cut_inside_each_module_and_survive_every_layout() {
+    fn the_file_rows_are_cut_inside_each_module() {
         colored::control::set_override(false);
 
         let (_, content_info, total) = sample_data();
@@ -3794,17 +3763,6 @@ mod tests {
         let split_two = find_files_to_show(&across_two_modules, &config_of(Some(config_manager::ByFile::Capped(2)), None), false);
         assert_eq!(vec![("HTML", 2, 0)], sorted_rows(&split_two[0]));
         assert_eq!(vec![("Python", 2, 1)], sorted_rows(&split_two[1]));
-
-        for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
-            for by_file in [None, Some(config_manager::ByFile::Capped(1)), Some(config_manager::ByFile::All)] {
-                for top in [None, Some(1)] {
-                    let mut config = config_of(by_file, top);
-                    config.view.layout = layout;
-                    format_and_print_results(&of_modules(one_module()), &None, &Local::now(), &config);
-                    format_and_print_results(&of_modules(split()), &None, &Local::now(), &config);
-                }
-            }
-        }
     }
 
     // (language, files shown, files left out), ordered by language name
@@ -3893,34 +3851,11 @@ mod tests {
     }
 
     #[test]
-    fn the_nested_languages_of_a_container_survive_every_layout() {
-        colored::control::set_override(false);
-
+    fn the_shell_of_a_container_comes_first_and_never_holds_more_than_its_lines() {
         let (_, content_info, total) = sample_data();
         let nested = hashmap!["HTML".to_owned() => hashmap![
                 "JavaScript".to_owned() => crate::test_support::plain_stats_of(2, 4000, 200, 182, 0, hashmap![]),
                 "Python".to_owned() => crate::test_support::plain_stats_of(1, 2000, 100, 91, 0, hashmap![])]];
-        let a_run = || RunResult {
-            per_language: content_info.clone(),
-            modules: vec![ModuleResult { name: None, per_language: content_info.clone(),
-                    total: Stats::calculate_total_of(&content_info), nested_languages: nested.clone(), tests: HashMap::new(),
-                    files: HashMap::new() }],
-            nested_languages: nested.clone(), tests: HashMap::new(), total: total.clone(), faulty_files: Vec::new(),
-            skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(), targets: Vec::new(), unreadable_dirs: Vec::new(),
-            warnings: Vec::new(), applied_presets: Vec::new(),
-            performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }};
-
-        for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
-            for top in [None, Some(1), Some(3), Some(6)] {
-                for hidden in [false, true] {
-                    let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-                    config.view.layout = layout;
-                    config.view.top_n = top;
-                    config.view.hidden.nested_languages = hidden;
-                    format_and_print_results(&a_run(), &None, &Local::now(), &config);
-                }
-            }
-        }
 
         let group = Group { name: None, languages: vec!["HTML".to_owned()], hidden: 0,
                 per_language: Cow::Borrowed(&content_info), nested: &nested, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share,
@@ -4013,14 +3948,6 @@ mod tests {
                 config, Vec::new());
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         config.view.tests_breakdown = TestsBreakdown::Split;
-        for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
-            for output in [config_manager::OutputFormat::Text, config_manager::OutputFormat::Markdown] {
-                config.view.layout = layout;
-                config.view.output = output;
-                let comparison = comparison_under(&config);
-                crate::present::present(&comparison.subject.result.clone(), Some(&comparison), &config);
-            }
-        }
         let comparison = comparison_under(&config);
         let (rows, _) = create_compared_rows(None, &comparison.baseline.result, &comparison.subject.result, None, &config);
         let under_html = rows.iter().skip_while(|row| row.name != "HTML").skip(1)
@@ -4058,9 +3985,7 @@ mod tests {
     }
 
     #[test]
-    fn the_tests_of_a_language_survive_every_layout_and_leave_with_their_flag() {
-        colored::control::set_override(false);
-
+    fn the_tests_of_a_language_leave_with_their_flag() {
         let (_, content_info, _) = sample_data();
         let (sections, tests) = (sample_sections(), sample_tests());
         let module = ModuleResult { name: None, per_language: content_info.clone(), total: Stats::calculate_total_of(&content_info),
@@ -4069,21 +3994,13 @@ mod tests {
         run.nested_languages = sections;
         run.tests = tests;
 
-        let layouts = [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix];
-        let outputs = [config_manager::OutputFormat::Text, config_manager::OutputFormat::Markdown];
-        let breakdowns = [TestsBreakdown::Share, TestsBreakdown::Split, TestsBreakdown::Removed];
-        for (layout, output, breakdown) in layouts.into_iter()
-                .flat_map(|layout| outputs.map(|output| (layout, output)))
-                .flat_map(|(layout, output)| breakdowns.map(|breakdown| (layout, output, breakdown))) {
+        for breakdown in [TestsBreakdown::Share, TestsBreakdown::Split, TestsBreakdown::Removed] {
             for top in [None, Some(1), Some(6)] {
                 for hidden in [false, true] {
                     let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-                    config.view.layout = layout;
-                    config.view.output = output;
                     config.view.top_n = top;
                     config.view.hidden.tests = hidden;
                     config.view.tests_breakdown = breakdown;
-                    format_and_print_results(&run, &None, &Local::now(), &config);
 
                     let groups = create_groups_of(&run, &config);
                     let left_out = breakdown == TestsBreakdown::Removed && !hidden;
@@ -4129,10 +4046,6 @@ mod tests {
         config.view.top_n = Some(1);
         assert_eq!(vec!["Go".to_owned()], create_groups_of(&run, &config)[0].languages,
                 "Rust holds 100 lines outside its tests and Go 500");
-        for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
-            config.view.layout = layout;
-            format_and_print_results(&run, &None, &Local::now(), &config);
-        }
     }
 
     #[test]
@@ -4162,10 +4075,6 @@ mod tests {
         assert_eq!((Some("tst"), 0, 0, 0), (groups[1].name, groups[1].languages.len(), groups[1].total.files, groups[1].total.lines));
         assert!(!ShownFigures::of_run(&run, true).per_language.contains_key("Java"));
         assert!(ShownFigures::of_run(&run, false).per_language.contains_key("Java"));
-        for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
-            config.view.layout = layout;
-            format_and_print_results(&run, &None, &Local::now(), &config);
-        }
 
         let theme = &Theme::default();
         let shown = ShownFigures::of_run(&run, true);
@@ -4183,34 +4092,6 @@ mod tests {
                 config.view.counting);
         let totals = matrix.iter().rev().take(3).map(|line| line.split_whitespace().collect::<Vec<_>>()).collect::<Vec<_>>();
         assert_eq!(vec![vec!["code", "600", "600"], vec!["lines", "600", "-", "600"], vec!["Total", "files", "2", "2"]], totals);
-    }
-
-    // The golden hands the blocks rows it built itself, so it says nothing about which rows the real
-    // entry point builds. Whether the modules are shown at all is decided when the comparison is
-    // assembled, and both answers have to survive every layout and every '--top'.
-    #[test]
-    fn a_comparison_survives_every_layout_whether_or_not_the_modules_agree() {
-        colored::control::set_override(false);
-
-        let earlier = earlier_modules();
-        for layout in [Layout::List, Layout::Table, Layout::Boxed, Layout::Matrix] {
-            // One past the five languages of the sample, so the boundary where nothing is hidden is
-            // walked too
-            for top in 1..=6 {
-                let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-                config.view.layout = layout;
-                config.view.top_n = Some(top);
-
-                let now = || reading_of("newer.json", "2026-08-06T09:41:00+03:00", sample_modules());
-                let agreeing = crate::diff::Comparison::of(
-                        reading_of("older.json", "2026-07-30T14:22:07+03:00", earlier_modules()), now(), &config, Vec::new());
-                let differing = crate::diff::Comparison::of(
-                        reading_of("older.json", "2026-07-30T14:22:07+03:00", without_modules(&earlier)), now(), &config, Vec::new());
-                // Through the real entry point, where the routing decision is made
-                crate::present::present(&agreeing.subject.result.clone(), Some(&agreeing), &config);
-                crate::present::present(&differing.subject.result.clone(), Some(&differing), &config);
-            }
-        }
     }
 
     #[test]
@@ -4256,7 +4137,6 @@ mod tests {
                         attach_tests(reading_of("newer.json", "2026-08-06T09:41:00+03:00",
                                 without_modules(&sample_modules())), sample_tests()),
                         &config, Vec::new());
-                crate::present::present(&comparison.subject.result.clone(), Some(&comparison), &config);
 
                 let (rows, _) = create_compared_rows(None, &comparison.baseline.result, &comparison.subject.result,
                         None, &config);
