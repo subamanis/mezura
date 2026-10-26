@@ -688,6 +688,7 @@ fn find_counted_symbol_ending_at(at: usize, line_bytes: &[u8], prefix: &[u8], fi
         run_from -= 1;
     }
     let start = run_from.checked_sub(prefix.len())?;
+    if line_bytes[run_from - 1] != prefix[prefix.len() - 1] { return None }
     (line_bytes[start..run_from] == *prefix).then_some((start, (at - run_from) as u32))
 }
 
