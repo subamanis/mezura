@@ -1179,15 +1179,15 @@ struct MaskedLines<'a> {
     block_at: usize,
     newlines: u64,
     candidates: u64,
-    // The lines booked so far, in code and inside a block comment: blank, punctuation, with words
-    booked: [[usize; 3]; 2],
+    // The lines booked so far, by what they sit in: blank, punctuation, with words
+    booked: [[usize; 3]; 3],
     positions: Vec<u32>,
 }
 
 impl<'a> MaskedLines<'a> {
     fn of(contents: &'a str, finder: &'a MaskFinder) -> MaskedLines<'a> {
         let mut lines = MaskedLines { contents, finder, start: 0, block_at: 0, newlines: 0, candidates: 0,
-                booked: [[0; 3]; 2], positions: Vec::new() };
+                booked: [[0; 3]; 3], positions: Vec::new() };
         lines.read_block();
         lines
     }
@@ -1203,10 +1203,10 @@ impl<'a> MaskedLines<'a> {
     // The lines from the next one up to the first that holds a searched byte, booked off the masks
     // without being handed out. A line running into the next block is followed there, and the run
     // stops at the start of a line holding a searched byte, or of the last line of the file, which
-    // the iterator hands out as it would have. Inside an open block comment the same lines are
-    // comment, since the closer begins at a searched byte.
+    // the iterator hands out as it would have. Inside an open block comment or a string crossing
+    // lines the same lines stay inside it, since every closer begins at a searched byte.
     #[inline(always)]
-    fn book_plain_lines(&mut self, in_comment: bool, collecting_spans: bool, code_spans: &mut Vec<(u32, u32)>) {
+    fn book_plain_lines(&mut self, inside: Inside, collecting_spans: bool, code_spans: &mut Vec<(u32, u32)>) {
         let bytes = self.contents.as_bytes();
         if self.start.wrapping_sub(self.block_at) >= BLOCK_BYTES { return }
         loop {
@@ -1217,8 +1217,8 @@ impl<'a> MaskedLines<'a> {
                 let line = &bytes[self.start..self.block_at + last];
                 let from_start = trim_indentation(line);
                 let has_words = has_word_byte(from_start);
-                self.booked[in_comment as usize][!from_start.is_empty() as usize + has_words as usize] += 1;
-                if collecting_spans && has_words && !in_comment {
+                self.booked[inside as usize][!from_start.is_empty() as usize + has_words as usize] += 1;
+                if collecting_spans && has_words && matches!(inside, Inside::Code) {
                     let code_from = self.start + line.len() - from_start.len();
                     code_spans.push((code_from as u32, (code_from + from_start.trim_ascii_end().len()) as u32));
                 }
@@ -1236,9 +1236,16 @@ impl<'a> MaskedLines<'a> {
         }
     }
 
+    // Out of line, since most files never carry a string from one line to the next
+    #[inline(never)]
+    fn book_string_lines(&mut self, code_spans: &mut Vec<(u32, u32)>) {
+        self.book_plain_lines(Inside::CrossingString, false, code_spans);
+    }
+
     fn add_booked_lines(&self, file_stats: &mut FileStats) {
-        let [[blank, punctuation, words], [blank_in_comment, punctuation_in_comment, words_in_comment]] = self.booked;
-        file_stats.lines += blank + punctuation + words + blank_in_comment + punctuation_in_comment + words_in_comment;
+        let [[blank, punctuation, words], [blank_in_comment, punctuation_in_comment, words_in_comment],
+                [blank_in_string, punctuation_in_string, words_in_string]] = self.booked;
+        file_stats.lines += self.booked.iter().flatten().sum::<usize>();
         let classes = &mut file_stats.classes;
         classes.blank += blank;
         classes.punctuation_in_code += punctuation;
@@ -1246,6 +1253,8 @@ impl<'a> MaskedLines<'a> {
         classes.blank_in_comment += blank_in_comment;
         classes.punctuation_in_comment += punctuation_in_comment;
         classes.words_in_comment += words_in_comment;
+        classes.blank_in_string += blank_in_string;
+        classes.string_content += punctuation_in_string + words_in_string;
     }
 
     fn positions(&self) -> &[u32] {
@@ -1326,6 +1335,13 @@ impl WalkState {
         self.open_comment.is_none() && self.open_str_symbol.is_none() && !self.continued_comment
                 && self.line_bound.is_none()
     }
+}
+
+#[derive(Clone, Copy)]
+enum Inside {
+    Code,
+    BlockComment,
+    CrossingString,
 }
 
 // The closing line is the word behind the indent its opener allowed and alone on the line. Trailing
@@ -1603,8 +1619,14 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
     let mut lines = MaskedLines::of(contents, &plan.finder);
     let mut handed_back = None;
     loop {
-        if !FULL && shell.open_str_symbol.is_none() && !shell.continued_comment {
-            lines.book_plain_lines(shell.open_comment.is_some(), collecting_spans, code_spans);
+        // A string that ends with its line and a line comment carried by a continuation are left to the walk
+        if !FULL && !shell.continued_comment {
+            match (shell.open_comment, shell.open_str_symbol) {
+                (_, None) => lines.book_plain_lines(match shell.open_comment { None => Inside::Code, Some(_) => Inside::BlockComment },
+                        collecting_spans, code_spans),
+                (None, Some((symbol, _))) if language.string_crosses_lines(symbol) => lines.book_string_lines(code_spans),
+                _ => ()
+            }
         }
         let (line_start, raw_line, has_candidates) = match handed_back.take() {
             Some(line) => line,
@@ -3301,7 +3323,7 @@ mod tests {
     #[test]
     fn plain_lines_booked_off_the_masks_read_as_the_walked_ones() {
         let pieces = [" ", "\t", "\r", "  ", "        ", "a", "Zq9", "_", ";", "{", "})", "=+", "é", "λx", "\"s\"", "// c", "/*", "*/", "*",
-                "\\"];
+                "\\", "\"\"\"", "'''", "#", "R\"x(", ")x\"", "[[", "]]", "[=[", "]=]"];
         let spliced = c_like_with_a_splice();
         let mut seed = 0x9E37_79B9_7F4A_7C15u64;
         let mut next = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
@@ -3313,7 +3335,7 @@ mod tests {
                 contents.push_str(if next() % 5 == 0 { "\r\n" } else { "\n" });
             }
             if next() % 2 == 0 { contents.push_str("tail"); }
-            for language in [&*JAVA, &spliced] {
+            for language in [&*JAVA, &spliced, &*PYTHON_FULL, &*CPP_DELIMITED, &*LUA_LEVELED, &*CSHARP_DOUBLING] {
                 let (walked, _) = parse_lines_explained(&contents, language, &empty_lookup(), &EngineConfig::default(),
                         TestsByPath::Nothing);
                 let booked = parse_lines_whole(&contents, language);

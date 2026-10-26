@@ -205,7 +205,8 @@ fn start_parsing_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, w
                 if idle_iterations < 10 {
                     thread::yield_now();
                 } else {
-                    thread::sleep(Duration::from_millis(2));
+                    // Woken early when the walk ends, so the last files are never followed by a full wait
+                    thread::park_timeout(Duration::from_millis(2));
                 }
                 if let Some(from) = waited_from {
                     parse_buffers.timing.starved += 1;

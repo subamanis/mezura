@@ -27,11 +27,11 @@ CARGO_TARGET_DIR=target-pgo RUSTFLAGS="-Cprofile-generate=$(native "$root/pgo-da
 
 counter="target-pgo/release/mezura$ext"
 for pass in 1 2 3; do
-    "$counter" . > /dev/null
-    "$counter" mezura-core/tests/fixtures > /dev/null
-    "$counter" . --counting region --hide keywords > /dev/null
+    "$counter" . --threads 1 1 > /dev/null
+    "$counter" mezura-core/tests/fixtures --threads 1 1 > /dev/null
+    "$counter" . --counting region --hide keywords --threads 1 1 > /dev/null
     for target in "$@"; do
-        "$counter" "$target" > /dev/null
+        "$counter" "$target" --threads 1 1 > /dev/null
     done
 done
 

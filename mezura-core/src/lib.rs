@@ -264,6 +264,9 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let queued_at_producer_exit = files_injector.len();
 
     finish_condition_ref.store(true,Ordering::Relaxed);
+    for handle in &consumer_handles {
+        handle.thread().unpark();
+    }
 
     // The callback goes below the flag above and never above it. It is the caller's code, it may
     // panic, and a panic here unwinds past the joins with the consumers still running: they leave
