@@ -357,6 +357,7 @@ pub(crate) struct ScanPlan {
     slots: Vec<Slot>,
     symbols: Vec<Box<[u8]>>,
     sorted_kinds: [bool; 4],
+    strings_split: bool,
     // Whether a line opening with a line comment symbol is a comment and nothing else. False where a
     // block opener begins with one, as Lua's '--[[' begins with '--', CMake's '#[[' and Julia's '#='
     // with '#': there the same bytes open a block that runs on past this line.
@@ -473,6 +474,7 @@ impl ScanPlan {
         }
 
         let (chunks, mut sorted_kinds) = pack_into_chunks(&entries, &anchors);
+        let strings_split = sorted_kinds[STRINGS as usize];
         // An anchored match begins behind the byte that found it, so a kind holding symbols
         // anchored at two different depths reports them out of line order and is sorted afterwards.
         for (kind, sorted) in sorted_kinds.iter_mut().enumerate() {
@@ -488,7 +490,7 @@ impl ScanPlan {
         let heredoc = language.heredoc.map(|rules| (memmem::Finder::new(rules.get_opener().as_bytes()).into_owned(),
                 (strings.get_symbols().len() + strings.get_char_literals().len()
                         + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()) as u8, rules));
-        ScanPlan { chunks, first, slots, symbols, sorted_kinds, line_comment_ends_the_line, finder, heredoc }
+        ScanPlan { chunks, first, slots, symbols, sorted_kinds, strings_split, line_comment_ends_the_line, finder, heredoc }
     }
 }
 
@@ -621,6 +623,7 @@ pub(crate) struct ScanBuffers {
     delimiter: Delimiter,
     // Filled before the walk of a line and emptied after it, by the caller that holds the rest of the file
     heredoc_openings: Vec<HeredocOpening>,
+    pair_open: bool,
 }
 
 impl ScanBuffers {
@@ -714,11 +717,14 @@ impl Candidates<'_> {
     }
 }
 
-fn scan_line(line: &str, candidates: Candidates, language: &Language, buffers: &mut ScanBuffers) {
+fn scan_line(line: &str, candidates: Candidates, language: &Language, open_str_symbol: Option<(u8, u32)>,
+    buffers: &mut ScanBuffers)
+{
     let plan = get_or_build_plan_of(language);
     let line_bytes = line.as_bytes();
     let escape = language.strings.get_escape();
     buffers.reset(plan.slots.len());
+    buffers.pair_open = open_str_symbol.is_some();
 
     match candidates {
         Candidates::At(offsets, lead) => for &offset in offsets {
@@ -726,16 +732,19 @@ fn scan_line(line: &str, candidates: Candidates, language: &Language, buffers: &
             if at >= line_bytes.len() { break }
             take_symbols_at(at, line_bytes, plan, buffers, escape)
         },
-        Candidates::Unsearched => for chunk in &plan.chunks {
-            match chunk.len {
-                1 => for at in memchr::memchr_iter(chunk.bytes[0], line_bytes) {
-                    take_symbols_at(at, line_bytes, plan, buffers, escape)
-                },
-                2 => for at in memchr::memchr2_iter(chunk.bytes[0], chunk.bytes[1], line_bytes) {
-                    take_symbols_at(at, line_bytes, plan, buffers, escape)
-                },
-                _ => for at in memchr::memchr3_iter(chunk.bytes[0], chunk.bytes[1], chunk.bytes[2], line_bytes) {
-                    take_symbols_at(at, line_bytes, plan, buffers, escape)
+        Candidates::Unsearched => {
+            buffers.pair_open |= plan.strings_split;
+            for chunk in &plan.chunks {
+                match chunk.len {
+                    1 => for at in memchr::memchr_iter(chunk.bytes[0], line_bytes) {
+                        take_symbols_at(at, line_bytes, plan, buffers, escape)
+                    },
+                    2 => for at in memchr::memchr2_iter(chunk.bytes[0], chunk.bytes[1], line_bytes) {
+                        take_symbols_at(at, line_bytes, plan, buffers, escape)
+                    },
+                    _ => for at in memchr::memchr3_iter(chunk.bytes[0], chunk.bytes[1], chunk.bytes[2], line_bytes) {
+                        take_symbols_at(at, line_bytes, plan, buffers, escape)
+                    }
                 }
             }
         }
@@ -789,6 +798,11 @@ fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut 
             _ => slot.counted_backwards || line_bytes[start..].starts_with(&plan.symbols[index])
         };
         if !matched { continue }
+        match slot.role {
+            ROLE_CLOSE if !buffers.pair_open => continue,
+            ROLE_OPEN => buffers.pair_open = true,
+            _ => ()
+        }
         // Where the language writes the symbol and the character before it as one longer form, the
         // symbol is part of that form and not itself. C3's '<*' opens a documentation comment
         // everywhere except in 'int[<*>]', which is a vector of unknown length.
@@ -2420,7 +2434,7 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language
     cancelled: &[usize], opener_inside_a_comment: &mut Option<usize>)
 -> (LineInfo, OpenedHere)
 {
-    scan_line(line, candidates, language, buffers);
+    scan_line(line, candidates, language, open_str_symbol, buffers);
     resolve_string_delimiters(language, line.as_bytes(), open_str_symbol, buffers, cancelled);
     let ScanBuffers { strings: str_indices, string_symbols: str_symbols, string_levels: str_levels,
             comments: comment_indices, com_starts: com_start_indices, com_ends: com_end_indices, code_ranges, .. } = buffers;
@@ -3063,14 +3077,14 @@ mod tests {
 
     fn str_delimiters(line: &str, language: &Language, open_str_symbol: Option<u8>) -> (Vec<usize>, Vec<u8>) {
         let mut buffers = ScanBuffers::default();
-        scan_line(line, Candidates::Unsearched, language, &mut buffers);
+        scan_line(line, Candidates::Unsearched, language, None, &mut buffers);
         resolve_string_delimiters(language, line.as_bytes(), open_str_symbol.map(|symbol| (symbol, 0)), &mut buffers, &[]);
         (buffers.strings, buffers.string_symbols)
     }
 
     fn comment_delimiters(line: &str, language: &Language) -> Vec<usize> {
         let mut buffers = ScanBuffers::default();
-        scan_line(line, Candidates::Unsearched, language, &mut buffers);
+        scan_line(line, Candidates::Unsearched, language, None, &mut buffers);
         buffers.comments
     }
 
@@ -3078,7 +3092,7 @@ mod tests {
     -> Vec<usize> {
         let mut ends = com_end_indices.iter().map(|at| (*at, 0u8, 0u32)).collect::<Vec<_>>();
         let mut buffers = ScanBuffers::default();
-        scan_line(line, Candidates::Unsearched, language, &mut buffers);
+        scan_line(line, Candidates::Unsearched, language, None, &mut buffers);
         resolve_comment_symbols_sharing_bytes(line, language, open_comment.map(|symbol| (symbol, 1)), &mut buffers.comments,
                 &mut Vec::new(), &mut ends);
         buffers.comments
@@ -5207,9 +5221,9 @@ mod tests {
             let line = from_start.trim_ascii_end();
             let lead = raw_line.len() - from_start.len();
             let mut searched = ScanBuffers::default();
-            scan_line(line, Candidates::Unsearched, &RUST, &mut searched);
+            scan_line(line, Candidates::Unsearched, &RUST, None, &mut searched);
             let mut masked = ScanBuffers::default();
-            scan_line(line, Candidates::At(lines.positions(), lead), &RUST, &mut masked);
+            scan_line(line, Candidates::At(lines.positions(), lead), &RUST, None, &mut masked);
             assert_eq!((&searched.raw_strings, &searched.comments, &searched.com_starts, &searched.com_ends),
                     (&masked.raw_strings, &masked.comments, &masked.com_starts, &masked.com_ends),
                     "disagreed on {raw_line:?}");
