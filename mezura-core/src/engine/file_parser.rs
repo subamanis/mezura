@@ -1172,14 +1172,99 @@ struct MaskedLines<'a> {
     block_at: usize,
     newlines: u64,
     candidates: u64,
+    non_spaces: u64,
+    words: u64,
+    // Whether the class masks are read, which only the booking of plain lines does
+    classes: bool,
+    // The lines booked so far, in code and inside a block comment: blank, punctuation, with words
+    booked: [[usize; 3]; 2],
     positions: Vec<u32>,
 }
 
 impl<'a> MaskedLines<'a> {
-    fn of(contents: &'a str, finder: &'a MaskFinder) -> MaskedLines<'a> {
-        let masks = finder.scan_block(&contents.as_bytes()[..contents.len().min(BLOCK_BYTES)]);
-        MaskedLines { contents, finder, start: 0, block_at: 0, newlines: masks.newlines,
-                candidates: masks.candidates, positions: Vec::new() }
+    fn of(contents: &'a str, finder: &'a MaskFinder, classes: bool) -> MaskedLines<'a> {
+        let mut lines = MaskedLines { contents, finder, start: 0, block_at: 0, newlines: 0, candidates: 0, non_spaces: 0,
+                words: 0, classes, booked: [[0; 3]; 2], positions: Vec::new() };
+        lines.read_block();
+        lines
+    }
+
+    #[inline(always)]
+    fn read_block(&mut self) {
+        let bytes = self.contents.as_bytes();
+        let block = &bytes[self.block_at..bytes.len().min(self.block_at + BLOCK_BYTES)];
+        let masks = match self.classes {
+            true => self.finder.scan_block::<true>(block),
+            false => self.finder.scan_block::<false>(block)
+        };
+        (self.newlines, self.candidates, self.non_spaces, self.words) = (masks.newlines, masks.candidates, masks.non_spaces,
+                masks.words);
+    }
+
+    // The lines from the next one up to the first that holds a searched byte, booked off the masks
+    // without being handed out. A line running into the next block is followed there, and the run
+    // stops at the start of a line holding a searched byte, or of the last line of the file, which
+    // the iterator hands out as it would have. Inside an open block comment the same lines are
+    // comment, since the closer begins at a searched byte.
+    #[inline(always)]
+    fn book_plain_lines(&mut self, in_comment: bool, collecting_spans: bool, code_spans: &mut Vec<(u32, u32)>) {
+        let bytes = self.contents.as_bytes();
+        let mut from = self.start.wrapping_sub(self.block_at);
+        if from >= BLOCK_BYTES { return }
+        // What the line begun in an earlier block holds so far: where its code begins and ends
+        let (mut first_code, mut code_end, mut has_words) = (usize::MAX, 0, false);
+        loop {
+            let before_candidate = match self.candidates { 0 => u64::MAX, bits => (1u64 << bits.trailing_zeros()) - 1 };
+            let mut plain = self.newlines & before_candidate;
+            while plain != 0 {
+                let last = plain.trailing_zeros() as usize;
+                let segment = (u64::MAX << from) & !(u64::MAX << last);
+                let code = self.non_spaces & segment;
+                if code != 0 {
+                    if first_code == usize::MAX { first_code = self.block_at + code.trailing_zeros() as usize; }
+                    code_end = self.block_at + BLOCK_BYTES - code.leading_zeros() as usize;
+                }
+                has_words |= self.words & segment != 0;
+                self.booked[in_comment as usize][(first_code != usize::MAX) as usize + has_words as usize] += 1;
+                if collecting_spans && has_words && !in_comment {
+                    code_spans.push((first_code as u32, code_end as u32));
+                }
+                (first_code, code_end, has_words) = (usize::MAX, 0, false);
+                from = last + 1;
+                self.start = self.block_at + from;
+                plain &= plain - 1;
+                self.newlines &= plain | !(u64::MAX >> (63 - last));
+            }
+            if self.candidates != 0 || self.block_at + BLOCK_BYTES >= bytes.len() { return }
+            // The rest of the block is the start of a line that ends further on
+            if from < BLOCK_BYTES {
+                let segment = u64::MAX << from;
+                let code = self.non_spaces & segment;
+                if code != 0 {
+                    if first_code == usize::MAX { first_code = self.block_at + code.trailing_zeros() as usize; }
+                    code_end = self.block_at + BLOCK_BYTES - code.leading_zeros() as usize;
+                }
+                has_words |= self.words & segment != 0;
+            }
+            self.block_at += BLOCK_BYTES;
+            self.read_block();
+            from = 0;
+            // A searched byte before the line's end leaves the line to the iterator, which reads it from its start
+            let line_end = match self.newlines { 0 => u64::MAX, bits => u64::MAX >> (63 - bits.trailing_zeros()) };
+            if self.candidates & line_end != 0 || self.newlines == 0 && self.block_at + BLOCK_BYTES >= bytes.len() { return }
+        }
+    }
+
+    fn add_booked_lines(&self, file_stats: &mut FileStats) {
+        let [[blank, punctuation, words], [blank_in_comment, punctuation_in_comment, words_in_comment]] = self.booked;
+        file_stats.lines += blank + punctuation + words + blank_in_comment + punctuation_in_comment + words_in_comment;
+        let classes = &mut file_stats.classes;
+        classes.blank += blank;
+        classes.punctuation_in_code += punctuation;
+        classes.words_in_code += words;
+        classes.blank_in_comment += blank_in_comment;
+        classes.punctuation_in_comment += punctuation_in_comment;
+        classes.words_in_comment += words_in_comment;
     }
 
     fn positions(&self) -> &[u32] {
@@ -1231,9 +1316,7 @@ impl<'a> Iterator for MaskedLines<'a> {
                 self.start = bytes.len();
                 return Some(line);
             }
-            let masks = self.finder.scan_block(&bytes[self.block_at..bytes.len().min(self.block_at + BLOCK_BYTES)]);
-            self.newlines = masks.newlines;
-            self.candidates = masks.candidates;
+            self.read_block();
         }
     }
 }
@@ -1536,9 +1619,12 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
     let mut openers = if FULL { plan.heredoc.as_ref().map(|(finder, _, _)| finder.find_iter(contents.as_bytes())) } else { None };
     let mut next_opener = openers.as_mut().and_then(Iterator::next);
     let declares_line_bound_comments = FULL && language.declares_line_bound_comments();
-    let mut lines = MaskedLines::of(contents, &plan.finder);
+    let mut lines = MaskedLines::of(contents, &plan.finder, !FULL);
     let mut handed_back = None;
     loop {
+        if !FULL && shell.open_str_symbol.is_none() && !shell.continued_comment {
+            lines.book_plain_lines(shell.open_comment.is_some(), collecting_spans, code_spans);
+        }
         let (line_start, raw_line, has_candidates) = match handed_back.take() {
             Some(line) => line,
             None => match lines.next() {
@@ -1661,6 +1747,7 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
         }
     }
 
+    if !FULL { lines.add_booked_lines(&mut shell_stats); }
     if let Some(quiet) = quiet_lines {
         let claimed = tests.book_quiet_lines(&quiet, &shell_stats, contents.len());
         if collecting_spans { extend_test_ranges(test_ranges, quiet.from, contents.len()); }
@@ -1853,7 +1940,8 @@ fn walk_line<const EXPLAIN: bool, const FULL: bool>(raw_line: &str, line_start: 
         } else if bound.nests() && bound.is_opened_by(raw_line.as_bytes()) {
             state.line_bound = Some((pair, depth.saturating_add(1)));
         }
-    } else if FULL && state.holds_nothing() && let Some(pair) = find_line_bound_opener(raw_line, language) {
+    } else if FULL && state.holds_nothing() && language.declares_line_bound_comments()
+            && let Some(pair) = find_line_bound_opener(raw_line, language) {
         state.line_bound = Some((pair, 1));
         if EXPLAIN { state.opened_line = log.get_current_line_number(); }
     }
@@ -3218,6 +3306,31 @@ mod tests {
         let report = parse_lines::<true>(contents, language, lookup, &mut KeywordMatchers::default(), config,
                 &mut ParseBuffers::default(), by_path, &mut log);
         (report, log)
+    }
+
+    #[test]
+    fn plain_lines_booked_off_the_masks_read_as_the_walked_ones() {
+        let pieces = [" ", "\t", "\r", "  ", "a", "Zq9", "_", ";", "{", "})", "=+", "é", "λx", "\"s\"", "// c", "/*", "*/", "*",
+                "\\"];
+        let spliced = c_like_with_a_splice();
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+        for _ in 0..2000 {
+            let mut contents = String::new();
+            for _ in 0..next() % 40 {
+                let count = match next() % 6 { 0 => 0, 1..=3 => next() % 8, 4 => next() % 40, _ => next() % 90 };
+                for _ in 0..count { contents.push_str(pieces[(next() % pieces.len() as u64) as usize]); }
+                contents.push_str(if next() % 5 == 0 { "\r\n" } else { "\n" });
+            }
+            if next() % 2 == 0 { contents.push_str("tail"); }
+            for language in [&*JAVA, &spliced] {
+                let (walked, _) = parse_lines_explained(&contents, language, &empty_lookup(), &EngineConfig::default(),
+                        TestsByPath::Nothing);
+                let booked = parse_lines_whole(&contents, language);
+                assert_eq!((walked.shell.lines, walked.shell.classes), (booked.lines, booked.classes),
+                        "{contents:?} in {}", language.name);
+            }
+        }
     }
 
     fn c_like_with_a_splice() -> Language {
@@ -5161,7 +5274,7 @@ mod tests {
         for case in cases {
             let expected = case.lines().collect::<Vec<&str>>();
             let finder = MaskFinder::of(b"");
-            let actual = MaskedLines::of(case, &finder).map(|(_, line, _)| line).collect::<Vec<&str>>();
+            let actual = MaskedLines::of(case, &finder, true).map(|(_, line, _)| line).collect::<Vec<&str>>();
             assert_eq!(expected, actual, "disagreed on {case:?}");
         }
     }
@@ -5185,9 +5298,9 @@ mod tests {
         ];
         for case in &cases {
             let expected = case.lines().map(|line| line.bytes().any(|byte| searched.contains(&byte))).collect::<Vec<bool>>();
-            let actual = MaskedLines::of(case, &finder).map(|(_, _, candidate)| candidate).collect::<Vec<bool>>();
+            let actual = MaskedLines::of(case, &finder, true).map(|(_, _, candidate)| candidate).collect::<Vec<bool>>();
             assert_eq!(expected, actual, "disagreed on {case:?}");
-            let starts = MaskedLines::of(case, &finder).map(|(start, line, _)| (start, line)).collect::<Vec<_>>();
+            let starts = MaskedLines::of(case, &finder, true).map(|(start, line, _)| (start, line)).collect::<Vec<_>>();
             for (start, line) in starts {
                 assert_eq!(&case[start..start + line.len()], line);
             }
@@ -5209,7 +5322,7 @@ mod tests {
             "".to_owned(),
         ];
         for case in &cases {
-            let mut lines = MaskedLines::of(case, &finder);
+            let mut lines = MaskedLines::of(case, &finder, true);
             for expected in case.lines() {
                 let (_, line, has_candidates) = lines.next().unwrap();
                 assert_eq!(expected, line);
@@ -5239,7 +5352,7 @@ mod tests {
             "\t\t\t\t\t\t\t\t\t\t\t\t{long}{long}/* {long} */ \"{long}\"   \r\n",
             "end // {long}"), long = long);
         let plan = get_or_build_plan_of(&RUST);
-        let mut lines = MaskedLines::of(&contents, &plan.finder);
+        let mut lines = MaskedLines::of(&contents, &plan.finder, true);
         let mut seen = 0;
         while let Some((_, raw_line, _)) = lines.next() {
             let from_start = raw_line.trim_ascii_start();
