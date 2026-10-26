@@ -80,7 +80,8 @@ pub(crate) const TEST_PRESETS : [TestPreset; 13] = [
             patterns: &["xt/"] },
     TestPreset { name: "odin", trigger_files: &[], companion_file: None, files_declaring_tests: &[], patterns: &["*_test.odin"] },
 ];
-const TRIGGER_FIRST_BYTES : [bool; 256] = build_trigger_first_bytes();
+const TRIGGER_NAME_LENGTHS : [u64; 256] = build_trigger_name_lengths();
+const BUILD_NAME_LENGTHS : [u64; 256] = build_build_name_lengths();
 
 /// A test tool's default names for its test files, as the tool's documentation gives them.
 ///
@@ -469,7 +470,7 @@ pub(crate) struct BuildFilesSeen(u32);
 
 impl BuildFilesSeen {
     pub(crate) fn is_a_build_file(name: &[u8]) -> bool {
-        Self::find_index_of(name).is_some()
+        has_a_listed_shape(name, &BUILD_NAME_LENGTHS) && Self::find_index_of(name).is_some()
     }
 
     pub(crate) fn note(&mut self, name: &[u8]) {
@@ -505,7 +506,7 @@ pub(crate) struct TriggerFilesSeen(u64);
 
 impl TriggerFilesSeen {
     pub(crate) fn is_a_trigger_file(name: &[u8]) -> bool {
-        name.first().is_some_and(|first| TRIGGER_FIRST_BYTES[*first as usize]) && Self::find_index_of(name).is_some()
+        has_a_listed_shape(name, &TRIGGER_NAME_LENGTHS) && Self::find_index_of(name).is_some()
     }
 
     pub(crate) fn note(&mut self, name: &[u8]) {
@@ -665,28 +666,43 @@ impl PresetNames {
     }
 }
 
-const fn build_trigger_first_bytes() -> [bool; 256] {
-    let mut table = [false; 256];
+const fn build_trigger_name_lengths() -> [u64; 256] {
+    let mut table = [0; 256];
     let mut preset = 0;
     while preset < TEST_PRESETS.len() {
-        mark_first_bytes(&mut table, TEST_PRESETS[preset].trigger_files);
+        mark_name_lengths(&mut table, TEST_PRESETS[preset].trigger_files);
         if let Some(companion) = TEST_PRESETS[preset].companion_file {
-            mark_first_bytes(&mut table, &[companion]);
+            mark_name_lengths(&mut table, &[companion]);
         }
-        mark_first_bytes(&mut table, TEST_PRESETS[preset].files_declaring_tests);
+        mark_name_lengths(&mut table, TEST_PRESETS[preset].files_declaring_tests);
         preset += 1;
     }
     table
 }
 
-const fn mark_first_bytes(table: &mut [bool; 256], names: &[&str]) {
+const fn build_build_name_lengths() -> [u64; 256] {
+    let mut table = [0; 256];
+    let mut tool = 0;
+    while tool < BUILD_TOOLS.len() {
+        mark_name_lengths(&mut table, BUILD_TOOLS[tool].files);
+        tool += 1;
+    }
+    table
+}
+
+const fn mark_name_lengths(table: &mut [u64; 256], names: &[&str]) {
     let mut at = 0;
     while at < names.len() {
-        let first = names[at].as_bytes()[0];
-        table[first.to_ascii_lowercase() as usize] = true;
-        table[first.to_ascii_uppercase() as usize] = true;
+        let (first, length) = (names[at].as_bytes()[0], names[at].len());
+        assert!(length < 64);
+        table[first.to_ascii_lowercase() as usize] |= 1 << length;
+        table[first.to_ascii_uppercase() as usize] |= 1 << length;
         at += 1;
     }
+}
+
+fn has_a_listed_shape(name: &[u8], lengths: &[u64; 256]) -> bool {
+    name.len() < 64 && name.first().is_some_and(|first| lengths[*first as usize] & 1 << name.len() != 0)
 }
 
 fn collect_noted_files() -> impl Iterator<Item = &'static str> {

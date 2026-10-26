@@ -134,7 +134,14 @@ impl<'a> ModuleDeclarations<'a> {
     pub(crate) fn of(keyword: &'a str, contents: &'a str) -> Self {
         let keyword_at = match keyword.is_empty() {
             true => Vec::new(),
-            false => memchr::memmem::find_iter(contents.as_bytes(), keyword.as_bytes()).collect()
+            false => {
+                let bytes = contents.as_bytes();
+                let opens_the_file = |at: usize| at == 0 || (at == BYTE_ORDER_MARK.len() && bytes.starts_with(BYTE_ORDER_MARK));
+                memchr::memmem::find_iter(bytes, keyword.as_bytes())
+                        .filter(|&at| (opens_the_file(at) || !is_word_byte(bytes[at - 1]))
+                                && !bytes.get(at + keyword.len()).is_some_and(|byte| is_word_byte(*byte)))
+                        .collect()
+            }
         };
         ModuleDeclarations { keyword: keyword.as_bytes(), contents: contents.as_bytes(), found: Vec::new(),
                 open: Vec::new(), depth: 0, keyword_at, next: 0, next_brace: 0,
