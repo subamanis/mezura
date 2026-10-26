@@ -366,6 +366,16 @@ pub(crate) struct ScanPlan {
     finder: MaskFinder,
     // Searched once over the whole file, never by the chunks, and numbered after every crossing string
     heredoc: Option<(memmem::Finder<'static>, u8, HeredocRules)>,
+    string_shapes: Vec<StringShape>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StringShape {
+    opener: u8,
+    closer: u8,
+    leveled: bool,
+    doubling: bool,
+    run_closes: bool,
 }
 
 impl ScanPlan {
@@ -490,7 +500,17 @@ impl ScanPlan {
         let heredoc = language.heredoc.map(|rules| (memmem::Finder::new(rules.get_opener().as_bytes()).into_owned(),
                 (strings.get_symbols().len() + strings.get_char_literals().len()
                         + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()) as u8, rules));
-        ScanPlan { chunks, first, slots, symbols, sorted_kinds, strings_split, line_comment_ends_the_line, finder, heredoc }
+        let string_count = strings.get_symbols().len() + strings.get_char_literals().len()
+                + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len() + usize::from(heredoc.is_some());
+        let string_shapes = (0..string_count as u8).map(|symbol| StringShape {
+            opener: language.calculate_string_opener_width(symbol, 0) as u8,
+            closer: language.calculate_string_closer_width(symbol, 0) as u8,
+            leveled: language.find_leveled_string(symbol).is_some(),
+            doubling: language.string_escapes_by_doubling(symbol),
+            run_closes: language.string_closes_at_the_end_of_a_run(symbol),
+        }).collect();
+        ScanPlan { chunks, first, slots, symbols, sorted_kinds, strings_split, line_comment_ends_the_line, finder, heredoc,
+                string_shapes }
     }
 }
 
@@ -753,8 +773,8 @@ fn scan_line(line: &str, candidates: Candidates, language: &Language, open_str_s
     // Only a kind split across two passes reaches here: one pass yields its symbols in line order
     if plan.sorted_kinds[STRINGS as usize] {
         let length_of = |symbol: u8, role: u8, level: u32| match role {
-            ROLE_CLOSE => language.calculate_string_closer_width(symbol, level),
-            _ => language.calculate_string_opener_width(symbol, level)
+            ROLE_CLOSE => plan.string_shapes[symbol as usize].closer as usize + level as usize,
+            _ => plan.string_shapes[symbol as usize].opener as usize + level as usize
         };
         buffers.raw_strings.sort_unstable_by(|(a_at, a_symbol, a_role, a_level), (b_at, b_symbol, b_role, b_level)|
                 a_at.cmp(b_at).then_with(|| length_of(*b_symbol, *b_role, *b_level)
@@ -2438,6 +2458,7 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language
     resolve_string_delimiters(language, line.as_bytes(), open_str_symbol, buffers, cancelled);
     let ScanBuffers { strings: str_indices, string_symbols: str_symbols, string_levels: str_levels,
             comments: comment_indices, com_starts: com_start_indices, com_ends: com_end_indices, code_ranges, .. } = buffers;
+    let shapes = &get_or_build_plan_of(language).string_shapes;
 
     match open_comment {
         None => if open_str_symbol.is_some() && str_indices.is_empty() {
@@ -2546,8 +2567,8 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language
     loop {
         if is_str_open_m {
             last_symbol_index = str_indices[str_counter];
-            let index_after = last_symbol_index
-                    + language.calculate_string_closer_width(str_symbols[str_counter], str_levels[str_counter]);
+            let index_after = last_symbol_index + shapes[str_symbols[str_counter] as usize].closer as usize
+                    + str_levels[str_counter] as usize;
             if index_after >= line.len() {
                 note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::String);
                 return (LineInfo::of(!code_ranges.is_empty(), true), OpenedHere::default());
@@ -2899,6 +2920,7 @@ fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_sy
     buffers: &mut ScanBuffers, cancelled: &[usize])
 {
     let ScanBuffers { raw_strings, strings, string_symbols, string_levels, delimiter, .. } = buffers;
+    let shapes = &get_or_build_plan_of(language).string_shapes;
 
     let mut open = open_str_symbol;
     let mut consumed_up_to = 0;
@@ -2926,19 +2948,22 @@ fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_sy
             consumed_up_to = at + language.calculate_string_opener_width(symbol, level);
             continue;
         }
+        let shape = shapes[symbol as usize];
         let (at, length, level) = match open {
             Some((open_symbol, open_level)) => {
-                if role == ROLE_OPEN || role == ROLE_DELIMITED
-                        || !language.string_is_closed_by((open_symbol, open_level), (symbol, level)) {
+                if role == ROLE_OPEN || role == ROLE_DELIMITED || match shape.leveled {
+                    false => open_symbol != symbol,
+                    true => !language.string_is_closed_by((open_symbol, open_level), (symbol, level))
+                } {
                     continue;
                 }
-                let length = language.calculate_string_closer_width(symbol, open_level);
+                let length = shape.closer as usize + open_level as usize;
                 let closer = &line_bytes[at..at + length];
-                if language.string_escapes_by_doubling(symbol) && line_bytes[at + length..].starts_with(closer) {
+                if shape.doubling && line_bytes[at + length..].starts_with(closer) {
                     consumed_up_to = at + 2 * length;
                     continue;
                 }
-                let quotes_in_front = if language.string_closes_at_the_end_of_a_run(symbol) {
+                let quotes_in_front = if shape.run_closes {
                     line_bytes[at + length..].iter().take_while(|byte| **byte == closer[0]).count()
                 } else {
                     0
@@ -2974,7 +2999,7 @@ fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_sy
                     continue;
                 }
                 open = Some((symbol, level));
-                (at, language.calculate_string_opener_width(symbol, level), level)
+                (at, shape.opener as usize + level as usize, level)
             }
         };
         consumed_up_to = at + length;
