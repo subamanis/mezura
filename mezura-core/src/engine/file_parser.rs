@@ -655,6 +655,7 @@ pub(crate) struct ParseBuffers {
 // A comment symbol spelled with letters is a word and not a prefix: Batch opens a comment with REM,
 // and REMOVE is a command that has to count as one. Only a symbol whose own ends are word characters
 // asks the question at all, so '//' and '#' pay nothing for it.
+#[inline(always)]
 fn stands_as_its_own_word(line: &[u8], start: usize, width: usize) -> bool {
     if width == 0 {
         return false;
@@ -680,6 +681,7 @@ fn is_not_escaped(pos: usize, bytes: &[u8], escape: Option<u8>) -> bool {
     escapes % 2 == 0
 }
 
+#[inline(always)]
 fn find_counted_symbol_ending_at(at: usize, line_bytes: &[u8], prefix: &[u8], filler: u8) -> Option<(usize, u32)> {
     let mut run_from = at;
     while run_from > 0 && line_bytes[run_from - 1] == filler {
