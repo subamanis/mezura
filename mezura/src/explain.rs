@@ -14,7 +14,7 @@ use crate::theme::get_active;
 pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
     let [target] = &config.engine.targets[..] else {
         return refuse(&format!("'--explain' answers for exactly one file, and this run names {} \
-                targets. Give the file alone: mezura src/main.rs --explain",
+                targets. Give the file by itself: mezura src/main.rs --explain",
                 config.engine.targets.len()));
     };
     let path = Path::new(&target.path);
@@ -345,8 +345,8 @@ fn describe_presets_turned_on(presets: &[MatchedPreset]) -> String {
         let here = presets.iter().filter(|preset| preset.directory == *directory).collect::<Vec<_>>();
         let files = here.iter().map(|preset| format!("'{}'", preset.trigger_file)).collect::<Vec<_>>();
         let names = here.iter().map(|preset| match &preset.configured_by {
-            Some(file) if *file != preset.trigger_file => format!("{}, as '{file}' beside it declares them", preset.name),
-            Some(_) => format!("{}, as it declares them", preset.name),
+            Some(file) if *file != preset.trigger_file => format!("{}, which '{file}' beside it declares", preset.name),
+            Some(_) => format!("{}, which it declares", preset.name),
             None => preset.name.clone()
         }).collect::<Vec<_>>();
         format!("{} in '{directory}' {} on the test names of {}", join_with(&files, "and"),

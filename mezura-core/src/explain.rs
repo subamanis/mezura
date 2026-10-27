@@ -15,7 +15,7 @@ pub struct FileExplanation {
     /// The language whose rules read the file.
     pub language: String,
     /// The evidence that identified a contested file, the literal and its line, or None where the
-    /// extension alone answered.
+    /// extension answered by itself.
     pub identified_by: Option<(String, usize)>,
     /// Why a directory scan under the same configuration would leave this file out of the counts,
     /// or None where it would count it. A file given by name is counted either way.
@@ -36,7 +36,7 @@ pub struct FileExplanation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TestFileRule {
-    /// It is under a directory a build compiles for tests alone.
+    /// It is under a directory a build compiles for tests and for nothing else.
     TestDirectory {
         /// That directory, `/proj/tests`.
         directory: String,

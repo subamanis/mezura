@@ -1511,7 +1511,7 @@ fn format_note_sentence(theme: &Theme, note: &super::diff::Note) -> String {
                 config_manager::LAYOUT),
         Note::NoGitignoreInCheckout { git_revision } => format!(
                 "'--no-gitignore' cannot reach '{git_revision}': a checkout holds only what git \
-                tracks, so anything a .gitignore ignores is counted on one side alone."),
+                tracks, so anything a .gitignore ignores is counted on one side only."),
         Note::MissingInRevision { git_revision, targets } => {
             let named = targets.iter().map(|x| format!("'{x}'")).collect::<Vec<_>>().join(", no ");
             format!("'{git_revision}' has no {named}, so it counts as nothing there.")

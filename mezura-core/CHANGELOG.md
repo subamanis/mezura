@@ -9,7 +9,7 @@ New:
   `whole_files`, and `FileEntry::tests` carries it per file as an `Option<Stats>`. Without being asked the
   engine takes what a language's markers open (Rust, D and Zig), the files a test annotation in
   their code makes test code whole (Java, Kotlin and C#), the file names a toolchain defines
-  (`_test.go`, Perl's `.t`) and the directory a build tool compiles for tests alone beside its
+  (`_test.go`, Perl's `.t`) and the directory a build tool compiles only for tests, beside its
   build file; `EngineConfig::test_patterns` declares the rest, a `!` pattern takes a file or a
   directory back, and `EngineConfig::detect_tests` turns the whole of it off. What each language
   gets right and what it misses is in `TEST_DETECTION.md` beside the main README.
@@ -48,13 +48,13 @@ New:
   gradle, jvm, xt and odin. Where a directory listing holds one of a preset's trigger files, the
   scan applies the preset's names under that directory on its own, a `!` pattern of
   `EngineConfig::test_patterns` takes any of it back, and `RunResult::applied_presets` lists every
-  preset so turned on as an `AppliedPreset`, which `AppliedPreset::new` builds, with its directory,
-  the file that turned it on and whether it decided any file. `TestFileRule::Preset` names every preset that decided a file, each
+  preset so turned on as an `AppliedPreset`, with its directory, the file that turned it on and
+  whether it decided any file. `TestFileRule::Preset` names every preset that decided a file, each
   as a `MatchedPreset` with the file that turned it on and the pattern that matched.
   Pytest's own configuration is read for `testpaths` and `python_files`: a file naming `testpaths`
-  turns the pytest preset on under those folders alone, and a declared `python_files` puts its
-  names in place of the preset's. `TestPreset::files_declaring_tests` lists the files read, and
-  `MatchedPreset::configured_by` names the one whose names matched.
+  turns the pytest preset on under those folders and nowhere else, and a declared `python_files`
+  puts its names in place of the preset's. `TestPreset::files_declaring_tests` lists the files read,
+  and `MatchedPreset::configured_by` names the one whose names matched.
 - A `testdata` directory at any depth below a `go.mod` is test code whole, as the go tool treats it.
 - `EngineConfig::checkout` takes a `RepositoryCheckout`, a checkout's root and the repository it
   was written from, for targets inside a revision written out to another place. The build files and

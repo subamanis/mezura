@@ -6,7 +6,8 @@ only what was measured, so the percentages and the totals that the report prints
 out of it. For a question somebody is going to read the answer to, use 'count_lines_of_code'.
 
 The test code sits under 'tests' on each language, on 'total' and on each module, with
-'whole_files' saying how many of its files are test code from the first line to the last, and
-'scope.tests_detected' says whether it was looked for at all. A language with no 'tests' key had
-none found; what counts as found, and how the rest is declared with 'tests', is as for
-'count_lines_of_code'.
+'whole_files' saying how many of its files are test code from the first line to the last,
+'scope.tests_detected' says whether it was looked for at all, and 'scope.test_presets' lists the
+test tools whose own file turned their test names on, with the folder and the file, since the
+report's list of them is not in this document. A language with no 'tests' key had none found; what
+counts as found, and how the rest is declared with 'tests', is as for 'count_lines_of_code'.

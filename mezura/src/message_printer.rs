@@ -79,8 +79,8 @@ pub const EXCLUDE_HELP  :  &str =
     Any other pattern is a name, matched at any depth under the directory that holds the target,
     so it sees the target's own name and never a folder above it ('node_modules', '*.min.js',
     'src/generated'). Names are matched with their case. A trailing '/' means a folder only, so
-    'build/' leaves a script named 'build' alone; 'x/**' means the folder 'x', and '**' alone a
-    whole target. Glob syntax is supported in both forms: * ? [..] {..}
+    'build/' does not match a script named 'build'; 'x/**' means the folder 'x', and '**' by itself
+    a whole target. Glob syntax is supported in both forms: * ? [..] {..}
 
     A '!' in front of a pattern is refused: a directory left out is never entered, so there is
     nothing to take back. A pattern that names nothing on disk is reported, and so is a name
@@ -110,8 +110,8 @@ pub const TESTS_HELP  :  &str =
     'D:/work/api/tests'). Any other pattern is a name, matched at any depth under the directory
     that holds the target, so it sees the target's own name and never a folder above it ('spec',
     '*_test.py', 'src/test'). Names are matched with their case. A trailing '/' means a folder
-    only, so 'tests/' leaves a script named 'tests' alone; 'x/**' means the folder 'x', and '**'
-    alone a whole target. Glob syntax is supported in both forms: * ? [..] {..}
+    only, so 'tests/' does not match a script named 'tests'; 'x/**' means the folder 'x', and '**'
+    by itself a whole target. Glob syntax is supported in both forms: * ? [..] {..}
 
     The last pattern that matches decides. '--tests spec,!spec/fixtures' declares 'spec' and
     takes its fixtures back, and '--tests !vendor/' keeps a vendored project's tests out even
@@ -124,9 +124,10 @@ pub const TESTS_HELP  :  &str =
     'test_*.py', '*_test.py' and 'conftest.py', and '--tests \"!@pytest\"' takes each of them back.
     A preset also turns itself on under a folder holding the tool's own file, the jest one under
     a 'jest.config.ts', and a pattern typed here comes after it, so a '!' corrects it there too.
-    '--show-presets' lists them, and '--save-preset' keeps a list of your own under a name. A
-    folder whose name starts with '@' is written as a place or after '**/': './@types/' or
-    '**/@types/'.
+    Pytest's configuration files are read for 'testpaths' and 'python_files', which scope and
+    rename what its preset takes. '--show-presets' lists the presets, and '--save-preset' keeps a
+    list of your own under a name. A folder whose name starts with '@' is written as a place or
+    after '**/': './@types/' or '**/@types/'.
 
     In a project's own configuration the patterns are read from the project directory, so they
     say the same thing from wherever inside the project the command is typed. '--hide tests'
@@ -192,7 +193,7 @@ pub const LANGUAGES_HELP  :  &str =
     An extension that two languages claim names whichever of them owns it for this run, which is
     the answer in 'language_conflicts.txt' or the one '--force-language' gave.
 
-    Writing a module and a slash before the name holds it to that module alone, and a module that
+    Writing a module and a slash before the name holds it inside that module, and a module that
     names any language of its own counts those and nothing else: '--languages rust,web/js' counts
     Rust everywhere but inside 'web', where it counts JavaScript.
 
@@ -209,7 +210,7 @@ pub const EXCLUDE_LANGUAGES_HELP  :  &str =
     A name that nothing in the scan answers to is reported as having changed nothing, and the run
     carries on.
 
-    Writing a module and a slash before the name holds it to that module alone, and a module that
+    Writing a module and a slash before the name holds it inside that module, and a module that
     names any language of its own leaves out those and nothing else: '--exclude-languages json,web/xml'
     leaves out JSON everywhere but inside 'web', where it leaves out XML and counts the JSON.
 
@@ -225,7 +226,7 @@ pub const FORCE_LANGUAGE_HELP  :  &str =
     A whole filename works the same way, for the files that have no extension worth reading:
     '--force-language Makefile=python,Jenkinsfile=groovy'
 
-    Writing a module and a slash before the extension holds the rule to that module alone, so one
+    Writing a module and a slash before the extension holds the rule inside that module, so one
     repository with MATLAB in one folder and Objective-C in another is counted once:
     'mezura ios=./ios analysis=./matlab --force-language ios/m=objective-c,analysis/m=matlab'
     A module keeps every rule you wrote without a module in front of it and answers only the ones
@@ -356,7 +357,7 @@ pub const NO_HEURISTICS_HELP  :  &str =
 ";
 pub const NO_SHEBANG_HELP  :  &str =
 "--no-shebang
-    identify every file by its name alone, leaving the '#!' line inside it unread
+    identify every file by its name, leaving the '#!' line inside it unread
 
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
@@ -366,8 +367,8 @@ pub const NO_SHEBANG_HELP  :  &str =
     opened and appears in no figure, and the '#!' line also stops settling an extension that two
     languages claim. A whole file name a language declares, like 'Makefile', is unaffected.
 
-    Two uses. It makes a run comparable to a counter that knows extensions alone, and it spares the
-    scan an open and a read for every file that has no extension.
+    Two uses. It makes a run comparable to a counter that knows nothing but extensions, and it
+    spares the scan an open and a read for every file that has no extension.
 
 ";
 pub const EXPLAIN_HELP  :  &str =
@@ -401,9 +402,10 @@ pub const EXPLAIN_HELP  :  &str =
     the document under 'left_out_of_a_scan'; the named file itself is always counted. A line of
     test code is marked 'test code' and counted below the totals, and a file that is test code as a
     whole, or that a '!' pattern of '--tests' took back, names the rule that decided it: a build
-    tool's test directory, its name, the pattern, the file that declares it as a module under a
-    marker, the annotation in its code with its line, or the '#![cfg(test)]' at its top. The
-    document carries 'in_test' on those lines and the rule under 'test_file'.
+    tool's test directory, its name, the pattern, the test tool's file that turned a preset on with
+    the name of it that matched, the file that declares it as a module under a marker, the
+    annotation in its code with its line, or the '#![cfg(test)]' at its top. The document carries
+    'in_test' on those lines and the rule under 'test_file'.
 
       mezura src/main.rs --explain
       mezura src/page.vue --explain --counting region
@@ -485,9 +487,10 @@ pub const HIDE_HELP  :  &str =
                       the Vue row with no sign of the TypeScript and CSS inside it
       tests           the rows that split a language into its test code and the rest. Test code
                       is what a language's markers open or mark whole, the files its toolchain
-                      names as tests, the files under the test directory of a build tool, a file
-                      declared as a module under a marker, and what '--tests' declares. This one
-                      also stops the detection, patterns included, which is the other name that
+                      names as tests, the files under the test directory of a build tool, the
+                      files a test tool's own file names under its folder, a file declared as a
+                      module under a marker, and what '--tests' declares. This one also stops the
+                      detection, presets and patterns included, which is the other name that
                       makes a run faster
       files           the files column of the details rows
       comments        the comments column of the details rows
@@ -555,6 +558,9 @@ pub const SAVE_THEME_HELP  :  &str =
 
     Combined with '--save', the configuration that is written points at this theme by name and
     carries no styles of its own.
+
+    'Mezura' is refused: it is the default look written as a file, and a version that changes the
+    default look replaces it.
 
 ";
 pub const SAVE_PRESET_HELP  :  &str =
@@ -688,7 +694,7 @@ pub const RESTORE_HELP  :  &str =
     changes over, a fresh directory per run. A shipped theme you edited is put back too, with your
     copy saved the same way. A language file or a theme of your own is never touched, and neither is
     a theme you edited that is no longer shipped, or your default configuration, which is written
-    when absent and left alone.
+    when absent and never rewritten.
 
     A 'language_conflicts.txt' you have not edited is brought whole to each new version. An edited
     one is merged: your contest lines are kept as they are, lines for extensions your copy never
@@ -713,7 +719,7 @@ pub const OUTPUT_HELP  :  &str =
     are left out as terminal drawings. '--explain' has no markdown form and says so.
 
     A warning that puts the numbers in doubt goes under the table as well as to the error output.
-    One about an ignored setting stays on the error output alone.
+    One about an ignored setting stays on the error output.
 
     'json' replaces the whole output, status lines and overview included, with a single document,
     so another program can read the run.
@@ -855,7 +861,7 @@ pub const STYLE_HELP  :  &str =
       warning                  warnings, wherever one is printed
       error                    errors, wherever one is printed
 
-    The live lines. Their cells alone also take two hex values as 'a..b' for an even gradient,
+    The live lines. The cells among them also take two hex values as 'a..b' for an even gradient,
     or 'rainbow':
       progress-bar-fill        the cells the progress bar has drawn
       progress-bar-empty       the cells it has not reached, left blank by 'default' or drawn

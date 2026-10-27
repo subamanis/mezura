@@ -237,7 +237,7 @@ pub fn split_off_module_scope(text: &str) -> (Option<&str>, &str) {
     }
 }
 
-/// Puts the two back together, and gives back the value alone when there is no scope.
+/// Puts the two back together, and gives back the value by itself when there is no scope.
 pub fn format_module_scope(module: Option<&str>, value: &str) -> String {
     match module {
         Some(module) => format!("{module}/{value}"),
@@ -251,7 +251,7 @@ pub fn format_module_scope(module: Option<&str>, value: &str) -> String {
 /// everything below it, a relative one from the working directory. Any other pattern is a name,
 /// matched at any depth below the folder that holds what the target names, so it sees the
 /// target's own name and never a folder above it. A trailing `/` means a folder only, `x/**` means
-/// the folder `x`, `**` alone a whole target, and a `!` in front takes back what an earlier pattern
+/// the folder `x`, `**` by itself a whole target, and a `!` in front takes back what an earlier pattern
 /// or a rule gave, the last match winning.
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct PathPatterns {

@@ -670,7 +670,7 @@ pub enum TestFileName {
 }
 
 impl TestFileName {
-    /// Reads one written form. `None` for a `*` anywhere but at one end, and for a `*` alone.
+    /// Reads one written form. `None` for a `*` anywhere but at one end, and for a `*` by itself.
     pub fn parse(written: &str) -> Option<TestFileName> {
         let stars = written.matches('*').count();
         if let Some(suffix) = written.strip_prefix('*') && stars == 1 && !suffix.is_empty() {

@@ -47,7 +47,7 @@ With the binary somewhere else:
 - `count_lines_of_code` counts a directory or a file and answers with the report, which is what to
   ask for when a person is going to read the answer. The test code of each language is a row of its
   own, and a project's own convention for it (`test_*.py`, `*.spec.ts`, `spec/`) is declared with
-  `tests`, the same patterns `--tests` takes.
+  `tests`, the same patterns `--tests` takes, a preset by name (`@pytest`) among them.
 - `count_lines_of_code_as_json` answers with the JSON document, for when the numbers are going to
   be compared or added up.
 - `explain_file` goes through one file line by line and says why each line was counted the way it

@@ -88,11 +88,12 @@ pub struct CountArguments {
             trailing '/' means a directory only.")]
     pub exclude: Option<Vec<String>>,
     #[schemars(description = "Files and directories to count as test code, as glob patterns read \
-            the way 'exclude' reads them ('test_*.py', '*.spec.ts', 'spec/', '__tests__/'). What \
-            a compiler, a toolchain or a build tool marks as tests is found without this; what a \
+            the way 'exclude' reads them ('test_*.py', '*.spec.ts', 'spec/', '__tests__/'), or a \
+            test tool's preset by name ('@pytest', '@jest', '@rspec'). What a compiler, a toolchain, \
+            a build tool or a test tool's own file marks as tests is found without this; what a \
             framework or a project merely favours is declared here, from what its files show. A \
             pattern starting with '!' takes back what an earlier one or a rule gave, the last match \
-            deciding ('spec/', '!spec/fixtures/').")]
+            deciding ('spec/', '!spec/fixtures/'), and '!@jest' takes a preset back whole.")]
     pub tests: Option<Vec<String>>,
     #[schemars(description = "Count only these languages and leave every other one out, named \
             either by language ('rust', 'c++') or by any extension they claim ('js' names \

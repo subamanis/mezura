@@ -7,10 +7,14 @@ structs, functions).
 
 Only certain test code is found on its own: the markers a compiler reads (Rust's '#[cfg(test)]',
 Java's and Kotlin's '@Test', C#'s '[Fact]' and '[Test]'), the names a toolchain defines ('_test.go',
-Perl's '.t'), and the directory a build tool compiles for tests alone ('tests/' beside a Cargo.toml,
-'src/test/' beside a pom.xml or a build.gradle). A language with no 'tests' row has none of those,
-so a Python, JavaScript, PHP, Ruby or C++ project shows no tests until its convention is declared
-with 'tests' ('test_*.py', '*.spec.ts', 'spec/'), which the project's own files say.
+Perl's '.t'), the directory a build tool compiles only for tests ('tests/' beside a Cargo.toml,
+'src/test/' beside a pom.xml or a build.gradle), and the default test names of a test tool whose
+own file is in a folder ('*.test.ts' and '__tests__/' under a jest.config.ts, 'spec/' under a
+.rspec beside a Gemfile, 'test_*.py' under a conftest.py), which the report lists under 'Test
+presets applied'. A language with no 'tests' row has none of those, so a Python, JavaScript, PHP,
+Ruby or C++ project with no such file shows no tests until its convention is declared with
+'tests', as a preset by name ('@pytest', '@jest', '@rspec') or as the patterns themselves
+('test_*.py', '*.spec.ts', 'spec/'), which the project's own files say.
 
 Answers questions like: how big is this project, what is it written in, how much of it is comments,
 which language holds most of the code, which files are the longest.

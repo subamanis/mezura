@@ -61,8 +61,9 @@ Things it does that most counters do not:
 - **Nested languages.** The `<script>` and `<style>` blocks of HTML, Vue, Svelte and Astro files are
   counted as the distinct languages they hold.
 - **Test code detection.** Each language's tests are a row under it and under the total. It automatically identifies test code
-  by the test marks inside the code, by what the toolchain names as a test and what a build tool compiles for tests. It also gives you
-  manual control for marking or unmarking code as test code, with the `--tests` command. See [Test code](#test-code).
+  by the test marks inside the code, by what the toolchain names as a test, by what a build tool compiles for tests, and by the
+  default test names of a tool whose own file is in the project. It also gives you manual control for marking or unmarking code
+  as test code, with the `--tests` command. See [Test code](#test-code).
 - **Modules.** Give a name to parts of a project and the report is grouped by these parts as well as by
   language. This way you can split your project into e.g. Frontend and Backend and Tests and see distinct reports for each module in the same table in the same run. See [Modules](#modules).
 - **Track the history of your codebase.** Log runs and compare against earlier ones, or diff against a git revision.   See [Tracking growth](#tracking-growth).
@@ -143,7 +144,7 @@ WHAT IS COUNTED
   --count-not-code     count the non-code files that are left out by default
   --no-heuristics      never try to automatically resolve the contest when two languages claim the same
                        extension
-  --no-shebang         identify every file by its name alone, leaving the '#!' line inside it unread
+  --no-shebang         identify every file by its name, leaving the '#!' line inside it unread
   --show-languages     print the languages this installation knows, with their extensions, and stop
   --show-presets       print the test presets, the shipped ones and your own, and stop
 
@@ -311,25 +312,32 @@ and one under the total. Without being asked, mezura takes only what is certain:
 language marks in the source (`#[cfg(test)]` and `#[test]` in Rust, `unittest` in D, `test` in
 Zig, and the whole of a file holding `@Test` in Java and Kotlin or `[Fact]`, `[Test]` and the other
 attributes the runners collect tests by in C#), the file names a toolchain itself defines
-(`_test.go`, Perl's `.t`), and the directory a build tool compiles for tests alone (`tests/` beside
+(`_test.go`, Perl's `.t`), and the directory a build tool compiles only for tests (`tests/` beside
 a `Cargo.toml`, `src/test/` beside a `pom.xml` or a `build.gradle`, `Tests/` beside a
 `Package.swift`, `test/` beside a `mix.exs`, and the same for Dart, Julia, Perl, Clojure, Erlang,
-Elm and R). A folder named `tests` with no build file beside it is a folder. Everything that is a
-convention, `test_*.py`, `*.spec.ts`, `spec/`, is declared with `--tests`, which takes glob
-patterns and a `!` to take one back, and lives in the project's own configuration once saved:
+Elm and R). A folder named `tests` with no build file beside it is a folder. A test tool's own file
+turns the tool's default names on under the folder holding it: `*.test.ts` and `__tests__/` under
+a `jest.config.ts`, `spec/` under a `.rspec` beside a `Gemfile`, `test_*.py` under a `conftest.py`
+or where a pytest configuration's `testpaths` points. The report lists the presets so applied, and
+`--tests "!@jest"` takes one back. Everything else that is a convention, `*Test.java` outside
+`src/test`, `test/` without a `.mocharc`, is declared with `--tests`, which takes glob patterns, a
+`!` to take one back and a preset by name, and lives in the project's own configuration once saved:
 
 ```bash
 mezura ./ --tests "spec/,!spec/fixtures/"
 mezura ./ --tests "__tests__/,*.test.ts,*.test.tsx"
+mezura ./ --tests "@pytest,!tests/data/"
 ```
 
-`--tests-breakdown split` draws the rest of the language as a `production` row beside the tests,
-`--tests-breakdown removed` leaves the tests out of every row and shows them nowhere, `--hide tests`
-turns the whole thing off, and `--explain` marks each line of test code and says which rule made a
-whole file one. What is found for each language, what is refused (doc tests, tests a macro writes,
-`describe` and the other names a framework gives a function) and every known limitation with its
-example are in **[Test detection](https://github.com/subamanis/mezura/blob/HEAD/TEST_DETECTION.md)**,
-with ready patterns for pytest, jest, RSpec, PHPUnit and the `.Tests` projects of .NET.
+`--show-presets` lists the presets, the shipped ones and your own, and `--save-preset <name>` keeps
+the test patterns of a run as one of yours. `--tests-breakdown split` draws the rest of the language
+as a `production` row beside the tests, `--tests-breakdown removed` leaves the tests out of every
+row and shows them nowhere, `--hide tests` turns the whole thing off, and `--explain` marks each
+line of test code and says which rule made a whole file one. What is found for each language, what
+is refused (doc tests, tests a macro writes, `describe` and the other names a framework gives a
+function) and every known limitation with its example are in
+**[Test detection](https://github.com/subamanis/mezura/blob/HEAD/TEST_DETECTION.md)**, with the
+table of presets and the file that turns each one on.
 
 
 
@@ -349,7 +357,7 @@ The modules, the languages under them and the changed files under those are all 
 
 It is the report and not a document of its own, so `--hide`, `--sort` and `--top` cut and order it exactly as they do the printed one, and `--by-file` hangs the changed files under each language. Markdown has one table shape, so `--layout` has nothing to choose between and is ignored, and the colours, the overview bar and the history section are left out, all three being terminal drawings.
 
-A warning that puts the numbers in doubt, an unreadable language file among them, is written under the table as well as to the error output, since whoever reads the page is the one deciding on those numbers. The ones that only report an ignored setting stay on the error output alone, where the build log keeps them.
+A warning that puts the numbers in doubt, an unreadable language file among them, is written under the table as well as to the error output, since whoever reads the page is the one deciding on those numbers. The ones that only report an ignored setting stay on the error output, where the build log keeps them.
 
 Counting a git revision needs the full history, so a workflow doing the above wants `fetch-depth: 0` on its checkout.
 
@@ -369,7 +377,9 @@ mezura ./src --output json | jq -r '.languages[] | "\(.name) \(.lines)"'
 
 `scope` echoes
 the settings that can change a number, so that two documents are not compared when one of them was
-produced with a different `--exclude` or `--counting`. Every total, language, section and file row
+produced with a different `--exclude` or `--counting`, and under `test_presets` the test presets a
+tool's file turned on, with the folder and the file, since the report's list of them is not in the
+document. Every total, language, section and file row
 also carries a `classes` block holding the nine raw per-line counts both counting models fold from,
 so a consumer can compute either model whatever the scope names. `format` is the version of the
 document itself, separate from `mezura_version`, and it only moves when a key is removed or changes
@@ -581,9 +591,14 @@ language file that has fallen behind counts wrongly, but your copy is kept under
 `data/replaced/<version>/<date and time>/` and the program names it, so you can carry your changes
 over. Each update or `--restore` writes its own folder there, so two of them never mix and the
 newest is the one at the bottom. A language file or a theme of your own is never touched, and
-neither is your default configuration, which is written when it is absent and left alone
-afterwards. A shipped theme you edited stays yours through every update, also when a version stops
-shipping it, and only `--restore` puts it back to what ships, with your copy saved under `replaced`. A `language_conflicts.txt` you have not edited is brought whole to each new version;
+neither is your default configuration, which is written when it is absent and never rewritten
+afterwards. A shipped theme you edited, other than `Mezura.txt`, stays yours through every update,
+also when a version stops shipping it, and only `--restore` puts it back to what ships, with your
+copy saved under `replaced`. A version that brings new styles adds them to your edited copy, with
+every style you set kept and your file as it stood saved under `replaced`. `Mezura.txt` is the
+default look written as a file, so a version that changes it replaces your edited copy as it would
+a language file, and saves yours under `replaced`. A look of your own belongs under a name of your own, which
+`--save-theme` writes. A `language_conflicts.txt` you have not edited is brought whole to each new version;
 an edited one is merged, with your lines kept and your file as it stood saved under `replaced`.
 
 
@@ -593,7 +608,7 @@ Everything the program prints can be styled: 98 tokens, each taking a text color
 
 A **theme** is a plain .txt file of ```token = value``` lines, in the "themes" folder of your [data directory](#the-data-directory). It carries only how the output looks, never what is measured, so it can be shared as it is. Apply one with ```--theme <name>```, list the ones you have with ```--show-themes```, and write the current look into a new one with ```--save-theme <name>```.
 
-15 themes are bundled. **Mezura** is the default look, and it paints its text in the colors of your terminal's own scheme, so it reads well on any terminal, light or dark. The others are prettier and made for one kind of terminal: Catppuccin, Dracula, Forest, Gruvbox, Meadow and Ocean for a dark background, each with a ```-light``` version for a light one, and **Mezura-classic**, the look of earlier versions, for a dark one. **Uncolored** has no color at all and keeps the report readable with bold, italic and dim alone. See them all with ```--show-themes``` or in the [theme editor](https://subamanis.github.io/mezura/theme-editor/), and pick the one that suits your terminal. Edit them, or add your own by dropping a file there.
+15 themes are bundled. **Mezura** is the default look, and it paints its text in the colors of your terminal's own scheme, so it reads well on any terminal, light or dark. The others are prettier and made for one kind of terminal: Catppuccin, Dracula, Forest, Gruvbox, Meadow and Ocean for a dark background, each with a ```-light``` version for a light one, and **Mezura-classic**, the look of earlier versions, for a dark one. **Uncolored** has no color at all and keeps the report readable with nothing but bold, italic and dim. See them all with ```--show-themes``` or in the [theme editor](https://subamanis.github.io/mezura/theme-editor/), and pick the one that suits your terminal. Edit any of them but Mezura, which follows the default look, or add your own by dropping a file there.
 
 ```--show-themes``` previews each of them on the same figures, which is where these three come from:
 
@@ -668,7 +683,7 @@ With that said, it is important to mention the following limitations:
 
 - On Linux and macOS a file is read without asking its size first, and the first read that comes back short is taken as its end. A read that fails partway through, on a failing disk or a network mount that answers short, hands back what it managed and reports the error only on the next call, which is never made: such a file is counted with the part that was read and does not appear among the faulty files. Asking would cost one system call per file, and that was decided against. On Windows the size comes with the directory listing and the whole file is read.
 
-- On Linux and macOS a file of 256 KB or more is mapped into memory, since mapping it costs less than copying it out of the page cache. If another program truncates that file in place during the few milliseconds mezura spends on it, the run dies with a bus error. If it writes into the file in place without truncating it, that file is counted from a mix of its old and new bytes. Both take a write into that same file, landing inside that window, on a file of that size. A save through a new file renamed over the old one, which is how editors and git write, leaves the mapped file alone. A file modified in the last five seconds is read the old way, so one being generated at that moment is never mapped. ripgrep's memory maps carry the same exposure, and its help says so.
+- On Linux and macOS a file of 256 KB or more is mapped into memory, since mapping it costs less than copying it out of the page cache. If another program truncates that file in place during the few milliseconds mezura spends on it, the run dies with a bus error. If it writes into the file in place without truncating it, that file is counted from a mix of its old and new bytes. Both take a write into that same file, landing inside that window, on a file of that size. A save through a new file renamed over the old one, which is how editors and git write, never touches the mapped file. A file modified in the last five seconds is read the old way, so one being generated at that moment is never mapped. ripgrep's memory maps carry the same exposure, and its help says so.
 
 
 ## How it compares
@@ -734,7 +749,7 @@ The report goes to the error output, one line each:
 | `[phase] producers alive` | How long the directory walk ran, how long the counting went on after it, how many files were still queued when the walk ended |
 | `[phase] N consumers` | Where the counting threads' time went: starved (an empty queue while the walk still ran), opening, reading, parsing, summed over every thread, so the shares are the point |
 | `[phase] N files` | How many files and megabytes were read, and at what rate per thread |
-| `[phase] consumers' exit` | When the first counting thread ran out of work and when the last one finished, the tail one thread carries alone |
+| `[phase] consumers' exit` | When the first counting thread ran out of work and when the last one finished, the tail that one thread carries by itself |
 | `[phase] test modules` | Rust modules declared on a line of test code, the files that made test code whole, and how long that took. Printed only when there is one |
 | `[finish]` | The counting, the printing, and the whole command |
 
@@ -769,7 +784,7 @@ Remove-MpPreference -ExclusionProcess "mezura.exe"
 
 **Note:** This is a common requirement for file-scanning tools (similar to build tools, IDEs, etc.). Only add this exclusion if you trust the source of the executable.
 
-**The exclusion is matched on the exact filename**, so a copy you renamed to anything else does not have it, and on this machine that alone measured 1.28x on a large repository with byte-identical binaries. Worth knowing if you keep several builds around, or if you ever time one against another.
+**The exclusion is matched on the exact filename**, so a copy you renamed to anything else does not have it, and on this machine that by itself measured 1.28x on a large repository with byte-identical binaries. Worth knowing if you keep several builds around, or if you ever time one against another.
 
 
 ## Contributing

@@ -143,9 +143,9 @@ pub struct ModuleResult {
     pub name: Option<String>,
     /// This module's languages.
     pub per_language: HashMap<String, Stats>,
-    /// The same breakdown [`RunResult::nested_languages`] holds, for this module's files alone.
+    /// The same breakdown [`RunResult::nested_languages`] holds, for this module's files only.
     pub nested_languages: HashMap<String, HashMap<String, Stats>>,
-    /// The same share [`RunResult::tests`] holds, for this module's files alone.
+    /// The same share [`RunResult::tests`] holds, for this module's files only.
     pub tests: HashMap<String, TestCode>,
     /// One entry per file, keyed by language. Empty unless [`crate::EngineConfig::collect_files`]
     /// asked for it.
