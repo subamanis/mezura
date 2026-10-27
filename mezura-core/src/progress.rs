@@ -5,8 +5,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 /// Hand one to [`crate::run_watched`] and read it from another thread. The counters may be a file
 /// behind at any moment, since they are meant for a display and not for arithmetic.
 // The counters are relaxed. The flag is release against acquire, so a reader who sees the walk
-// finished also sees every file the walk found. Only a run that returns 'Ok' promises 'files_found'
-// is final at that moment: one that panics out raises the flag on its way with the walk still moving.
+// finished also sees every file the walk found. A run that panics out raises the flag once every
+// thread has stopped, so 'files_found' is final then too, but it may be short of the tree. Only a
+// run that returns 'Ok' promises it is whole.
 #[derive(Debug, Default)]
 pub struct ScanProgress {
     files_found: AtomicUsize,

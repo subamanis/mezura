@@ -984,19 +984,19 @@ fn a_run_with_no_targets_is_an_error_not_an_empty_answer() {
 // that: a watcher waiting on it must not wait forever because the run never started
 #[test]
 fn the_walk_flag_rises_even_when_the_run_refuses() {
-    let progress = std::sync::Arc::new(mezura_core::ScanProgress::default());
+    let progress = mezura_core::ScanProgress::default();
     let config = EngineConfig::default();
     let (languages, _) = Languages::shipped(&config);
 
-    let refused = run_watched(&config, languages, Some(progress.clone()), |_| {});
+    let refused = run_watched(&config, languages, Some(&progress), |_| {});
     assert!(refused.is_err());
     assert!(progress.is_walk_done(), "a refused run left the walk flag down forever");
 
     // and the same for a run that dies resolving its targets, which is a later refusal
     let config = EngineConfig::new(["./does-not-exist-walk-flag"]);
     let (languages, _) = Languages::shipped(&config);
-    let progress = std::sync::Arc::new(mezura_core::ScanProgress::default());
-    assert!(run_watched(&config, languages, Some(progress.clone()), |_| {}).is_err());
+    let progress = mezura_core::ScanProgress::default();
+    assert!(run_watched(&config, languages, Some(&progress), |_| {}).is_err());
     assert!(progress.is_walk_done());
 }
 

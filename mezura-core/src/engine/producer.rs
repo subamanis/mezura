@@ -4,13 +4,13 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-use std::thread::JoinHandle;
+use std::thread::{Scope, ScopedJoinHandle};
 use std::time::Duration;
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 
 use crate::{AppliedPresetsMut, EngineConfig, FilesPresent, GitignoreStack, ObeyedIgnoreFiles, ParsableFile, ScanProgress,
-        SharedModuleLookups, TraversedDir, UnreadableDirDetails};
+        TraversedDir, UnreadableDirDetails};
 use crate::engine::identity::ModuleLookups;
 use crate::engine::is_the_same_name;
 use crate::engine::modules::{ModuleId, Modules};
@@ -22,19 +22,20 @@ use crate::engine::test_detection::{ActivePreset, BuildFilesSeen, DirectoryScope
 // how many of them have gone idle against how many started: one that dies without ever going idle
 // makes that count unreachable and the rest wait on it forever. The catch marks the dead one idle on
 // its way out and records what killed it, which 'run' turns into an error after the joins.
-pub(crate) fn start_producer_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>,
-        stealers: Arc<Vec<Stealer<TraversedDir>>>, idle_producers: Arc<AtomicUsize>, language_lookups: SharedModuleLookups,
-        exclude_patterns: Arc<PathPatternMatcher>, test_patterns: Arc<PathPatternMatcher>,
-        config: Arc<EngineConfig>, files_stats: Arc<Mutex<FilesPresent>>, modules: Arc<Modules>,
-        unreadable_dirs: Arc<Mutex<Vec<UnreadableDirDetails>>>, applied_presets: AppliedPresetsMut,
-        producers_total: Arc<AtomicUsize>, worker_panics: Arc<Mutex<Vec<String>>>, progress: Arc<ScanProgress>)
--> std::io::Result<JoinHandle<()>>
+pub(crate) fn start_producer_thread<'scope>(scope: &'scope Scope<'scope, '_>, id: usize,
+        files_injector: &'scope Injector<ParsableFile>, dirs_injector: &'scope Injector<TraversedDir>, worker: Worker<TraversedDir>,
+        stealers: &'scope [Stealer<TraversedDir>], idle_producers: &'scope AtomicUsize, language_lookups: &'scope ModuleLookups,
+        exclude_patterns: &'scope PathPatternMatcher, test_patterns: &'scope PathPatternMatcher,
+        config: &'scope EngineConfig, files_stats: &'scope Mutex<FilesPresent>, modules: &'scope Modules,
+        unreadable_dirs: &'scope Mutex<Vec<UnreadableDirDetails>>, applied_presets: &'scope AppliedPresetsMut,
+        producers_total: &'scope AtomicUsize, worker_panics: &'scope Mutex<Vec<String>>, progress: &'scope ScanProgress)
+-> std::io::Result<ScopedJoinHandle<'scope, ()>>
 {
-    thread::Builder::new().name(format!("producer-{id}")).spawn(move || {
+    thread::Builder::new().name(format!("producer-{id}")).spawn_scoped(scope, move || {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||
-                search_for_files(id, files_injector, dirs_injector, worker, &stealers, idle_producers.clone(),
-                        language_lookups, exclude_patterns, test_patterns, config, modules, &applied_presets,
-                        &producers_total, &progress)));
+                search_for_files(id, files_injector, dirs_injector, worker, stealers, idle_producers,
+                        language_lookups, exclude_patterns, test_patterns, config, modules, applied_presets,
+                        producers_total, progress)));
         match outcome {
             Ok((found, unreadable)) => {
                 if !unreadable.is_empty() {
@@ -53,10 +54,10 @@ pub(crate) fn start_producer_thread(id: usize, files_injector: Arc<Injector<Pars
     })
 }
 
-fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs_injector: Arc<Injector<TraversedDir>>, worker: Worker<TraversedDir>,
-        stealers: &[Stealer<TraversedDir>], idle_producers: Arc<AtomicUsize>,
-        language_lookups: SharedModuleLookups, exclude_patterns: Arc<PathPatternMatcher>, test_patterns: Arc<PathPatternMatcher>,
-        config: Arc<EngineConfig>, modules: Arc<Modules>, applied_presets: &Mutex<Vec<Arc<ActivePreset>>>,
+fn search_for_files(id: usize, files_injector: &Injector<ParsableFile>, dirs_injector: &Injector<TraversedDir>, worker: Worker<TraversedDir>,
+        stealers: &[Stealer<TraversedDir>], idle_producers: &AtomicUsize,
+        language_lookups: &ModuleLookups, exclude_patterns: &PathPatternMatcher, test_patterns: &PathPatternMatcher,
+        config: &EngineConfig, modules: &Modules, applied_presets: &AppliedPresetsMut,
         producers_total: &AtomicUsize, progress: &ScanProgress)
 -> (FilesPresent, Vec<UnreadableDirDetails>)
 {
@@ -69,7 +70,7 @@ fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs
     loop {
         // Newest of its own subdirectories first, so a thread finishes the branch it is in before it
         // starts another.
-        let next_dir = worker.pop().or_else(|| steal_a_dir(id, &dirs_injector, stealers, &worker));
+        let next_dir = worker.pop().or_else(|| steal_a_dir(id, dirs_injector, stealers, &worker));
 
         if let Some(dir) = &next_dir {
             if should_terminate {
@@ -92,12 +93,12 @@ fn search_for_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, dirs
                     // found. A listing made streaming would break that without a word.
                     let entries = entries.flatten().collect::<Vec<_>>();
                     let (present, build_files, trigger_files) = find_ignore_build_and_trigger_files_among(&entries,
-                            ObeyedIgnoreFiles::of(&config), config.detect_tests);
+                            ObeyedIgnoreFiles::of(config), config.detect_tests);
                     let gitignore_stack = GitignoreStack::extend_with_ignore_files(&dir.path,
                             dir.gitignore_stack.clone(), &present);
                     let with_presets = turn_on_presets(&dir.scope, trigger_files, &dir.path, presets_taken_back, applied_presets);
-                    traverse_dir(&files_injector, entries, &worker, &language_lookups, &exclude_patterns, dir.exclude_root,
-                            &test_patterns, &mut patterns_found, &gitignore_stack, &config, &modules, dir.module,
+                    traverse_dir(files_injector, entries, &worker, language_lookups, exclude_patterns, dir.exclude_root,
+                            test_patterns, &mut patterns_found, &gitignore_stack, config, modules, dir.module,
                             with_presets.as_ref().unwrap_or(&dir.scope), build_files, &dir.path, &mut files_present, progress)
                 },
                 // Everything under it goes uncounted and reaches no total, not even the number of
@@ -327,7 +328,7 @@ mod tests {
         (total, relevant, excluded, found_files)
     }
 
-    fn scan(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<ParsableFile>, Arc<Modules>) {
+    fn scan(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<ParsableFile>, Modules) {
         // The rule the real parser applies. Whitespace separates one target from the next only once a
         // module has been named, so a path with a space in it survives while nothing is named.
         let declares_a_module = target.contains('=');
@@ -355,25 +356,24 @@ mod tests {
         // The same first step 'run' takes, with the flags the walk is about to obey
         let targets = crate::engine::targets::resolve(&config.targets, crate::ObeyedIgnoreFiles::of(&config),
                 config.should_search_in_dotted).unwrap();
-        let config = Arc::new(config);
-        let language_map = Arc::new(crate::languages::keyed_by_name(
-                crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0));
-        let files_injector = Arc::new(Injector::new());
-        let dirs_injector = Arc::new(Injector::new());
-        let idle_producers = Arc::new(AtomicUsize::new(0));
-        let language_lookups: SharedModuleLookups = Arc::new(ModuleLookups::OfTheWholeRun(LanguageLookup {
+        let language_map = crate::languages::keyed_by_name(
+                crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0);
+        let files_injector = Injector::new();
+        let dirs_injector = Injector::new();
+        let idle_producers = AtomicUsize::new(0);
+        let language_lookups = ModuleLookups::OfTheWholeRun(LanguageLookup {
                         by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
                         by_shebang: build_language_map_by(ClaimKind::Shebang, &language_map, &Default::default(), &Default::default()).0,
-                        ..Default::default() }));
-        let modules = Arc::new(Modules::of(&targets));
+                        ..Default::default() });
+        let modules = Modules::of(&targets);
         let mut files_present = FilesPresent::default();
-        let test_patterns = Arc::new(PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed).unwrap());
+        let test_patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed).unwrap();
         let above = queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector, &mut files_present,
                 &language_lookups, &modules, &ScanProgress::default());
 
-        let exclude_patterns = Arc::new(PathPatternMatcher::compile(&config.exclude_patterns.patterns, TakingBack::Refused).unwrap());
-        let (found, _) = search_for_files(0, files_injector.clone(), dirs_injector,
-                Worker::new_lifo(), &[], idle_producers, language_lookups, exclude_patterns, test_patterns, config, modules.clone(),
+        let exclude_patterns = PathPatternMatcher::compile(&config.exclude_patterns.patterns, TakingBack::Refused).unwrap();
+        let (found, _) = search_for_files(0, &files_injector, &dirs_injector,
+                Worker::new_lifo(), &[], &idle_producers, &language_lookups, &exclude_patterns, &test_patterns, &config, &modules,
                 &Mutex::new(above), &AtomicUsize::new(1), &ScanProgress::default());
 
         let mut found_files = Vec::new();
@@ -614,24 +614,23 @@ mod tests {
         let config = EngineConfig { threads: crate::Threads::new(1, 1), ..EngineConfig::new([&root_str]) };
         let targets = crate::engine::targets::resolve(&config.targets, crate::ObeyedIgnoreFiles::of(&config),
                 config.should_search_in_dotted).unwrap();
-        let config = Arc::new(config);
-        let language_map = Arc::new(crate::languages::keyed_by_name(
-                crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0));
-        let language_lookups: SharedModuleLookups = Arc::new(ModuleLookups::OfTheWholeRun(
+        let language_map = crate::languages::keyed_by_name(
+                crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0);
+        let language_lookups = ModuleLookups::OfTheWholeRun(
                 LanguageLookup { by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
-                        ..Default::default() }));
-        let modules = Arc::new(Modules::of(&targets));
-        let (files_injector, dirs_injector) = (Arc::new(Injector::new()), Arc::new(Injector::new()));
+                        ..Default::default() });
+        let modules = Modules::of(&targets);
+        let (files_injector, dirs_injector) = (Injector::new(), Injector::new());
         let mut files_present = FilesPresent::default();
-        let test_patterns = Arc::new(PathPatternMatcher::compile(&[] as &[&str], TakingBack::Allowed).unwrap());
+        let test_patterns = PathPatternMatcher::compile(&[] as &[&str], TakingBack::Allowed).unwrap();
         queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector,
                 &mut files_present, &language_lookups, &modules, &ScanProgress::default());
         dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0, DirectoryScope::default(), 0));
 
-        let exclude_patterns = Arc::new(PathPatternMatcher::compile(&[] as &[&str], TakingBack::Refused).unwrap());
-        let (found, unreadable) = search_for_files(0, files_injector, dirs_injector,
-                Worker::new_lifo(), &[], Arc::new(AtomicUsize::new(0)), language_lookups, exclude_patterns, test_patterns,
-                config, modules, &Mutex::new(Vec::new()), &AtomicUsize::new(1), &ScanProgress::default());
+        let exclude_patterns = PathPatternMatcher::compile(&[] as &[&str], TakingBack::Refused).unwrap();
+        let (found, unreadable) = search_for_files(0, &files_injector, &dirs_injector,
+                Worker::new_lifo(), &[], &AtomicUsize::new(0), &language_lookups, &exclude_patterns, &test_patterns,
+                &config, &modules, &Mutex::new(Vec::new()), &AtomicUsize::new(1), &ScanProgress::default());
 
         fs::remove_dir_all(&root).unwrap();
 

@@ -150,6 +150,9 @@ Breaking:
   `preset-file-shadowed` left it, since a program built on the crate raises those itself.
 - `Language::with_line_continuation` takes one `LineContinuation`, the type
   `Language::line_continuation` holds. It took the symbol and two `bool`s.
+- `run_watched` takes its `ScanProgress` as an `Option<&ScanProgress>`, where it took an
+  `Option<Arc<ScanProgress>>`. Every thread it starts has stopped by the time it returns, a panic of
+  its callback included.
 
 Fixes:
 

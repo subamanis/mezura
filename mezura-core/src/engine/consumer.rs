@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
-use std::thread::JoinHandle;
+use std::thread::{Scope, ScopedJoinHandle};
 use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
@@ -11,26 +11,28 @@ use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, FileEntry, File
         Language, ModuleRowsMut, NestedLanguageMapMut, ParsableFile, ScanProgress, ScanSkip, SkippedFiles, Stats,
         StatsMapMut, TestCode, TestCodeMapMut, phase_timing};
 use crate::engine::file_parser;
+use crate::engine::identity::ModuleLookups;
 use crate::engine::targets::spell_out;
 use crate::engine::test_detection::ModuleRow;
 use crate::languages::NestedLanguageDefinitions;
 
 const INITIAL_FILE_BUFFER_BYTES : usize = 150;
 
-pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<ParsableFile>>, worker: Worker<ParsableFile>,
-        peers: Arc<Vec<Stealer<ParsableFile>>>, faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-        stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, tests_per_module: TestCodeMapMut,
-        files_per_module: FilesPerModuleMut, module_rows: ModuleRowsMut,
-        language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
-        language_lookups: crate::SharedModuleLookups,
-        config: Arc<EngineConfig>, started: Instant, counting_ended: Arc<AtomicU64>,
-        consumer_exits: Arc<(AtomicU64, AtomicU64)>, skipped_files: Arc<Mutex<SkippedFiles>>,
-        progress: Arc<ScanProgress>) -> std::io::Result<JoinHandle<()>>
+pub(crate) fn start_parser_thread<'scope>(scope: &'scope Scope<'scope, '_>, id: usize,
+        files_injector: &'scope Injector<ParsableFile>, worker: Worker<ParsableFile>, peers: &'scope [Stealer<ParsableFile>],
+        faulty_files: &'scope FaultyFilesListMut, finish_condition: &'scope AtomicBool,
+        stats_per_module: &'scope StatsMapMut, nested_per_module: &'scope NestedLanguageMapMut,
+        tests_per_module: &'scope TestCodeMapMut, files_per_module: &'scope FilesPerModuleMut, module_rows: &'scope ModuleRowsMut,
+        language_map: &'scope HashMap<String,Language>, nested_definitions: &'scope NestedLanguageDefinitions,
+        language_lookups: &'scope ModuleLookups,
+        config: &'scope EngineConfig, started: Instant, counting_ended: &'scope AtomicU64,
+        consumer_exits: &'scope (AtomicU64, AtomicU64), skipped_files: &'scope Mutex<SkippedFiles>,
+        progress: &'scope ScanProgress) -> std::io::Result<ScopedJoinHandle<'scope, ()>>
 {
-    thread::Builder::new().name(format!("consumer-{id}")).spawn(move || {
-        start_parsing_files(id, files_injector, worker, &peers, faulty_files, finish_condition, stats_per_module,
+    thread::Builder::new().name(format!("consumer-{id}")).spawn_scoped(scope, move || {
+        start_parsing_files(id, files_injector, worker, peers, faulty_files, finish_condition, stats_per_module,
                 nested_per_module, tests_per_module, files_per_module, module_rows, language_map, nested_definitions,
-                language_lookups, config, &skipped_files, &progress);
+                language_lookups, config, skipped_files, progress);
         // The last thing this thread does, and the only honest answer to how long the counting took:
         // 'run' joins these threads after calling the caller's callback, so its own clock cannot tell
         // the two apart.
@@ -44,13 +46,13 @@ pub(crate) fn start_parser_thread(id: usize, files_injector: Arc<Injector<Parsab
     })
 }
 
-fn start_parsing_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, worker: Worker<ParsableFile>,
-    peers: &[Stealer<ParsableFile>], faulty_files: FaultyFilesListMut, finish_condition: Arc<AtomicBool>,
-    stats_per_module: StatsMapMut, nested_per_module: NestedLanguageMapMut, tests_per_module: TestCodeMapMut,
-    files_per_module: FilesPerModuleMut, module_rows: ModuleRowsMut,
-    language_map: Arc<HashMap<String,Language>>, nested_definitions: Arc<NestedLanguageDefinitions>,
-    language_lookups: crate::SharedModuleLookups,
-    config: Arc<EngineConfig>, skipped_files: &Mutex<SkippedFiles>, progress: &ScanProgress)
+fn start_parsing_files(id: usize, files_injector: &Injector<ParsableFile>, worker: Worker<ParsableFile>,
+    peers: &[Stealer<ParsableFile>], faulty_files: &FaultyFilesListMut, finish_condition: &AtomicBool,
+    stats_per_module: &StatsMapMut, nested_per_module: &NestedLanguageMapMut, tests_per_module: &TestCodeMapMut,
+    files_per_module: &FilesPerModuleMut, module_rows: &ModuleRowsMut,
+    language_map: &HashMap<String,Language>, nested_definitions: &NestedLanguageDefinitions,
+    language_lookups: &ModuleLookups,
+    config: &EngineConfig, skipped_files: &Mutex<SkippedFiles>, progress: &ScanProgress)
 {
     let mut buf = Vec::with_capacity(INITIAL_FILE_BUFFER_BYTES);
     let mut parse_buffers = file_parser::ParseBuffers::default();
@@ -101,11 +103,11 @@ fn start_parsing_files(id: usize, files_injector: Arc<Injector<ParsableFile>>, w
                 }
                 idle_iterations = 0;
                 let lang_name = parsable_file.language_name.as_ref();
-                let lookup = file_parser::NestedLanguageLookup::of(&language_map, &nested_definitions);
+                let lookup = file_parser::NestedLanguageLookup::of(language_map, nested_definitions);
                 let shebang_map = &language_lookups.get_of_module(parsable_file.module).by_shebang;
                 match file_parser::parse_file(&parsable_file.path, parsable_file.size, lang_name, &mut buf,
                         &mut parse_buffers, &lookup, &mut keyword_matchers, &mut identification_matchers,
-                        &config, parsable_file.written_by_hand, parsable_file.test_scope,
+                        config, parsable_file.written_by_hand, parsable_file.test_scope,
                         parsable_file.extension_rules.as_deref(), shebang_map) {
                     Ok(file_parser::FileOutcome::Counted(mut report, resolved)) => {
                         for preset in parsable_file.decided_by_presets.iter().flat_map(|presets| presets.iter()) {

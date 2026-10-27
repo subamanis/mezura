@@ -145,7 +145,7 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
         }
     } else {
         let resolved = mezura_core::Languages::resolve(&of_git_revision, languages, conflicts).0;
-        let mut result = mezura_core::run_watched(&of_git_revision, resolved, Some(progress.clone()), |_| {})
+        let mut result = mezura_core::run_watched(&of_git_revision, resolved, Some(&progress), |_| {})
                 .map_err(|error| GitError::CountingRevision { revision: git_revision.to_owned(), error })?;
         move_file_paths_out_of_checkout(&mut result, &of_git_revision.targets, &counted_declared);
         move_preset_directories_out_of_checkout(&mut result, &checkout.path, &side.resolved.repository);

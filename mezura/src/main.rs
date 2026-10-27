@@ -251,10 +251,10 @@ fn main() -> ExitCode {
     let live = crate::animated_display::start_walk_display(&config, progress.clone());
 
     let mut parsing_live = None;
-    let outcome = mezura_core::run_watched(&config.engine, languages, Some(progress.clone()), |scan| {
+    let outcome = mezura_core::run_watched(&config.engine, languages, Some(&progress), |scan| {
         live.finish();
         announce_traversal(&config, scan);
-        parsing_live = Some(crate::animated_display::start_parsing_display(&config, progress));
+        parsing_live = Some(crate::animated_display::start_parsing_display(&config, progress.clone()));
     });
     if let Some(x) = &parsing_live {
         x.finish();
