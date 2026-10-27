@@ -1446,7 +1446,7 @@ impl CarriedRecord {
             CarriedRecord::Str { symbol, level, since_line, .. } => CarriedRecord::Str {
                 symbol, level, since_line,
                 ends: state.open_str_symbol.is_none() || opened_here.string },
-            other => other,
+            other @ (CarriedRecord::Nothing | CarriedRecord::Continuation { .. }) => other,
         }
     }
 }
@@ -3389,7 +3389,7 @@ mod tests {
 
     fn c_like_with_a_splice() -> Language {
         Language::new("c-like", ["c"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], [])
-                .with_line_continuation("\\", true, true)
+                .with_line_continuation(LineContinuation { symbol: "\\".to_owned(), in_strings: true, in_comments: true })
     }
 
     // 'int a = 1; // comment \' joins the next line to its comment in C, code on the line or not.

@@ -169,7 +169,7 @@ fn read_ini(text: &str, section: &str) -> Section {
                     value.push_str(content.trim_end());
                 },
                 Last::Key(None) => (),
-                _ => return Section::Absent
+                Last::Nothing | Last::Section => return Section::Absent
             }
         } else {
             if last == Last::Nothing { return Section::Absent; }
@@ -406,8 +406,8 @@ impl Cursor<'_> {
             }
             match self.read_value(reading, true)? {
                 Value::Str(element) => elements.push(element),
-                _ if reading == Reading::Wanted => return Err(Unreadable),
-                _ => all_strings = false
+                Value::Strings(_) | Value::Other if reading == Reading::Wanted => return Err(Unreadable),
+                Value::Strings(_) | Value::Other => all_strings = false
             }
             self.skip_blank_lines_and_comments();
             match self.peek() {

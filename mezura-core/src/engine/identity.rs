@@ -18,7 +18,7 @@ const SHEBANG_READ_LIMIT : usize = 256;
 
 /// The three ways a file's name says what language it is. A whole name is answered before an
 /// extension, and the `#!` line only for a file that has neither.
-#[derive(Debug,PartialEq,Eq,PartialOrd,Ord,Clone,Copy)]
+#[derive(Debug,PartialEq,Eq,PartialOrd,Ord,Hash,Clone,Copy)]
 #[non_exhaustive]
 pub enum ClaimKind {
     /// What follows the last dot, `rs` or `py`.
@@ -56,11 +56,17 @@ impl ClaimKind {
     }
 }
 
+impl std::fmt::Display for ClaimKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// What decided a name that more than one language claimed.
 ///
 /// The first two are decisions somebody took. The third is a tiebreak nobody asked for, and the one
 /// that can put a language's comments into another's code.
-#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+#[derive(Debug,PartialEq,Eq,Hash,Clone,Copy)]
 #[non_exhaustive]
 pub enum SettledBy {
     /// A pair of [`crate::EngineConfig::forced_languages`], which decides one run.
@@ -79,6 +85,12 @@ impl SettledBy {
             Self::ConflictRule => "conflict_rule",
             Self::AlphabeticalTiebreak => "alphabetical_tiebreak"
         }
+    }
+}
+
+impl std::fmt::Display for SettledBy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

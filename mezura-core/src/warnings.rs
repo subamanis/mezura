@@ -3,7 +3,7 @@
 
 /// What a warning is about. Stable, so a script can key on it: the wording of a message is free to
 /// change, this is not.
-#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+#[derive(Debug,PartialEq,Eq,Hash,Clone,Copy)]
 #[non_exhaustive]
 pub enum Code {
     /// Two languages claim one extension and no rule settles it, so it went to the alphabetically
@@ -71,6 +71,12 @@ impl Code {
     }
 }
 
+impl std::fmt::Display for Code {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One thing worth knowing about a run that still produced an answer.
 ///
 /// The three fields are for three different readers.
@@ -101,7 +107,7 @@ impl Warning {
 /// Whether the numbers can be trusted, which is the question worth answering without knowing every
 /// code: something written against this keeps working when a later version adds a code it never
 /// heard of.
-#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+#[derive(Debug,PartialEq,Eq,Hash,Clone,Copy)]
 pub enum Affects {
     /// The numbers are wrong for the settings that were applied. Rewriting the command does not fix
     /// it, and nothing should be decided on figures raised with this.
@@ -118,6 +124,12 @@ impl Affects {
             Self::Counts => "counts",
             Self::Settings => "settings"
         }
+    }
+}
+
+impl std::fmt::Display for Affects {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

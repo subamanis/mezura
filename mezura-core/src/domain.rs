@@ -163,17 +163,14 @@ impl Language {
         self
     }
 
-    /// Sets the symbol that joins a line to the one after it, and whether the join also happens
-    /// inside a string and inside a comment.
+    /// Sets the symbol that joins a line to the one after it, and where that join also happens.
     ///
     /// An empty symbol leaves the language with no line continuation at all, since every line ends
     /// in one and the whole file would join into a single line.
-    pub fn with_line_continuation(mut self, symbol: &str, in_strings: bool, in_comments: bool) -> Self {
-        if symbol.is_empty() {
-            return self;
+    pub fn with_line_continuation(mut self, continuation: LineContinuation) -> Self {
+        if !continuation.symbol.is_empty() {
+            self.line_continuation = Some(continuation);
         }
-        self.line_continuation = Some(LineContinuation {
-            symbol: symbol.to_owned(), in_strings, in_comments });
         self
     }
 
@@ -596,7 +593,7 @@ impl MultilineString {
 }
 
 /// Whose rules a heredoc follows, which decide the word after its opener and the line that closes it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum HeredocRules {
     /// `<<EOF`, and `<<-EOF` closing behind tabs. One that never closes runs to the end of the file.
@@ -610,27 +607,48 @@ pub enum HeredocRules {
 }
 
 impl HeredocRules {
+    /// All four.
+    pub const ALL : [HeredocRules; 4] = [HeredocRules::Shell, HeredocRules::Perl, HeredocRules::Ruby, HeredocRules::Php];
+
     /// The rules a language file names, `None` for a name that is none of them.
     pub fn parse(name: &str) -> Option<HeredocRules> {
-        match name {
-            "shell" => Some(HeredocRules::Shell),
-            "perl" => Some(HeredocRules::Perl),
-            "ruby" => Some(HeredocRules::Ruby),
-            "php" => Some(HeredocRules::Php),
-            _ => None
+        Self::ALL.into_iter().find(|rules| rules.as_str() == name)
+    }
+
+    /// The name a language file gives these rules, the one [`HeredocRules::parse`] reads back.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HeredocRules::Shell => "shell",
+            HeredocRules::Perl => "perl",
+            HeredocRules::Ruby => "ruby",
+            HeredocRules::Php => "php"
         }
     }
 
     pub(crate) fn get_opener(self) -> &'static str {
         match self {
             HeredocRules::Php => "<<<",
-            _ => "<<"
+            HeredocRules::Shell | HeredocRules::Perl | HeredocRules::Ruby => "<<"
         }
     }
 
     // The shell forgives a heredoc the file never closes. The other three refuse to compile one.
     pub(crate) fn needs_its_closing_line(self) -> bool {
         self != HeredocRules::Shell
+    }
+}
+
+impl std::fmt::Display for HeredocRules {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for HeredocRules {
+    type Err = UnknownSpelling;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Self::parse(name).ok_or_else(|| UnknownSpelling::of(name, Self::ALL.map(Self::as_str)))
     }
 }
 
@@ -889,7 +907,7 @@ impl LineClasses {
 /// Which of the nine a single line was sorted into. One variant per field of [`LineClasses`],
 /// named after it and described there.
 #[allow(missing_docs)]
-#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+#[derive(Debug,PartialEq,Eq,PartialOrd,Ord,Hash,Clone,Copy)]
 pub enum LineClass {
     WordsInCode,
     StringContent,
@@ -915,9 +933,15 @@ impl LineClass {
     }
 }
 
+impl std::fmt::Display for LineClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One of the three columns a report shows, which is what a [`CountingModel`] folds the nine
 /// classes into.
-#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+#[derive(Debug,PartialEq,Eq,PartialOrd,Ord,Hash,Clone,Copy)]
 pub enum Bucket {
     /// The code column.
     Code,
@@ -943,7 +967,7 @@ pub struct Span {
 }
 
 /// What a [`Span`] holds.
-#[derive(Debug,PartialEq,Eq,Clone,Copy)]
+#[derive(Debug,PartialEq,Eq,Hash,Clone,Copy)]
 pub enum SpanKind {
     /// Outside any string or comment.
     Code,
@@ -964,12 +988,18 @@ impl SpanKind {
     }
 }
 
+impl std::fmt::Display for SpanKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Where the code and comment columns come from.
 ///
 /// The counting only ever fills a [`LineClasses`]. What a column shows is this fold of those nine
 /// into three, chosen when the figures are read, so one run answers both models and switching
 /// costs no recounting.
-#[derive(Debug,PartialEq,Eq,Clone,Copy,Default)]
+#[derive(Debug,PartialEq,Eq,Hash,Clone,Copy,Default)]
 pub enum CountingModel {
     /// What a line says: words in code make it code, words only in a comment make it a comment,
     /// and punctuation and blank lines are neither. The third column is called `extra`.
@@ -982,13 +1012,13 @@ pub enum CountingModel {
 }
 
 impl CountingModel {
+    /// Both, the default first.
+    pub const ALL : [CountingModel; 2] = [CountingModel::Content, CountingModel::Region];
+
     /// Reads `content` or `region`, trimmed and in any case.
     pub fn parse(value: &str) -> Option<CountingModel> {
-        match value.trim().to_lowercase().as_str() {
-            "content" => Some(Self::Content),
-            "region" => Some(Self::Region),
-            _ => None
-        }
+        let wanted = value.trim().to_lowercase();
+        Self::ALL.into_iter().find(|model| model.as_str() == wanted)
     }
 
     /// The spelling [`CountingModel::parse`] reads back.
@@ -1062,6 +1092,44 @@ impl CountingModel {
                 .map(|(_, count)| count).sum()
     }
 }
+
+impl std::fmt::Display for CountingModel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for CountingModel {
+    type Err = UnknownSpelling;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value).ok_or_else(|| UnknownSpelling::of(value, Self::ALL.map(Self::as_str)))
+    }
+}
+
+/// Text that spells none of the values of a type, from its `FromStr`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UnknownSpelling {
+    /// The text as it was given.
+    pub written: String,
+    /// Every spelling the type reads.
+    pub accepted: Vec<&'static str>
+}
+
+impl UnknownSpelling {
+    pub(crate) fn of(written: &str, accepted: impl IntoIterator<Item = &'static str>) -> Self {
+        UnknownSpelling { written: written.to_owned(), accepted: accepted.into_iter().collect() }
+    }
+}
+
+impl std::fmt::Display for UnknownSpelling {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "'{}' spells none of {}.", self.written, self.accepted.join(", "))
+    }
+}
+
+impl std::error::Error for UnknownSpelling {}
 
 /// What was counted, for one language, one module or a whole run.
 ///
@@ -1311,8 +1379,9 @@ mod tests {
     // line and reports counts that look ordinary.
     #[test]
     fn an_empty_continuation_symbol_leaves_the_language_without_one() {
-        let language = |symbol| Language::new("L", ["l"], StringRules::escaping_nothing(), [""], &[], [])
-                .with_line_continuation(symbol, true, true);
+        let language = |symbol: &str| Language::new("L", ["l"], StringRules::escaping_nothing(), [""], &[], [])
+                .with_line_continuation(LineContinuation { symbol: symbol.to_owned(), in_strings: true,
+                        in_comments: true });
 
         assert_eq!(None, language("").line_continuation);
         assert_eq!(Some("\\".to_owned()), language("\\").line_continuation.map(|x| x.symbol));

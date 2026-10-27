@@ -2,7 +2,7 @@
 // 'Language' exists before anything has been counted, a 'Stats' of it does not.
 use std::collections::HashMap;
 
-use crate::{CountingModel, Keyword, Language, Stats};
+use crate::{CountingModel, Keyword, Language, Stats, UnknownSpelling};
 use crate::domain::FileStats;
 use crate::engine::config::{Target, Threads};
 use crate::engine::file_parser::TestReport;
@@ -319,7 +319,7 @@ pub struct FilesPresent {
 }
 
 /// Which figure decides the order of a report's rows.
-#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Copy)]
 #[non_exhaustive]
 pub enum SortCriterion {
     /// How many files the language has.
@@ -344,19 +344,14 @@ pub enum SortCriterion {
 }
 
 impl SortCriterion {
+    /// All eight.
+    pub const ALL : [SortCriterion; 8] = [SortCriterion::Files, SortCriterion::Lines, SortCriterion::Code,
+            SortCriterion::Comments, SortCriterion::Extra, SortCriterion::Blanks, SortCriterion::Size, SortCriterion::Name];
+
     /// Reads the same word a person types and a configuration file stores, trimmed and in any case.
     pub fn parse(value: &str) -> Option<SortCriterion> {
-        match value.trim().to_lowercase().as_str() {
-            "files" => Some(Self::Files),
-            "lines" => Some(Self::Lines),
-            "code" => Some(Self::Code),
-            "comments" => Some(Self::Comments),
-            "extra" => Some(Self::Extra),
-            "blanks" => Some(Self::Blanks),
-            "size" => Some(Self::Size),
-            "name" => Some(Self::Name),
-            _ => None
-        }
+        let wanted = value.trim().to_lowercase();
+        Self::ALL.into_iter().find(|criterion| criterion.as_str() == wanted)
     }
 
     /// The spelling [`SortCriterion::parse`] reads back.
@@ -402,8 +397,22 @@ impl SortCriterion {
     }
 }
 
+impl std::fmt::Display for SortCriterion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for SortCriterion {
+    type Err = UnknownSpelling;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value).ok_or_else(|| UnknownSpelling::of(value, Self::ALL.map(Self::as_str)))
+    }
+}
+
 /// The head check that sets a file aside in a directory scan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScanSkip {
     /// The average line is 1000 bytes or more.
     Minified,
@@ -424,6 +433,12 @@ impl ScanSkip {
             Self::Generated => "generated",
             Self::NotCode => "not_code"
         }
+    }
+}
+
+impl std::fmt::Display for ScanSkip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

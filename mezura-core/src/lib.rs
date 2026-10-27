@@ -54,7 +54,7 @@ pub mod warnings;
 
 pub use domain::{Bucket, CountingModel, HeredocRules, Keyword, Language, LeveledPair, LineClass, LineClasses,
         LineContinuation, MultilineString, NestedLanguage, Span, SpanKind, Stats, StringRules,
-        TestFileName};
+        TestFileName, UnknownSpelling};
 pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, PathPatterns, RepositoryCheckout,
         ScopedByModule, Target, Threads, format_module_scope, split_off_module_scope};
 pub use engine::identity::{Claim, ClaimKind, SettledBy};

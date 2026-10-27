@@ -204,7 +204,7 @@ impl PathPatternMatcher {
                             true => Unused::MatchedNothing,
                             false => Unused::NameMatchedNothing
                         } }),
-                _ => None
+                Kind::Name { .. } | Kind::Path { .. } => None
             }
         }).collect()
     }

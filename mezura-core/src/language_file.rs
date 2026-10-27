@@ -49,7 +49,7 @@ impl ConflictRules {
 }
 
 /// One rule block of the language conflicts file, named by the marker that opens it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConflictBlock {
     /// `===> contested-extensions`, filling [`ConflictRules::by_extension`].
     ContestedExtensions,
@@ -84,6 +84,12 @@ impl ConflictBlock {
             ConflictBlock::NotCodeLineStarts => NOT_CODE_LINE_STARTS,
             ConflictBlock::NotCodeLineContains => NOT_CODE_LINE_CONTAINS
         }
+    }
+}
+
+impl std::fmt::Display for ConflictBlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 

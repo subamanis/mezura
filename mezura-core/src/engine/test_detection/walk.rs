@@ -41,7 +41,7 @@ impl<'a> TestWalk<'a> {
         let markers = language.test_markers.as_slice();
         let file_markers = match by_path {
             TestsByPath::TakenBack => &[][..],
-            _ => language.test_file_markers.as_slice()
+            TestsByPath::Nothing | TestsByPath::WholeFile => language.test_file_markers.as_slice()
         };
         if markers.is_empty() && file_markers.is_empty() { return None; }
 
@@ -160,7 +160,7 @@ impl<'a> TestWalk<'a> {
         match self.state {
             State::Idle => self.candidates.get(self.next).map_or(usize::MAX, |(at, _)| *at),
             State::Inside { .. } => self.next_brace,
-            _ => 0
+            State::Seeking { .. } | State::AfterClose => 0
         }
     }
 

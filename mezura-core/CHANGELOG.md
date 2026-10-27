@@ -95,6 +95,14 @@ New:
   `Carried::Comment` names the start of either as the opener and carries the depth.
 - `LanguageNames::of_names` and `ForcedLanguages::of_rules` build either setting for the whole run
   from plain names, and from pairs of an extension and the language it is counted as.
+- `Display` on `Code`, `Affects`, `CountingModel`, `SortCriterion`, `ScanSkip`, `SpanKind`,
+  `LineClass`, `ClaimKind`, `SettledBy`, `ConflictBlock` and `HeredocRules`, writing what `as_str`
+  gives. `HeredocRules::as_str` gives the name a language file writes.
+- `FromStr` on `CountingModel`, `SortCriterion` and `HeredocRules`, failing with an
+  `UnknownSpelling` that carries the text and every spelling the type reads. `ALL` on the same three
+  holds every value, as on `ScanSkip` and `LineClass`.
+- `Hash` on every public enum whose values carry nothing, so each can key a map, and `Ord` on
+  `LineClass` and `Bucket`, in the order of their columns.
 
 Breaking:
 
@@ -140,6 +148,8 @@ Breaking:
   `conflict-line-skipped`, `config-value-ignored`, `config-section-unknown`,
   `config-section-repeated`, `command-ignored`, `config-style-invalid`, `theme-unavailable` and
   `preset-file-shadowed` left it, since a program built on the crate raises those itself.
+- `Language::with_line_continuation` takes one `LineContinuation`, the type
+  `Language::line_continuation` holds. It took the symbol and two `bool`s.
 
 Fixes:
 

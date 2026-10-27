@@ -325,7 +325,8 @@ fn decide_whole_file(absolute: &str, config: &EngineConfig, targets: Option<&Tar
                     .filter(|place| *place != absolute);
             Some(match scope {
                 TestScope::DeclaredNotTests => TestFileRule::DeclaredNotTests { pattern, matched_folder },
-                _ => TestFileRule::Declared { pattern, matched_folder }
+                TestScope::Ordinary | TestScope::Tests | TestScope::JvmSources =>
+                        TestFileRule::Declared { pattern, matched_folder }
             })
         },
         (None, TestScope::Tests) => match (decided_by_presets, find_test_directory_along(folder, checkout.as_ref()).0) {
