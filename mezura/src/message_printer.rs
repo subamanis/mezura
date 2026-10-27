@@ -889,7 +889,7 @@ pub const STYLE_HELP  :  &str =
     the code of a language that is not its tests, 'tests-' for its test code, 'file-' for the rows
     of a '--by-file' run. 'name' is the section's language, the word 'production' or 'tests', or
     the file's path, 'branch' the tree characters tying the row to the one above, and 'percent'
-    is of the language the row hangs under, or of the whole run for the tests under the total:
+    is of the language the row hangs under, or of the whole run for the rows under the total:
 
       nested-name  nested-branch  nested-files  nested-lines  nested-code  nested-comments
       nested-extra  nested-size  nested-size-unit  nested-percent
@@ -1067,7 +1067,7 @@ pub const TESTS_BREAKDOWN_HELP  :  &str =
                                    └─ tests              8
 
     Under 'share' and 'split' a 'tests' row under the total adds up the test code of every
-    language. An HTML page, a '.vue' or any other file holding sections of other languages splits
+    language, and under 'split' a 'production' row above it adds up the rest. An HTML page, a '.vue' or any other file holding sections of other languages splits
     its language into rows, 'HTML itself' beside the sections, and under 'share' its 'tests' row
     joins them. The JSON document carries every figure whole whichever is chosen.
 

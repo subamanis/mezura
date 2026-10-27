@@ -329,6 +329,10 @@ mezura ./ --tests "__tests__/,*.test.ts,*.test.tsx"
 mezura ./ --tests "@pytest,!tests/data/"
 ```
 
+`--tests-breakdown share`
+
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/tests-share.png" width="1000">
+
 `--show-presets` lists the presets, the shipped ones and your own, and `--save-preset <name>` keeps
 the test patterns of a run as one of yours. `--tests-breakdown split` draws the rest of the language
 as a `production` row beside the tests, `--tests-breakdown removed` leaves the tests out of every
@@ -338,6 +342,10 @@ is refused (doc tests, tests a macro writes, `describe` and the other names a fr
 function) and every known limitation with its example are in
 **[Test detection](https://github.com/subamanis/mezura/blob/HEAD/TEST_DETECTION.md)**, with the
 table of presets and the file that turns each one on.
+
+`--tests-breakdown split`
+
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/tests-split.png" width="1000">
 
 
 

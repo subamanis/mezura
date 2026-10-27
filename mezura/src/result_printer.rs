@@ -163,7 +163,7 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
 
     if print_total {
         if !is_table {
-            print_sum(theme, &shown.per_language, &shown.total, calculate_tests_of_everything(&groups).as_ref(),
+            print_sum(theme, &shown.per_language, &shown.total, &calculate_parts_of_total(&groups, &shown.total),
                     &columns, block_width, should_print_keywords);
         }
         // The overview stays global however the details were grouped
@@ -774,14 +774,26 @@ fn find_own_share_name(language: &str, has_sections: bool, breakdown: TestsBreak
 
 // Every language of every module, the hidden ones included, since the total above it counts them
 // too. A module whose rows left the tests out adds nothing, since 'removed' shows them nowhere.
-fn calculate_tests_of_everything(groups: &[Group]) -> Option<Stats> {
-    let mut sum = Stats::default();
+fn calculate_tests_of_everything(groups: &[Group]) -> Option<TestCode> {
+    let mut sum = TestCode::default();
     for group in groups.iter().filter(|group| !group.leaves_tests_out()) {
         for tests in group.tests.values() {
-            sum.add(&tests.stats);
+            sum.add(tests);
         }
     }
-    (sum.files > 0).then_some(sum)
+    (sum.stats.files > 0).then_some(sum)
+}
+
+fn calculate_parts_of_total(groups: &[Group], total: &Stats) -> Vec<(&'static str, RowKind, Stats)> {
+    let Some(tests) = calculate_tests_of_everything(groups) else {
+        return Vec::new();
+    };
+    let mut parts = Vec::with_capacity(2);
+    if groups[0].tests_breakdown == TestsBreakdown::Split {
+        parts.push((PRODUCTION_NAME, RowKind::Production, tests.calculate_production_of(total)));
+    }
+    parts.push((TESTS_NAME, RowKind::Tests, tests.stats));
+    parts
 }
 
 // 'stats' is carried. A lookup by the name in the cell would be one search per row, and with
@@ -797,7 +809,7 @@ struct NamedRow<'a> {
 }
 
 // The notes go last, above the total, since they say why the rows above do not add up to it
-fn create_named_rows<'a>(groups: &'a [Group], print_total: bool, notes: &[String]) -> Vec<NamedRow<'a>> {
+fn create_named_rows<'a>(groups: &'a [Group], total: &Stats, print_total: bool, notes: &[String]) -> Vec<NamedRow<'a>> {
     let grouped = is_grouped(groups);
     let mut rows = Vec::with_capacity(groups.len() * 4);
     for group in groups {
@@ -822,10 +834,11 @@ fn create_named_rows<'a>(groups: &'a [Group], print_total: bool, notes: &[String
     if print_total {
         rows.push(NamedRow { cell: TOTAL_NAME.to_owned(), kind: RowKind::Total, group: &groups[0],
                 language: None, stats: None, under_production: None });
-        if let Some(tests) = calculate_tests_of_everything(groups) {
-            rows.push(NamedRow { cell: format!("{BRANCH_INDENT}{}{TESTS_NAME}", find_branch_marker(true)),
-                    kind: RowKind::Tests, group: &groups[0], language: None, stats: Some(Cow::Owned(tests)),
-                    under_production: None });
+        let parts = calculate_parts_of_total(groups, total);
+        let last = parts.len().saturating_sub(1);
+        for (at, (name, kind, stats)) in parts.into_iter().enumerate() {
+            rows.push(NamedRow { cell: format!("{BRANCH_INDENT}{}{name}", find_branch_marker(at == last)),
+                    kind, group: &groups[0], language: None, stats: Some(Cow::Owned(stats)), under_production: None });
         }
     }
 
@@ -1084,7 +1097,7 @@ fn build_table_cells<'a>(theme: &'a Theme, groups: &[Group], total: &Stats, prin
     ];
     let column_count = columns.len();
 
-    let described = create_named_rows(groups, print_total, notes);
+    let described = create_named_rows(groups, total, print_total, notes);
     let rows = described.iter().map(|row| {
         match find_row_figures(row, total, model) {
             Some(figures) => {
@@ -1357,10 +1370,16 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
             files_hidden += hidden;
         }
     }
+    let (tests_before, tests_now) = (TestCode::calculate_total_of(&baseline.tests), TestCode::calculate_total_of(&subject.tests));
+    let has_tests = !config.view.hidden.tests && !without_tests && (tests_before.stats.files > 0 || tests_now.stats.files > 0);
+    let production = (has_tests && config.view.tests_breakdown == TestsBreakdown::Split).then(|| ComparedRow {
+            name: format!("{BRANCH_INDENT}{}{PRODUCTION_NAME}", find_branch_marker(false)), kind: RowKind::Production,
+            depth: 0, baseline: tests_before.calculate_production_of(&run_before.total),
+            subject: tests_now.calculate_production_of(&run_now.total) });
     rows.push(ComparedRow { name: TOTAL_NAME.to_owned(), kind: RowKind::Total, depth: 0,
             baseline: run_before.total.into_owned(), subject: run_now.total.into_owned() });
-    let (tests_before, tests_now) = (TestCode::calculate_total_of(&baseline.tests), TestCode::calculate_total_of(&subject.tests));
-    if !config.view.hidden.tests && !without_tests && (tests_before.stats.files > 0 || tests_now.stats.files > 0) {
+    rows.extend(production);
+    if has_tests {
         rows.push(ComparedRow { name: format!("{BRANCH_INDENT}{}{TESTS_NAME}", find_branch_marker(true)),
                 kind: RowKind::Tests, depth: 0, baseline: tests_before.stats, subject: tests_now.stats });
     }
@@ -1998,7 +2017,7 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
     ];
     let column_count = columns.len();
 
-    let described = create_named_rows(groups, print_total, notes);
+    let described = create_named_rows(groups, total, print_total, notes);
     let rows = described.iter().map(|row| {
         let cells = match find_row_figures(row, total, model) {
             Some(figures) => Vec::from(format_figure_cells(theme, &figures, row.kind)),
@@ -2333,10 +2352,10 @@ impl Columns {
                 }
             }
         }
-        if let Some(tests) = calculate_tests_of_everything(groups) {
+        for (name, _, stats) in calculate_parts_of_total(groups, total) {
             columns.name = columns.name.max(BRANCH_INDENT.len()
-                    + calculate_widest_visible_line(find_branch_marker(true)) + TESTS_NAME.len());
-            columns.measure(&tests);
+                    + calculate_widest_visible_line(find_branch_marker(true)) + name.len());
+            columns.measure(&stats);
         }
 
         columns
@@ -2472,13 +2491,13 @@ impl Columns {
     }
 }
 
-fn print_sum(theme: &Theme, per_language: &HashMap<String,Stats>, total: &Stats, tests: Option<&Stats>,
+fn print_sum(theme: &Theme, per_language: &HashMap<String,Stats>, total: &Stats, parts: &[(&str, RowKind, Stats)],
         columns: &Columns, block_width: usize, should_print_keywords: bool)
 {
-    print_lines(&format_sum_lines(theme, per_language, total, tests, columns, block_width, should_print_keywords));
+    print_lines(&format_sum_lines(theme, per_language, total, parts, columns, block_width, should_print_keywords));
 }
 
-fn format_sum_lines(theme: &Theme, per_language: &HashMap<String,Stats>, total: &Stats, tests: Option<&Stats>,
+fn format_sum_lines(theme: &Theme, per_language: &HashMap<String,Stats>, total: &Stats, parts: &[(&str, RowKind, Stats)],
         columns: &Columns, block_width: usize, should_print_keywords: bool) -> Vec<String>
 {
     // The separator spans the block, which every row of the details section already fits exactly
@@ -2487,8 +2506,8 @@ fn format_sum_lines(theme: &Theme, per_language: &HashMap<String,Stats>, total: 
             TOTAL_NAME.len(), total.files, total.lines, total.calculate_code_lines(columns.model),
             total.calculate_comment_lines(columns.model));
     lines.push(columns.append_size(&theme.arrow, &row, &format_size(theme, total.bytes), block_width));
-    if let Some(tests) = tests {
-        lines.push(format_list_sub_row(theme, columns, "", find_branch_marker(true), TESTS_NAME, tests, RowKind::Tests,
+    for (at, (name, kind, stats)) in parts.iter().enumerate() {
+        lines.push(format_list_sub_row(theme, columns, "", find_branch_marker(at + 1 == parts.len()), name, stats, *kind,
                 block_width));
     }
 
@@ -3261,7 +3280,7 @@ mod tests {
 
         let mut cases: Vec<(String, Vec<String>)> = Vec::new();
         let mut list = format_individual_lines(theme, &plain, &columns, width, true);
-        list.extend(format_sum_lines(theme, &content_info, &total, None, &columns, width, true));
+        list.extend(format_sum_lines(theme, &content_info, &total, &[], &columns, width, true));
         cases.push(("list".to_owned(), list));
         cases.push(("list, keywords hidden".to_owned(),
                 format_individual_lines(theme, &plain, &columns, width, false)));
@@ -3320,7 +3339,7 @@ mod tests {
         let tests_columns = Columns::of(&with_tests, &total, no_hides, content);
         let tests_width = tests_columns.width(theme);
         let mut list = format_individual_lines(theme, &with_tests, &tests_columns, tests_width, false);
-        list.extend(format_sum_lines(theme, &content_info, &total, calculate_tests_of_everything(&with_tests).as_ref(),
+        list.extend(format_sum_lines(theme, &content_info, &total, &calculate_parts_of_total(&with_tests, &total),
                 &tests_columns, tests_width, false));
         cases.push(("list, with tests".to_owned(), list));
         cases.push(("table, with tests".to_owned(),
@@ -3333,8 +3352,10 @@ mod tests {
         let with_tests_split = group_with_tests(TestsBreakdown::Split);
         let split_columns = Columns::of(&with_tests_split, &total, no_hides, content);
         let split_width = split_columns.width(theme);
-        cases.push(("list, with tests split".to_owned(),
-                format_individual_lines(theme, &with_tests_split, &split_columns, split_width, false)));
+        let mut list = format_individual_lines(theme, &with_tests_split, &split_columns, split_width, false);
+        list.extend(format_sum_lines(theme, &content_info, &total, &calculate_parts_of_total(&with_tests_split, &total),
+                &split_columns, split_width, false));
+        cases.push(("list, with tests split".to_owned(), list));
         cases.push(("table, with tests split".to_owned(),
                 format_table_lines(theme, &with_tests_split, &total, true, &[], shown)));
         cases.push(("boxed, with tests split".to_owned(),
@@ -3355,7 +3376,7 @@ mod tests {
         let removed_width = removed_columns.width(theme);
         let mut list = format_individual_lines(theme, &with_tests_removed, &removed_columns, removed_width, true);
         list.extend(format_sum_lines(theme, &removed.per_language, &removed.total,
-                calculate_tests_of_everything(&with_tests_removed).as_ref(), &removed_columns, removed_width, true));
+                &calculate_parts_of_total(&with_tests_removed, &removed.total), &removed_columns, removed_width, true));
         cases.push(("list, with tests removed".to_owned(), list));
         cases.push(("table, with tests removed".to_owned(),
                 format_table_lines(theme, &with_tests_removed, &removed.total, true, &[], shown)));
@@ -3399,7 +3420,7 @@ mod tests {
                 ..crate::config_manager::Hidden::default() };
         let bare_columns = Columns::of(&plain, &total, no_files_row, content);
         let mut bare = format_individual_lines(theme, &plain, &bare_columns, bare_columns.width(theme), false);
-        bare.extend(format_sum_lines(theme, &content_info, &total, None, &bare_columns, bare_columns.width(theme), false));
+        bare.extend(format_sum_lines(theme, &content_info, &total, &[], &bare_columns, bare_columns.width(theme), false));
         cases.push(("list, no files row".to_owned(), bare));
 
         cases.push(("overview".to_owned(), format_overview_lines(&sorted, &content_info, &total, &config)));
@@ -3422,7 +3443,7 @@ mod tests {
         let width = columns.width(theme);
 
         let mut list = format_individual_lines(theme, &groups, &columns, width, true);
-        list.extend(format_sum_lines(theme, &content_info, &total, None, &columns, width, true));
+        list.extend(format_sum_lines(theme, &content_info, &total, &[], &columns, width, true));
         cases.push(("modules, list".to_owned(), list));
 
         let mut table = format_table_lines(theme, &groups, &total, true, &[], shown);
@@ -3933,7 +3954,7 @@ mod tests {
 
         // HTML holds 396 lines, 40 of them tests
         let groups = [group_of(&content_info, &total, &sections, &tests, TestsBreakdown::Split)];
-        let rows = create_named_rows(&groups, false, &[]);
+        let rows = create_named_rows(&groups, &total, false, &[]);
         assert_eq!(vec!["HTML", " ├─ production", " │   ├─ HTML itself", " │   ├─ JavaScript", " │   └─ Python", " └─ tests"],
                 rows.iter().map(|row| row.cell.as_str()).collect::<Vec<_>>());
         let against = rows.iter().skip(1)
@@ -4004,7 +4025,7 @@ mod tests {
 
                     let groups = create_groups_of(&run, &config);
                     let left_out = breakdown == TestsBreakdown::Removed && !hidden;
-                    let under_the_total = calculate_tests_of_everything(&groups).map(|tests| tests.lines);
+                    let under_the_total = calculate_tests_of_everything(&groups).map(|tests| tests.stats.lines);
                     assert_eq!(if hidden || left_out {None} else {Some(2260)}, under_the_total,
                             "the tests under the total, with --top {top:?} and the tests hidden: {hidden}");
                     let rust = &groups[0].per_language["Rust"];
@@ -4143,7 +4164,7 @@ mod tests {
                 let of_kind = |kind| rows.iter().filter(|row| row.kind == kind).count();
                 let left_out = breakdown == TestsBreakdown::Removed && !hidden;
                 assert_eq!(if hidden || left_out {0} else {5}, of_kind(RowKind::Tests), "{breakdown:?}, hidden {hidden}");
-                assert_eq!(if hidden || breakdown != TestsBreakdown::Split {0} else {3}, of_kind(RowKind::Production),
+                assert_eq!(if hidden || breakdown != TestsBreakdown::Split {0} else {4}, of_kind(RowKind::Production),
                         "{breakdown:?}, hidden {hidden}");
                 let rust = rows.iter().find(|row| row.kind == RowKind::Language && row.name == "Rust").unwrap();
                 assert_eq!(if left_out {9008 - 2140} else {9008}, rust.subject.lines, "{breakdown:?}, hidden {hidden}");
