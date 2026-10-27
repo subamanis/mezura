@@ -1555,7 +1555,7 @@ fn format_boxed_comparison_lines(theme: &Theme, rows: &[ComparedRow], view: View
              counted(before.calculate_code_lines(model), now.calculate_code_lines(model)),
              counted(before.calculate_comment_lines(model), now.calculate_comment_lines(model)),
              BoxedCell { number: size + " " + &find_size_unit_style(theme, kind).paint(unit).to_string(),
-                         slot: paint_change(theme, before.bytes, now.bytes, &format_signed_size(theme, before.bytes, now.bytes)) }]
+                         slot: paint_change(theme, before.bytes, now.bytes, &format_signed_size(before.bytes, now.bytes)) }]
     };
 
     let drawn = rows.iter().map(|row| (row.name.clone(), row.depth, cells(&row.baseline, &row.subject, row.kind)))
@@ -1624,7 +1624,7 @@ fn build_comparison_cells<'a>(theme: &'a Theme, rows: &[ComparedRow], view: View
         }
         let (size, unit) = super::number_formatter::get_active().format_size(now.bytes);
         row.push(size + " " + &find_size_unit_style(theme, kind).paint(unit).to_string());
-        row.push(paint_change(theme, before.bytes, now.bytes, &format_signed_size(theme, before.bytes, now.bytes)));
+        row.push(paint_change(theme, before.bytes, now.bytes, &format_signed_size(before.bytes, now.bytes)));
         row
     };
 
@@ -1675,14 +1675,14 @@ fn format_signed_difference(before: usize, now: usize) -> String {
     format!("{sign}{}", format_with_separators(now.abs_diff(before)))
 }
 
-fn format_signed_size(theme: &Theme, before: usize, now: usize) -> String {
+fn format_signed_size(before: usize, now: usize) -> String {
     if before == now {
         return NO_CHANGE.to_owned();
     }
     let (text, unit) = super::number_formatter::get_active().format_size(now.abs_diff(before));
     let sign = if now > before {"+"} else {"-"};
 
-    format!("{sign}{text} {}", theme.size_unit.paint(unit))
+    format!("{sign}{text} {unit}")
 }
 
 fn format_change(before: usize, now: usize) -> String {
