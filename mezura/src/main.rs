@@ -92,7 +92,7 @@ fn main() -> ExitCode {
             else {migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, false)});
     for message in [outcome.format_restored(), outcome.format_replaced(), outcome.format_updated(),
             outcome.format_restyled(), outcome.format_withdrawn(), outcome.format_merged(),
-            outcome.format_failures()].into_iter().flatten() {
+            outcome.format_merged_themes(), outcome.format_failures()].into_iter().flatten() {
         eprintln!("{message}");
     }
 

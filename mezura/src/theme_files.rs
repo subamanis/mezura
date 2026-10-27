@@ -5,6 +5,8 @@ use std::{fs, io};
 const THEME_LIST_MARKER : &str = "/*MEZURA_SYSTEM_THEMES*/";
 #[cfg(test)]
 const SHIPPED_LIST_MARKER : &str = "/*MEZURA_SHIPPED_THEMES*/";
+// The stock look written as a file, which a version that changes the stock look replaces
+pub const STOCK_LOOK_THEME : &str = "Mezura";
 
 // None means no such file, which is a mistake in the name. A theme that exists always loads,
 // carrying whatever its parser could not read.

@@ -10,6 +10,7 @@ use super::config_files::InvalidField;
 use super::message_printer::{Formatted, wrap_message};
 use super::paths::LocalDir;
 use super::test_presets::{ExpandedPatterns, can_name_a_preset, expand_presets, is_a_shipped_name, write_user_preset};
+use super::theme_files::STOCK_LOOK_THEME;
 use super::warning_collector::{ProgramCode, ProgramWarning};
 use super::{message_printer, suggestions, theme::Theme};
 
@@ -1281,7 +1282,8 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
                 }
             },
             SAVE => config_builder.config_name_to_save = Some(take_name(SAVE, arguments)?),
-            SAVE_THEME => config_builder.theme_name_to_save = Some(take_name(SAVE_THEME, arguments)?),
+            SAVE_THEME => config_builder.theme_name_to_save = Some(parse_or_refuse(SAVE_THEME, arguments,
+                    |x| Some(x.trim().to_owned()).filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case(STOCK_LOOK_THEME)))?),
             SAVE_PRESET => config_builder.preset_name_to_save = Some(parse_or_refuse(SAVE_PRESET, arguments,
                     |x| Some(x.trim().to_owned()).filter(|name| can_name_a_preset(name) && !is_a_shipped_name(name)))?),
             SAVE_LOCAL => save_local = take_flag(command, SAVE_LOCAL)?,
@@ -1862,6 +1864,8 @@ mod tests {
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("tests".to_owned(), "@nope".to_owned())), create_config_from_args("./ --tests @nope"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save-preset".to_owned(), "Jest".to_owned())),
                 create_config_from_args("./ --save-preset Jest"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("save-theme".to_owned(), "mezura".to_owned())),
+                create_config_from_args("./ --save-theme mezura"));
         assert_eq!(Err(ArgParsingError::UnexpectedCommandArgs("no-gitignore".to_owned())), create_config_from_args("./ --no-gitignore a"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned(), String::new())), create_config_from_args("./ --load"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs("load".to_owned(), String::new())), create_config_from_args("./ --load   "));

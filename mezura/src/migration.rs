@@ -12,9 +12,29 @@ use crate::message_printer::wrap_message;
 use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOGS_DIR_NAME,
         TEST_PRESETS_DIR_NAME, THEMES_DIR_NAME};
 use crate::startup_timing::{Step, measure};
+use crate::theme::Theme;
+use crate::theme_files::STOCK_LOOK_THEME;
 
 const MANIFEST_FILE_NAME : &str = "installed.txt";
 const REPLACED_DIR_NAME : &str = "replaced";
+const TOKENS_LINE_START : &str = "tokens: ";
+// What a record written before it listed its tokens knew, since 3.1 and 3.2 knew the same ones
+const TOKENS_KNOWN_TO_3_2 : [&str; 78] = [
+        "version", "heading", "separator-total", "separator-header", "sort-marker", "arrow",
+        "bar-frame", "percent", "files-number", "files-label", "lines-number", "lines-label",
+        "code-number", "code-label", "comments-number", "comments-label", "extra-number",
+        "extra-label", "total-size-number", "total-size-label", "size-unit", "keyword-number",
+        "keyword-label", "details-language-header", "details-language-name", "details-module",
+        "details-total", "nested-name", "nested-branch", "nested-percent", "nested-files",
+        "nested-lines", "nested-code", "nested-comments", "nested-extra", "nested-size",
+        "nested-size-unit", "file-name", "file-branch", "file-percent", "file-files", "file-lines",
+        "file-code", "file-comments", "file-extra", "file-size", "file-size-unit", "overview-label",
+        "overview-percent", "language-1", "language-2", "language-3", "language-4", "language-others",
+        "change-up", "change-down", "change-same", "history-entry", "history-age", "history-label",
+        "history-modified", "history-modified-field", "progress-bar-fill", "progress-bar-empty",
+        "progress-bar-figures", "summary", "explain-heading", "explain-string", "explain-comment",
+        "explain-code", "explain-comments", "explain-extra", "explain-detail", "note", "success",
+        "warning", "error", "footer"];
 // Enough to see what kind of thing went wrong without the list becoming the message
 const FAILURES_NAMED : usize = 6;
 
@@ -32,6 +52,7 @@ pub struct MigrationOutcome {
     pub restyled: Vec<String>,
     pub withdrawn: Vec<String>,
     pub merged: Vec<String>,
+    pub merged_themes: Vec<String>,
     // Under 'replaced/<version>/', named after the moment the pass ran. One folder per pass, or
     // nothing says which run a copy came from.
     pub archived_under: String,
@@ -47,7 +68,7 @@ impl MigrationOutcome {
     pub fn did_nothing(&self) -> bool {
         self.restored.is_empty() && self.added.is_empty() && self.replaced.is_empty()
                 && self.updated.is_empty() && self.restyled.is_empty() && self.withdrawn.is_empty()
-                && self.merged.is_empty() && self.failed.is_empty()
+                && self.merged.is_empty() && self.merged_themes.is_empty() && self.failed.is_empty()
     }
 
     // Only the language files decide this: a theme or the conflicts file that could not be written
@@ -131,6 +152,21 @@ impl MigrationOutcome {
                 "Brought '{}' to what {VERSION_ID} ships, keeping every contest you had settled. Your \
                         copy as it was is in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/'.",
                 self.merged.join("', '"), crate::paths::PERSISTENT_APP_PATHS.data_dir,
+                self.archived_under)).yellow()))
+    }
+
+    pub fn format_merged_themes(&self) -> Option<String> {
+        if self.merged_themes.is_empty() {
+            return None;
+        }
+
+        let one = self.merged_themes.len() == 1;
+        Some(format!("\n{}\n", wrap_message(&format!(
+                "Added the styles {VERSION_ID} brings to '{}', keeping every style already in {}. {} as {} {} \
+                        in '{}{REPLACED_DIR_NAME}/{VERSION_ID}/{}/'.",
+                self.merged_themes.join("', '"), if one {"it"} else {"them"},
+                if one {"Your copy"} else {"Your copies"}, if one {"it was"} else {"they were"},
+                if one {"is"} else {"are"}, crate::paths::PERSISTENT_APP_PATHS.data_dir,
                 self.archived_under)).yellow()))
     }
 
@@ -352,6 +388,10 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
     // record is what tells an edited one from a theme nobody ever touched.
     let record_predates_themes = !recorded.is_empty()
             && !recorded.keys().any(|relative| relative.starts_with(THEMES_DIR_NAME));
+    let tokens_the_record_knew = read_tokens_known_to_the_record(data_dir);
+    let known = tokens_the_record_knew.iter().map(String::as_str).collect::<HashSet<_>>();
+    let stock_look = format!("{THEMES_DIR_NAME}/{STOCK_LOOK_THEME}.txt");
+    let mut a_merge_waits = false;
     for (relative, contents) in get_shipped_theme_files() {
         let target = data_dir.to_owned() + &relative;
         let shipped_hash = content_hash(contents);
@@ -380,9 +420,14 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
         }
         // Theirs, and '--restore' is how ours is asked for back. An unrecorded one predates the
         // record and could be either, so it is brought up to date once with theirs kept beside it
-        if was_recorded && !force {
+        // Merged only by a version that ships the theme differently. An edited stock look is no longer
+        // the stock look, so a version that changes it replaces it as it does a language file.
+        if was_recorded && !force && (recorded[&relative] == shipped_hash || relative != stock_look) {
+            let settled = recorded[&relative] == shipped_hash || merge_the_theme(data_dir, &archived_under,
+                    &relative, &on_disk, contents, &known, &mut outcome);
+            a_merge_waits |= !settled;
             // Recording theirs would have the next run read it back as untouched and take it away
-            manifest.insert(relative.clone(), recorded[&relative]);
+            manifest.insert(relative.clone(), if settled {shipped_hash} else {recorded[&relative]});
             continue;
         }
         let copied = match archive(data_dir, &archived_under, &relative, &on_disk) {
@@ -412,9 +457,12 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
     }
     merge_the_conflicts_file(data_dir, &archived_under, &recorded, &mut manifest, &mut outcome);
 
+    // While a merge waits for the next run, the record keeps the tokens that merge is weighed against
+    let tokens_now = if a_merge_waits {tokens_the_record_knew.iter().map(String::as_str).collect()}
+            else {Theme::get_token_names().to_vec()};
     // Last, and holding only what reached the disk, so whatever failed is absent from the record,
     // missing from the completeness check, and tried again by the next run
-    outcome.attempt(MANIFEST_FILE_NAME, write_manifest(data_dir, &manifest));
+    outcome.attempt(MANIFEST_FILE_NAME, write_manifest(data_dir, &manifest, &tokens_now));
 
     outcome
 }
@@ -616,6 +664,90 @@ fn find_key_of_rule(opens: Option<ConflictBlock>, rule: &str) -> String {
             .unwrap_or_else(|| format!("could not be read: {}", rule.trim().to_ascii_lowercase()))
 }
 
+// False when the copy or the write failed, so the record keeps the older version for the next run
+fn merge_the_theme(data_dir: &str, archived_under: &str, relative: &str, theirs: &[u8], ours: &[u8],
+        known: &HashSet<&str>, outcome: &mut MigrationOutcome) -> bool
+{
+    let (Ok(theirs), Ok(ours)) = (std::str::from_utf8(theirs), std::str::from_utf8(ours)) else {
+        return true;
+    };
+    let Some(merged) = merge_theme_files(theirs, ours, known) else {
+        return true;
+    };
+    let copied = match archive(data_dir, archived_under, relative, theirs.as_bytes()) {
+        Ok(copied) => copied,
+        Err(error) => {
+            outcome.attempt(relative, Err(error));
+            return false;
+        }
+    };
+    if !outcome.attempt(relative, std::fs::write(data_dir.to_owned() + relative, merged)) {
+        if copied {
+            let _ = std::fs::remove_file(find_archived_path(data_dir, archived_under, relative));
+        }
+        return false;
+    }
+    outcome.merged_themes.push(relative.to_owned());
+
+    true
+}
+
+// Each run of missing styles goes after the style it follows in the shipped file, so a family lands
+// beside its neighbours
+fn merge_theme_files(theirs: &str, ours: &str, known: &HashSet<&str>) -> Option<String> {
+    let their_lines = crate::config_files::strip_byte_order_mark(theirs).lines().collect::<Vec<_>>();
+    let last_line_naming = their_lines.iter().enumerate()
+            .filter_map(|(at, line)| find_token_of_theme_line(line).map(|token| (token, at)))
+            .collect::<HashMap<_, _>>();
+
+    let mut runs = vec![(None, Vec::new())];
+    for line in ours.lines().map(str::trim_end) {
+        let token = find_token_of_theme_line(line);
+        if let Some(at) = token.as_ref().and_then(|token| last_line_naming.get(token)) {
+            runs.push((Some(*at), Vec::new()));
+            continue;
+        }
+        // Known when theirs was written and absent from it, so left out on purpose, as '--save-theme' does
+        if token.is_some_and(|token| known.contains(token.as_str())) {
+            continue;
+        }
+        if let Some((_, lines)) = runs.last_mut() && !(line.is_empty() && lines.last() == Some(&"")) {
+            lines.push(line);
+        }
+    }
+    runs.retain(|(_, lines)| lines.iter().any(|line| find_token_of_theme_line(line).is_some()));
+    if runs.is_empty() {
+        return None;
+    }
+
+    // Theirs already separates the style a run follows from the one after it
+    let mut placed = HashMap::<Option<usize>, Vec<&str>>::new();
+    for (after, mut lines) in runs {
+        while after.is_some() && lines.last().is_some_and(|line| line.is_empty()) {
+            lines.pop();
+        }
+        placed.entry(after).or_default().extend(lines);
+    }
+    let mut merged = placed.remove(&None).unwrap_or_default();
+    for (at, line) in their_lines.into_iter().enumerate() {
+        merged.push(line);
+        merged.extend(placed.remove(&Some(at)).unwrap_or_default());
+    }
+
+    let ending = if theirs.contains("\r\n") {"\r\n"} else {"\n"};
+    Some(merged.join(ending) + ending)
+}
+
+// Read the way 'theme::parse_theme_file' reads a line, and spelled the way a token is looked up
+fn find_token_of_theme_line(line: &str) -> Option<String> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+
+    line.split_once('=').map(|(token, _)| token.trim().to_lowercase().replace('_', "-"))
+}
+
 // Trailing whitespace, the line endings and the blank lines at the end of a file are not what the
 // file says, and treating any of them as a difference rewrites it and announces that on every run.
 fn reads_the_same(one: &str, other: &str) -> bool {
@@ -665,7 +797,8 @@ fn read_manifest(data_dir: &str) -> HashMap<String, u64> {
     entries
 }
 
-fn write_manifest(data_dir: &str, entries: &HashMap<String, u64>) -> Result<(), std::io::Error> {
+// Every version's reader skips the line of tokens, since its last word is no hash
+fn write_manifest(data_dir: &str, entries: &HashMap<String, u64>, tokens: &[&str]) -> Result<(), std::io::Error> {
     let mut sorted = entries.iter().collect::<Vec<_>>();
     sorted.sort();
     let body = sorted.into_iter().map(|(path, hash)| format!("{path} {hash}")).collect::<Vec<_>>().join("\n");
@@ -674,7 +807,15 @@ fn write_manifest(data_dir: &str, entries: &HashMap<String, u64>) -> Result<(), 
             format!("# Written by mezura. It records which files it installed and what they looked like,\n\
                     # so that an update can tell a file you edited from one it wrote itself. Delete it and the next\n\
                     # run has no way to tell: every file of ours that you have changed is moved into 'replaced' and\n\
-                    # written again from the copies inside the program.\n{VERSION_ID}\n{body}\n"))
+                    # written again from the copies inside the program.\n{VERSION_ID}\n{TOKENS_LINE_START}{}\n{body}\n",
+                    tokens.join(" ")))
+}
+
+fn read_tokens_known_to_the_record(data_dir: &str) -> Vec<String> {
+    std::fs::read_to_string(data_dir.to_owned() + MANIFEST_FILE_NAME).ok()
+            .and_then(|contents| contents.lines().find_map(|line| line.strip_prefix(TOKENS_LINE_START))
+                    .map(|tokens| tokens.split_whitespace().map(str::to_owned).collect()))
+            .unwrap_or_else(|| TOKENS_KNOWN_TO_3_2.iter().map(|token| (*token).to_owned()).collect())
 }
 
 fn build_relative_path(dir_name: &str, file: &File<'static>) -> (String, &'static [u8]) {
@@ -795,9 +936,10 @@ fn read_baked_in_conflict_rules_contents() -> String {
 mod tests {
     use mezura_core::Language;
     use crate::config_manager::VERSION_ID;
-    use crate::migration::{MANIFEST_FILE_NAME, content_hash, merge_conflict_files,
+    use crate::migration::{MANIFEST_FILE_NAME, TOKENS_LINE_START, content_hash, merge_conflict_files,
             migrate_data_files, read_manifest, write_manifest};
     use crate::paths::test_paths::SCRATCH_DIR;
+    use crate::theme::Theme;
 
     #[test]
     fn a_migration_replaces_what_was_changed_and_keeps_it_and_is_silent_about_the_rest() {
@@ -875,7 +1017,7 @@ mod tests {
         let mut manifest = read_manifest(&dir);
         manifest.insert("themes/Dracula.txt".to_owned(), content_hash(older.as_bytes()));
         manifest.remove("themes/Forest.txt");
-        write_manifest(&dir, &manifest).unwrap();
+        write_manifest(&dir, &manifest, Theme::get_token_names()).unwrap();
         std::fs::write(path("Ocean"), "heading = 00ff00\n").unwrap();
         std::fs::write(path("Forest"), "heading = 0000ff\n").unwrap();
 
@@ -903,6 +1045,76 @@ mod tests {
     }
 
     #[test]
+    fn an_edited_theme_gains_only_the_styles_it_never_knew_and_keeps_its_own() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-theme-merge/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false);
+
+        let path = dir.clone() + "themes/Catppuccin.txt";
+        let shipped = std::fs::read_to_string(&path).unwrap();
+        let older_release = shipped.split("\n\n")
+                .filter(|family| !family.starts_with("tests-") && !family.starts_with("production-"))
+                .collect::<Vec<_>>().join("\n\n");
+        let (ours, mine, left_out) = ("heading = cba6f7 reverse bold", "heading = ff0000 bold", "language-1 = ff759c\n");
+        let theirs = older_release.replace(ours, mine).replace(left_out, "");
+        std::fs::write(&path, &theirs).unwrap();
+        let mut manifest = read_manifest(&dir);
+        manifest.insert("themes/Catppuccin.txt".to_owned(), content_hash(older_release.as_bytes()));
+        write_manifest(&dir, &manifest, Theme::get_token_names()).unwrap();
+        let as_3_2_wrote_it = std::fs::read_to_string(dir.clone() + MANIFEST_FILE_NAME).unwrap().lines()
+                .filter(|line| !line.starts_with(TOKENS_LINE_START)).collect::<Vec<_>>().join("\n");
+        std::fs::write(dir.clone() + MANIFEST_FILE_NAME, as_3_2_wrote_it).unwrap();
+
+        let writable = std::fs::metadata(&path).unwrap().permissions();
+        let mut read_only = writable.clone();
+        read_only.set_readonly(true);
+        std::fs::set_permissions(&path, read_only).unwrap();
+        let failed = migrate_data_files(&dir, false);
+        assert!(failed.merged_themes.is_empty() && !failed.failed.is_empty());
+        std::fs::set_permissions(&path, writable).unwrap();
+
+        let merged = shipped.replace(ours, mine).replace(left_out, "");
+        let pass = migrate_data_files(&dir, false);
+        assert_eq!(vec!["themes/Catppuccin.txt".to_owned()], pass.merged_themes);
+        assert!(pass.replaced.is_empty() && pass.restyled.is_empty());
+        assert_eq!(merged, std::fs::read_to_string(&path).unwrap());
+        assert_eq!(theirs, std::fs::read_to_string(format!("{dir}replaced/{}/{}/themes/Catppuccin.txt",
+                VERSION_ID, pass.archived_under)).unwrap());
+
+        assert!(migrate_data_files(&dir, false).did_nothing(),
+                "a merged theme was taken up again by the next run");
+        assert_eq!(merged, std::fs::read_to_string(&path).unwrap());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_version_that_changes_the_stock_look_replaces_an_edited_copy_of_it() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-stock-look/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false);
+
+        let path = dir.clone() + "themes/Mezura.txt";
+        let shipped = std::fs::read_to_string(&path).unwrap();
+        let theirs = "heading = ff0000 bold\n";
+        std::fs::write(&path, theirs).unwrap();
+        let mut manifest = read_manifest(&dir);
+        manifest.insert("themes/Mezura.txt".to_owned(), content_hash(b"heading = cyan bold\n"));
+        write_manifest(&dir, &manifest, Theme::get_token_names()).unwrap();
+
+        let pass = migrate_data_files(&dir, false);
+        assert_eq!(vec!["themes/Mezura.txt".to_owned()], pass.replaced);
+        assert!(pass.merged_themes.is_empty());
+        assert_eq!(shipped, std::fs::read_to_string(&path).unwrap());
+        assert_eq!(theirs, std::fs::read_to_string(format!("{dir}replaced/{}/{}/themes/Mezura.txt",
+                VERSION_ID, pass.archived_under)).unwrap());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn a_withdrawn_theme_they_edited_stays_theirs_and_one_they_never_touched_goes() {
         let dir = SCRATCH_DIR.to_owned() + "migration-withdrawn-themes/";
         let _ = std::fs::remove_dir_all(&dir);
@@ -916,7 +1128,7 @@ mod tests {
         let mut manifest = read_manifest(&dir);
         manifest.insert("themes/Gone.txt".to_owned(), content_hash(shipped_once.as_bytes()));
         manifest.insert("themes/Kept.txt".to_owned(), content_hash(shipped_once.as_bytes()));
-        write_manifest(&dir, &manifest).unwrap();
+        write_manifest(&dir, &manifest, Theme::get_token_names()).unwrap();
 
         let pass = migrate_data_files(&dir, false);
         assert_eq!(vec!["themes/Gone.txt".to_owned()], pass.withdrawn);
@@ -941,7 +1153,7 @@ mod tests {
 
         let mut manifest = read_manifest(&dir);
         manifest.retain(|relative, _| !relative.starts_with("themes"));
-        write_manifest(&dir, &manifest).unwrap();
+        write_manifest(&dir, &manifest, Theme::get_token_names()).unwrap();
         std::fs::remove_file(dir.clone() + "themes/Ocean.txt").unwrap();
 
         let pass = migrate_data_files(&dir, false);
@@ -1035,7 +1247,7 @@ mod tests {
         let mut recorded = read_manifest(&dir);
         recorded.insert(mezura_core::LANGUAGE_CONFLICTS_FILE_NAME.to_owned(),
                 content_hash(older_release.as_bytes()));
-        write_manifest(&dir, &recorded).unwrap();
+        write_manifest(&dir, &recorded, Theme::get_token_names()).unwrap();
 
         let outcome = migrate_data_files(&dir, false);
         assert!(outcome.merged.is_empty(), "a file they never edited was merged instead of replaced");
@@ -1069,7 +1281,7 @@ mod tests {
         // That record is the only thing that can say a release changed this file.
         let mut recorded = read_manifest(&dir);
         recorded.insert(mezura_core::LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), 1);
-        write_manifest(&dir, &recorded).unwrap();
+        write_manifest(&dir, &recorded, Theme::get_token_names()).unwrap();
 
         let outcome = migrate_data_files(&dir, false);
         assert_eq!(vec![mezura_core::LANGUAGE_CONFLICTS_FILE_NAME.to_owned()], outcome.merged);
@@ -1344,7 +1556,7 @@ mod tests {
         std::fs::write(&lua, &older).unwrap();
         let mut recorded = read_manifest(&dir);
         recorded.insert("languages/Lua.txt".to_owned(), content_hash(older.as_bytes()));
-        write_manifest(&dir, &recorded).unwrap();
+        write_manifest(&dir, &recorded, Theme::get_token_names()).unwrap();
 
         // Not forced, because the case to see is a build whose language files changed while the
         // version string did not
