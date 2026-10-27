@@ -164,6 +164,7 @@ Fixes:
   raises no `duplicate-language` warning.
 - `explain_file` reads a file inside a target with the module and the test patterns of that
   target, as `run` does.
+- A keyword with a tab before or after it counts as it does with a space.
 
 -----------------------------------------------------------------------------------------------------------
 

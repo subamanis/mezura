@@ -2927,9 +2927,8 @@ fn drop_text_running_past<T: Copy>(symbols: &mut Vec<T>, counter: &mut usize, at
     }
 }
 
-// The trim decides whether a keyword at the start of the line has an acceptable prefix: a tab is
-// not one, an empty prefix is. Only the front of the first stretch and the back of the last are
-// trimmed, and a stretch that empties out completely is dropped.
+// Only the front of the first stretch and the back of the last are trimmed, and a stretch that
+// empties out completely is dropped.
 fn push_trimmed_spans(spans: &mut Vec<(u32, u32)>, ranges: &[(usize, usize)], line: &str, base: usize) {
     let bytes = line.as_bytes();
     let (mut head, mut tail) = (0usize, ranges.len());
@@ -2974,7 +2973,7 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
     fn is_acceptable_before(byte: Option<&u8>) -> bool {
         match byte {
             None => true,
-            Some(b) => *b == b' ' || *b == b'}' || *b == b'{' || *b == b','
+            Some(b) => b.is_ascii_whitespace() || *b == b'}' || *b == b'{' || *b == b','
         }
     }
 
@@ -3654,6 +3653,11 @@ mod tests {
         assert_eq!(make_file_stats(0,0), file_stats);
 
         let line = String::from("hello,class{word!");
+        let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
+        keywords_of(&line, &JAVA_MATCHER, &mut file_stats);
+        assert_eq!(make_file_stats(1,0), file_stats);
+
+        let line = String::from("public\tclass\tFoo");
         let mut file_stats =  FileStats::with_keywords(&[CLASS.clone(),INTERFACE.clone()]);
         keywords_of(&line, &JAVA_MATCHER, &mut file_stats);
         assert_eq!(make_file_stats(1,0), file_stats);

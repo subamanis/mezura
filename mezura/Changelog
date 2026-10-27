@@ -102,6 +102,8 @@ Bugfixes:
       three quotes, so what follows it on its line is no longer read as a string.
   -> In the table, the boxed table and a comparison, the branch before a nested language or a file
       takes the theme's 'nested-branch' or 'file-branch' color, as it already did in the list.
+  -> A keyword with a tab before or after it, a tab between 'typedef' and 'struct', counts as it
+      does with a space.
 
 Change in commands:
   -> A name pattern that reaches above a target no longer matches: 'services/api/gen' with the
