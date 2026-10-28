@@ -47,6 +47,7 @@ The whole Linux kernel, in five of the bundled themes:
   * [Threads and phase timing](#threads-and-phase-timing)
   * [Windows and antivirus](#windows-and-antivirus)
 * [Contributing](#contributing)
+* [Acknowledgements](#acknowledgements)
 * [License](#license)
 
 
@@ -56,28 +57,28 @@ Things it does that most counters do not:
 
 - **Ensures the right language for each file.** When two languages claim one extension, the way `.m` is MATLAB and Objective-C and Mercury all at once, every file is identified by its own content: a `#!` line first, then  heuristics on its content. And you always have the last word: set your preferences globally in `language_conflicts.txt`, or per-project through its configuration, or `--force-language` for one run, or even per module in the same run. See [Supported languages](#supported-languages).
 - **Discards non-code files with a matching extension** (no more Make dependency `.d` files counted as the D language!). Alongside the minified and generated files that are skipped by default, they are reported as skipped. See [What is skipped](#what-is-skipped).
-- **Keyword counting.** Occurrences of words you pick per language, classes, structs, traits,
-  anything, counted only where they appear as code and never inside a string or a comment.
-- **Nested languages.** The `<script>` and `<style>` blocks of HTML, Vue, Svelte and Astro files are
-  counted as the distinct languages they hold.
 - **Test code detection.** Each language's tests are a row under it and under the total. It automatically identifies test code
   by the test marks inside the code, by what the toolchain names as a test, by what a build tool compiles for tests, and by the
   default test names of a tool whose own file is in the project. It also gives you manual control for marking or unmarking code
   as test code, with the `--tests` command. See [Test code](#test-code).
+- **Keyword counting.** Occurrences of words you pick per language, classes, structs, traits,
+  anything, counted only where they appear as code.
+- **Nested languages.** The `<script>` and `<style>` blocks of HTML, Vue, Svelte and Astro files are
+  counted as the distinct languages they hold.
 - **Modules.** Give a name to parts of a project and the report is grouped by these parts as well as by
-  language. This way you can split your project into e.g. Frontend and Backend and Tests and see distinct reports for each module in the same table in the same run. See [Modules](#modules).
+  language. This way you can split your project into e.g. Frontend and Backend and see distinct reports for each module in the same table in the same run. See [Modules](#modules).
 - **Track the history of your codebase.** Log runs and compare against earlier ones, or diff against a git revision.   See [Tracking growth](#tracking-growth).
 - **Diff view of git revisions or json files.** You can see the diff between the current state and a git revision, or between two revisions, or between an earlier run that was saved in a json file. See [Diffs](#diffs).
 - **Two counting models to pick from.** By default a line counts by what it says: a blank line inside a comment
   is blank, a lone `}` is neither code nor comment.  
-  `--counting region` switches to the model most other counters use, so the behavior matches theirs.  
+  `--counting region` switches to the model most other counters use, so the behavior more closely matches theirs.  
   See [The counting model](#the-counting-model).
 - **Per-line explanations.** `--explain` shows one file line by line with the verdict for each
   line, for checking a count that looks wrong. See `--explain` in [COMMANDS.md](https://github.com/subamanis/mezura/blob/HEAD/COMMANDS.md).
 - **Very customizable output.** You have a lot of control about how mezura counts, and also about how 
   it presents the results to you. You don't like the layout? You find it very busy with many sections? You don't want the animations? You can change everything. See [Commands](#commands).
 - **Themes.** Everything printed can be styled and colored: 98 tokens, 15 bundled themes, and an [interactive web editor](https://subamanis.github.io/mezura/theme-editor/) to experiment. See [Themes](#themes).
-- **Output for programs.** One JSON document with `--output json`, and an MCP server so a coding
+- **Output for other places.** A markdown table with `--output markdown` for a pull request or a job summary, one JSON document with `--output json`, and an MCP server so a coding
   assistant can run mezura itself. See [Taking the result elsewhere](#taking-the-result-elsewhere).
 - **Data driven.** All the files, languages and the settings mezura uses are extracted to your machine, where they can be inspected, changed, or extended very easily. See [The data directory](#the-data-directory).  
   
@@ -98,8 +99,9 @@ To update an existing installation to the latest version, just run the same comm
 ### 2. Build it yourself
 After cloning or downloading the repo:
 ```bash
-cargo build --release
+cargo build --release --bin mezura
 ```
+The program is then `target/release/mezura`. Without `--bin mezura` the MCP server is built beside it, as `target/release/mezura-mcp`.
 
 ### 3. Download the prebuilt binary
 Grab the one for your platform from the [latest release](https://github.com/subamanis/mezura/releases/latest).
@@ -113,7 +115,7 @@ Grab the one for your platform from the [latest release](https://github.com/suba
 mezura                                   # count the current directory
 mezura ./src                             # count one directory
 mezura ./src, ./tests                    # count two; commas separate targets
-mezura frontend=./web backend=./api      # group the report by part (modules)
+mezura frontend=./web, backend=./api     # group the report by part (modules)
 mezura ./src --diff main                 # what changed since main
 mezura --by-file                         # show results for every file separately
 mezura src/main.rs --explain             # why each line was counted the way it was
@@ -123,8 +125,6 @@ Files that a .gitignore ignores are skipped by default, and so are minified and 
 build artifacts and dependencies do not pollute the stats. See [What is skipped](#what-is-skipped).
 
 ### Commands
-
-One line per command, grouped by what it touches:
 
 ```
 WHAT IS COUNTED
@@ -315,7 +315,8 @@ attributes the runners collect tests by in C#), the file names a toolchain itsel
 (`_test.go`, Perl's `.t`), and the directory a build tool compiles only for tests (`tests/` beside
 a `Cargo.toml`, `src/test/` beside a `pom.xml` or a `build.gradle`, `Tests/` beside a
 `Package.swift`, `test/` beside a `mix.exs`, and the same for Dart, Julia, Perl, Clojure, Erlang,
-Elm and R). A folder named `tests` with no build file beside it is a folder. A test tool's own file
+Elm and R).   
+A folder named `tests` with no build file beside it is a folder. A test tool's own file
 turns the tool's default names on under the folder holding it: `*.test.ts` and `__tests__/` under
 a `jest.config.ts`, `spec/` under a `.rspec` beside a `Gemfile`, `test_*.py` under a `conftest.py`
 or where a pytest configuration's `testpaths` points. The report lists the presets so applied, and
@@ -329,10 +330,6 @@ mezura ./ --tests "__tests__/,*.test.ts,*.test.tsx"
 mezura ./ --tests "@pytest,!tests/data/"
 ```
 
-`--tests-breakdown share`
-
-<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/tests-share.png" width="1000">
-
 `--show-presets` lists the presets, the shipped ones and your own, and `--save-preset <name>` keeps
 the test patterns of a run as one of yours. `--tests-breakdown split` draws the rest of the language
 as a `production` row beside the tests, `--tests-breakdown removed` leaves the tests out of every
@@ -342,6 +339,10 @@ is refused (doc tests, tests a macro writes, `describe` and the other names a fr
 function) and every known limitation with its example are in
 **[Test detection](https://github.com/subamanis/mezura/blob/HEAD/TEST_DETECTION.md)**, with the
 table of presets and the file that turns each one on.
+
+`--tests-breakdown share`
+
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/tests-share.png" width="1000">
 
 `--tests-breakdown split`
 
@@ -772,7 +773,7 @@ empty queue and heavy starvation mean the walk is the constraint.
 
 Opening a file is far more expensive on Windows than on Linux: every open walks the object manager, the security descriptor and the whole filter driver stack, which is where antivirus and other minifilters sit. Since mezura opens one file after another, this dominates: **on Windows the program is I/O bound, and most of its time is spent waiting on `File::open` rather than counting anything**. On Linux the same open is nearly free, and the run's cpu goes almost entirely into mezura's own work instead of the operating system's.
 
-The practical consequence is that the same repository on the same machine is measurably faster to analyze from Linux (~2.3x speedup).
+The practical consequence is that the same repository on the same machine is measurably faster to analyze from Linux.
 
 That baseline cost is structural and does not go away. What can be removed is what sits on top of it: because every open traverses the filter stack, real-time antivirus protection ends up inside mezura's hot path, inspecting each file as it is opened, and it multiplies an already expensive operation. Excluding mezura from that scanning makes a very big difference on the performance.
 
@@ -798,6 +799,11 @@ Remove-MpPreference -ExclusionProcess "mezura.exe"
 ## Contributing
 
 See [CONTRIBUTING.md](https://github.com/subamanis/mezura/blob/HEAD/CONTRIBUTING.md) for how to get a change in.
+
+
+## Acknowledgements
+
+Thanks to [cloc](https://github.com/AlDanial/cloc) and [scc](https://github.com/boyter/scc), for the inspiration and motivation to push the boundaries, for setting a high bar and for years of high quality work. They are what pushed every part of mezura to be the best I could make it.
 
 
 ## License
