@@ -5,7 +5,7 @@ use crate::domain::CommentPair;
 use crate::engine::file_parser::{CarriedRecord, NestedLanguageLookup, explain_parsed_file, find_scan_skip, judge_tests_by_path};
 use crate::engine::path_patterns::{PathPatternMatcher, TakingBack};
 use crate::engine::targets::{Targets, convert_to_absolute, find_names_root_of_path, is_inside_or_at, spell_out};
-use crate::engine::test_detection::{DirectoryScope, FilesOnDisk, OwnListing, PresetClimb, PresetsTakenBack, TestScope,
+use crate::engine::test_detection::{DirectoryScope, FilesOnDisk, OwnListing, PresetClimb, TestScope,
         TestsByPath, find_declaring_chain, find_test_directory_along};
 use crate::languages::Languages;
 
@@ -298,7 +298,7 @@ fn decide_whole_file(absolute: &str, config: &EngineConfig, targets: Option<&Tar
     let names_root = find_names_root_of_file(absolute, config, targets);
     let file = Path::new(absolute);
     let folder = file.parent().unwrap_or(file);
-    let climb = PresetClimb::new(PresetsTakenBack::of(&config.test_patterns.patterns));
+    let climb = PresetClimb::new(patterns.get_presets_taken_back());
     let checkout = config.checkout.as_ref().map(crate::engine::targets::resolve_checkout);
     let holder = DirectoryScope::of_target(folder, names_root, &patterns, &climb, OwnListing::Unread, checkout.as_ref());
     let (scope, decided_by, decided_by_presets) = holder.of_file(file, &patterns, &mut Vec::new());

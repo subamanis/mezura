@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{RepositoryCheckout, TestFileName};
 use crate::engine::is_the_same_name;
-use crate::engine::path_patterns::{PathPatternMatcher, PatternMatch, TakingBack, split_negation};
+use crate::engine::path_patterns::{PathPatternMatcher, PatternMatch, TakingBack};
 use crate::engine::targets::spell_out;
 
 use super::tool_configuration::{CONFTEST, PYTEST_CONFIGURATION_FILE_NAMES, read_pytest_configuration};
@@ -575,19 +575,17 @@ impl TriggerFilesSeen {
     }
 }
 
-// A preset the list takes back whole, as '!@name' writes it, is never turned on, since a typed name never reaches above a target
+// A preset named with '!@name' is never turned on by a file
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct PresetsTakenBack(u32);
 
 impl PresetsTakenBack {
-    pub(crate) fn of(patterns: &[String]) -> PresetsTakenBack {
-        let taken_back = patterns.iter().filter_map(|pattern| match split_negation(pattern.trim()) {
-            ("", _) => None,
-            (_, rest) => Some(rest)
-        }).collect::<Vec<_>>();
-        PresetsTakenBack(TEST_PRESETS.iter().enumerate()
-                .filter(|(_, preset)| preset.patterns.iter().all(|pattern| taken_back.contains(pattern)))
-                .fold(0, |taken, (at, _)| taken | 1 << at))
+    pub(crate) fn take_back(&mut self, name: &str) -> bool {
+        let Some(at) = TEST_PRESETS.iter().position(|preset| preset.name.eq_ignore_ascii_case(name)) else {
+            return false;
+        };
+        self.0 |= 1 << at;
+        true
     }
 
     fn holds(self, at: usize) -> bool {
@@ -1016,7 +1014,8 @@ mod tests {
                 "the configuration's preset was not pushed first");
         assert_eq!(vec![tests_of("beside"), Vec::new()], beside.into_iter().map(|(_, _, scopes)| scopes).collect::<Vec<_>>(),
                 "the conftest.py beside a configuration was narrowed by its testpaths");
-        let taken_back = PresetsTakenBack::of(&["!test_*.py".to_owned(), "!*_test.py".to_owned(), "!conftest.py".to_owned()]);
+        let mut taken_back = PresetsTakenBack::default();
+        assert!(taken_back.take_back("pytest"));
         assert!(triggers(&["pytest.ini"]).turn_on(&root.join("alone"), taken_back).is_empty(), "'!@pytest' left the configuration's preset on");
 
         std::fs::remove_dir_all(&root).unwrap();

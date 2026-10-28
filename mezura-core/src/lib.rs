@@ -84,7 +84,7 @@ use crossbeam_deque::{Injector, Worker};
 use engine::file_parser::NestedLanguageLookup;
 use engine::modules::{ModuleId, Modules};
 use engine::path_patterns::{PathPatternMatcher, TakingBack, Unused, UnusedPattern};
-use engine::test_detection::{ActivePreset, ActivePresets, DirectoryScope, FilesOnDisk, OwnListing, PresetClimb, PresetsTakenBack,
+use engine::test_detection::{ActivePreset, ActivePresets, DirectoryScope, FilesOnDisk, OwnListing, PresetClimb,
         TestScope, promote_declared_test_modules};
 use engine::test_detection::TEST_PRESETS;
 
@@ -434,7 +434,7 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
         progress: &ScanProgress) -> Vec<Arc<ActivePreset>>
 {
     let mut scopes_of_directories = HashMap::new();
-    let climb = PresetClimb::new(PresetsTakenBack::of(&config.test_patterns.patterns));
+    let climb = PresetClimb::new(test_patterns.get_presets_taken_back());
     let checkout = config.checkout.as_ref().map(engine::targets::resolve_checkout);
     for target in crate::engine::targets::topmost_targets(targets) {
         let dir_path = Path::new(&target.path);

@@ -174,23 +174,22 @@ names the preset to type: `jest tests are declared with '--tests "@jest"'`.
 
 **A preset by name.** `@name` in `--tests` stands for the preset's patterns, applied everywhere
 under the target whether or not the tool's file is there: `--tests "@pytest,!tests/data/"`.
-`!@jest` takes a preset back, typed or turned on by a file, and so does taking back all its
-patterns by hand: `!spec/` turns RSpec off. A typed pattern always comes after what a file turned
-on, so `--tests "!tests/data/"` corrects the pytest preset and keeps the rest of it. A folder whose
-name starts with `@` is written as a place, `./@types/`. An unknown preset name stops the run and
-lists the known ones. In PowerShell a preset goes in quotation marks, since the shell reads a bare
-word starting with `@` as a variable.
+`!@jest` turns a preset off, typed or turned on by a file, and leaves every other rule alone. A
+typed pattern always comes after what a file turned on, so `--tests "!tests/data/"` corrects the
+pytest preset and keeps the rest of it. A folder whose name starts with `@` is written as a place,
+`./@types/`. An unknown preset name stops the run and lists the known ones. In PowerShell a preset
+goes in quotation marks, since the shell reads a bare word starting with `@` as a variable.
 
-`--save` and `--save-local` write the patterns with every `@` expanded, so a saved configuration
-does not depend on the presets of the machine that wrote it.
+`--save` and `--save-local` write the patterns with every `@name` expanded and `!@name` kept as
+written, so a saved configuration does not depend on the presets of the machine that wrote it.
 
 **Your own.** `--save-preset <name>` saves the test patterns of a run as
 `data/test-presets/<name>.txt` in the data directory, and `--tests "@<name>"` uses it from then on,
 in any project. The file holds patterns under a `===> tests` line, comma-separated or one per line,
 and the text above that line is the description `--show-presets` prints. It may name a shipped
-preset, `@xt`, and never another of yours. A shipped preset cannot be edited: take it back and add
-yours, `--tests "!@jest,@mine"`. A file of yours named like a shipped preset is ignored, with the
-warning `preset-file-shadowed` on every run until it is renamed.
+preset, `@xt` or `!@jest`, and never another of yours. A shipped preset cannot be edited: take it
+back and add yours, `--tests "!@jest,@mine"`. A file of yours named like a shipped preset is
+ignored, with the warning `preset-file-shadowed` on every run until it is renamed.
 
 C and C++ have no preset, since where their tests live is up to each project: write the folder,
 `./tests/`.

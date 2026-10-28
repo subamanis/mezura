@@ -24,7 +24,7 @@ Main changes:
       are listed under the report with their folders and files, and '--tests "!@jest"' takes one
       back.
   -> '--tests' takes a preset by name: '@pytest' stands for 'test_*.py', '*_test.py' and
-      'conftest.py', and '!@pytest' takes each of them back. New '--show-presets' lists the shipped
+      'conftest.py', and '!@pytest' turns that preset off. New '--show-presets' lists the shipped
       presets and your own, and new '--save-preset <name>' keeps the test patterns of a run as one
       of your own, under 'data/test-presets', for '--tests "@<name>"'.
   -> A 'testdata' folder below a 'go.mod', at any depth, is test code whole, as the go tool treats

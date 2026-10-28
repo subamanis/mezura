@@ -7,9 +7,9 @@ New:
 - Test code detection. Each language's tests are counted apart, as a `TestCode` per language in
   `RunResult::tests` and `ModuleResult::tests` and per file in `FileEntry::tests`. It is on by
   default (`EngineConfig::detect_tests`), `EngineConfig::test_patterns` adds or takes back files and
-  folders, and a test tool's default names apply where its configuration file is found
-  (`TestPreset`, `get_test_presets`, `RunResult::applied_presets`). What each language detects is in
-  `TEST_DETECTION.md`.
+  folders and disables a preset with `!@<name>`, and a test tool's default names apply where its
+  configuration file is found (`TestPreset`, `get_test_presets`, `RunResult::applied_presets`). What
+  each language detects is in `TEST_DETECTION.md`.
 - `explain_file` marks every line of test code (`ExplainedLine::in_test`) and names the rule that
   made a whole file test code (`FileExplanation::test_file_rule`, a `TestFileRule`).
 - `PathPatterns`, one type for the exclusion and the test patterns, with `PatternError` for one that

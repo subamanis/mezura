@@ -2626,14 +2626,16 @@ mod tests {
         let project = build_test_project("save-local", "");
         let written = format!("{project}/{}/{}", crate::paths::LOCAL_DIR_NAME, crate::paths::LOCAL_CONFIG_FILE_NAME);
 
-        create_config_from_args(&format!("{project} --exclude build --top 4 --{SAVE_LOCAL}")).unwrap();
+        create_config_from_args(&format!("{project} --exclude build --tests @xt,!@gradle --top 4 --{SAVE_LOCAL}")).unwrap();
         assert!(std::path::Path::new(&written).exists(), "no configuration was written for the project");
         // Relative, or the file names directories that exist on one machine
         let contents = std::fs::read_to_string(&written).unwrap();
         assert!(!contents.contains(&project), "the project was written into its own configuration as an absolute path:\n{contents}");
+        assert!(contents.contains("===> tests\nxt/,!@gradle\n"), "{contents}");
 
         let read_back = create_config_from_args(&format!("{project}/src")).unwrap();
         assert_eq!(vec!["build".to_owned()], read_back.engine.exclude_patterns.patterns);
+        assert_eq!(vec!["xt/".to_owned(), "!@gradle".to_owned()], read_back.engine.test_patterns.patterns);
         assert_eq!(Some(4), read_back.view.top_n);
 
         // Saved again from a run that mentions neither, and both survive: what is saved is the

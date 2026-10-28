@@ -273,7 +273,7 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     if let Some(exclude_patterns) = &config_builder.exclude_patterns {
         write_block(&mut writer, config_manager::EXCLUDE, &format_patterns(exclude_patterns))?;
     }
-    if let Some(test_patterns) = &config_builder.test_patterns {
+    if let Some(test_patterns) = &config_builder.test_patterns && !test_patterns.patterns.is_empty() {
         write_block(&mut writer, config_manager::TESTS, &format_patterns(test_patterns))?;
     }
     if let Some(languages_of_interest) = &config_builder.languages_of_interest {
@@ -572,7 +572,7 @@ mod tests {
         let (read, issues) = parse_config_file(Some("with-a-preset"), Some(SCRATCH_CONFIG_DIR.to_owned())).unwrap();
         let _ = std::fs::remove_file(&path);
         assert!(issues.invalid_fields.is_empty(), "{:?}", issues.invalid_fields);
-        assert_eq!(Some(PathPatterns::of(["xt/", "!src/*Test/", "!src/testFixtures/"])), read.test_patterns);
+        assert_eq!(Some(PathPatterns::of(["xt/", "!@gradle"])), read.test_patterns);
         assert_eq!(Some(PathPatterns::of(["@types"])), read.exclude_patterns, "an exclusion read a name starting with '@' as a preset");
 
         std::fs::write(&path, "===> tests\n@nope\n").unwrap();

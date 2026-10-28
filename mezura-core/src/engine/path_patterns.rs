@@ -7,8 +7,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use globset::{Candidate, GlobBuilder, GlobSet, GlobSetBuilder};
 
 use crate::engine::targets::{WILDCARDS, absolutize_pattern, convert_to_absolute, is_inside_or_at, normalise_separators};
+use crate::engine::test_detection::PresetsTakenBack;
 
 const NEGATION : char = '!';
+const PRESET_SIGIL : char = '@';
 const ANY_DEPTH : &str = "**/";
 const EVERYTHING_BELOW : &str = "/**";
 
@@ -21,7 +23,9 @@ pub enum PatternError {
     /// Holds nothing once its `!` and its trailing `/` are read.
     Empty(String),
     /// Starts with `!` in a list where nothing can be taken back.
-    TakesBack(String)
+    TakesBack(String),
+    /// Starts with `!@` and names no shipped test preset.
+    UnknownPreset(String)
 }
 
 impl std::error::Error for PatternError {}
@@ -32,7 +36,8 @@ impl std::fmt::Display for PatternError {
             Self::InvalidGlob(x) => write!(f, "'{x}' is not a valid glob pattern."),
             Self::Empty(x) => write!(f, "'{x}' names nothing once its '!' and its trailing '/' are read."),
             Self::TakesBack(x) => write!(f, "'{x}' starts with '!', which takes an earlier pattern back, but what an \
-                    exclude pattern leaves out cannot be taken back, since a directory left out is never entered.")
+                    exclude pattern leaves out cannot be taken back, since a directory left out is never entered."),
+            Self::UnknownPreset(x) => write!(f, "'{x}' names no shipped test preset.")
         }
     }
 }
@@ -112,7 +117,8 @@ pub(crate) struct PathPatternMatcher {
     names_written_at: Vec<usize>,
     paths_written_at: Vec<usize>,
     rules: Vec<Rule>,
-    matched: Vec<AtomicBool>
+    matched: Vec<AtomicBool>,
+    presets_taken_back: PresetsTakenBack
 }
 
 impl PathPatternMatcher {
@@ -122,6 +128,7 @@ impl PathPatternMatcher {
         let mut names_written_at = Vec::new();
         let mut paths_written_at = Vec::new();
         let mut rules = Vec::with_capacity(patterns.len());
+        let mut presets_taken_back = PresetsTakenBack::default();
         for (written_at, pattern) in patterns.iter().map(AsRef::as_ref).enumerate() {
             let (negation, text) = split_negation(pattern);
             let negated = !negation.is_empty();
@@ -130,6 +137,13 @@ impl PathPatternMatcher {
             }
             if text.starts_with(NEGATION) {
                 return Err(PatternError::InvalidGlob(pattern.to_owned()));
+            }
+            if negated && let Some(name) = text.strip_prefix(PRESET_SIGIL) {
+                if !presets_taken_back.take_back(name) {
+                    return Err(PatternError::UnknownPreset(pattern.to_owned()));
+                }
+                rules.push(Rule { written: pattern.to_owned(), negated: true, folders_only: false, kind: Kind::DisabledPreset });
+                continue;
             }
             let text = normalise_separators(text);
             let (folders_only, text) = strip_folder_suffix(&text);
@@ -160,11 +174,15 @@ impl PathPatternMatcher {
         let invalid_set = |_| PatternError::InvalidGlob(String::new());
         let matched = (0..rules.len()).map(|_| AtomicBool::new(false)).collect();
         Ok(PathPatternMatcher { names: names.build().map_err(invalid_set)?, paths: paths.build().map_err(invalid_set)?,
-                names_written_at, paths_written_at, rules, matched })
+                names_written_at, paths_written_at, rules, matched, presets_taken_back })
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.rules.is_empty()
+        self.names.is_empty() && self.paths.is_empty()
+    }
+
+    pub(crate) fn get_presets_taken_back(&self) -> PresetsTakenBack {
+        self.presets_taken_back
     }
 
     pub(crate) fn find_last_match_of(&self, path: &Path, names_root: usize, is_folder: bool, found: &mut Vec<usize>)
@@ -204,7 +222,7 @@ impl PathPatternMatcher {
                             true => Unused::MatchedNothing,
                             false => Unused::NameMatchedNothing
                         } }),
-                Kind::Name { .. } | Kind::Path { .. } => None
+                Kind::Name { .. } | Kind::Path { .. } | Kind::DisabledPreset => None
             }
         }).collect()
     }
@@ -298,7 +316,8 @@ struct Rule {
 #[derive(Debug, Clone)]
 enum Kind {
     Name { reaches_into_a_path: bool },
-    Path { place: String, on_disk: bool }
+    Path { place: String, on_disk: bool },
+    DisabledPreset
 }
 
 fn find_ends_along(absolute: &str, names_root: usize) -> impl Iterator<Item = usize> {
@@ -542,8 +561,11 @@ mod tests {
         assert_eq!(Err(PatternError::Empty(" ! / ".to_owned())), compile(&[" ! / "]));
         assert_eq!(Err(PatternError::InvalidGlob("[bad".to_owned())), compile(&["fine", "[bad"]));
         assert_eq!(Err(PatternError::InvalidGlob("!!./gen".to_owned())), compile(&["!!./gen"]));
-        assert!(validate_test_patterns(&owned(&["tests/", "!**/*_test.go"])).is_ok());
+        assert_eq!(Err(PatternError::UnknownPreset("!@nope".to_owned())), compile(&["!@nope"]));
+        assert_eq!(Err(PatternError::UnknownPreset("!@".to_owned())), compile(&["!@"]));
+        assert!(validate_test_patterns(&owned(&["tests/", "!**/*_test.go", "!@gradle", "!@Gradle"])).is_ok());
         assert!(matcher(&[]).is_empty());
+        assert!(matcher(&["!@gradle"]).is_empty(), "a disabled preset alone left the matcher non-empty");
         assert!(!matcher(&["x"]).is_empty());
     }
 
@@ -603,7 +625,7 @@ mod tests {
                 unused(&format!("{root_str}/nowhere/*/gen"), Unused::NotOnDisk)], placed.find_places_out_of_reach(&targets),
                 "a place above the target, or a wildcard pattern below it, was reported");
 
-        let names = matcher(&["src/gen", "tests", "**/spec/helpers", "vendor/lib/", "!src/gen/out"]);
+        let names = matcher(&["src/gen", "tests", "**/spec/helpers", "vendor/lib/", "!src/gen/out", "!@gradle"]);
         let names_root = root_str.len() + 1;
         let mut found = Vec::new();
         names.find_last_match(&format!("{target}/src/gen"), names_root, true, &mut found);

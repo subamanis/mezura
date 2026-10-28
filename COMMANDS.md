@@ -190,7 +190,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     that makes a whole file test code, '@Test' in Java, is off under a '!'.
 
     A preset is the names a test tool gives its test files. '--tests "@pytest"' stands for
-    'test_*.py', '*_test.py' and 'conftest.py', and '--tests "!@pytest"' takes each of them back.
+    'test_*.py', '*_test.py' and 'conftest.py', and '--tests "!@pytest"' turns that preset off.
     A preset also turns itself on under a folder holding the tool's own file, the jest one under
     a 'jest.config.ts', and a pattern typed here comes after it, so a '!' corrects it there too.
     Pytest's configuration files are read for 'testpaths' and 'python_files', which scope and

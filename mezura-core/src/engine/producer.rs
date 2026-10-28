@@ -65,7 +65,7 @@ fn search_for_files(id: usize, files_injector: &Injector<ParsableFile>, dirs_inj
     let mut unreadable_dirs = Vec::new();
     let mut should_terminate = false;
     let mut patterns_found = Vec::new();
-    let presets_taken_back = PresetsTakenBack::of(&config.test_patterns.patterns);
+    let presets_taken_back = test_patterns.get_presets_taken_back();
 
     loop {
         // Newest of its own subdirectories first, so a thread finishes the branch it is in before it

@@ -1492,7 +1492,9 @@ fn a_target_inside_a_build_test_directory_below_a_folder_one_preset_decided_cred
 fn a_preset_taken_back_whole_is_never_turned_on_even_from_a_target_inside_its_folder() {
     let root = write_tree("mezura-presets-taken-back", &[(".rspec", ""), ("Gemfile", ""), ("spec/models/a_spec.rb", "x = 1\n"),
             ("package.json", "{}\n"), ("jest.config.js", "module.exports = {};\n"), ("web/a.test.js", "test('a', () => {});\n"),
-            ("web/b.spec.js", "test('b', () => {});\n")]);
+            ("web/b.spec.js", "test('b', () => {});\n"), ("settings.gradle", ""),
+            ("app/src/androidTest/ExampleInstrumentedTest.java", "@RunWith(AndroidJUnit4.class)\nclass ExampleInstrumentedTest {}\n"),
+            ("app/src/androidTest/Helper.java", "class Helper {}\n")]);
     let root_str = root.to_string_lossy().replace('\\', "/");
     let counted = |target: &str, tests: &[&str]| {
         let result = count_with_shipped_languages(&EngineConfig { threads: Threads::new(1, 2),
@@ -1500,12 +1502,28 @@ fn a_preset_taken_back_whole_is_never_turned_on_even_from_a_target_inside_its_fo
         let presets = result.applied_presets.iter().filter(|x| x.matched).map(|x| x.name.clone()).collect::<Vec<_>>();
         (presets, result.tests.values().map(|code| code.stats.files).sum::<usize>())
     };
-    let from_inside = counted("spec/models", &["!spec/"]);
-    let from_the_root = counted(".", &["!spec/"]);
+    let from_inside = counted("spec/models", &["!@rspec"]);
+    let from_the_root = counted(".", &["!@rspec", "!@gradle"]);
+    let from_app_src = counted("app/src", &["!@gradle"]);
+    let from_android_test = counted("app/src/androidTest", &["!@gradle"]);
+    let with_gradle = counted("app/src", &[]);
     let refined = counted("web", &["!*.test.js"]);
+    let explained = |read_from: Option<String>| {
+        let config = EngineConfig { test_patterns: PathPatterns { patterns: vec!["!@gradle".to_owned()], read_from,
+                ..Default::default() }, ..EngineConfig::new([root_str.as_str()]) };
+        let (languages, _) = Languages::shipped(&config);
+        mezura_core::explain_file(&root.join("app/src/androidTest/ExampleInstrumentedTest.java"), &config, languages).unwrap()
+                .lines.iter().filter(|line| line.in_test).count()
+    };
+    let explained_from_root = explained(Some(root_str.clone()));
+    let explained_elsewhere = explained(None);
     std::fs::remove_dir_all(&root).unwrap();
     assert_eq!((Vec::<String>::new(), 0), from_inside, "a preset taken back whole still decided from the folder above the target");
-    assert_eq!((vec!["jest".to_owned()], 2), from_the_root);
+    assert_eq!((vec!["jest".to_owned()], 3), from_the_root);
+    assert_eq!((Vec::<String>::new(), 1), from_app_src, "'!@gradle' cancelled the '@RunWith' marker or left '@gradle' on");
+    assert_eq!((Vec::<String>::new(), 1), from_android_test);
+    assert_eq!((vec!["gradle".to_owned()], 2), with_gradle);
+    assert_eq!((2, 2), (explained_from_root, explained_elsewhere), "'--explain' disagreed across working directories under '!@gradle'");
     assert_eq!((vec!["jest".to_owned()], 1), refined, "a pattern refining a preset turned the whole preset off");
 }
 

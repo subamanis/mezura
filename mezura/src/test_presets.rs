@@ -1,8 +1,7 @@
 // What '@name' stands for inside '--tests', a preset the core ships or one of the user's own, which
 // is a file in the 'test-presets' folder of the data directory.
-use mezura_core::{is_a_path_pattern, split_negation};
+use mezura_core::{TestPreset, get_test_presets, is_a_path_pattern, split_negation, validate_test_patterns};
 use mezura_core::warnings::{Code, Warning};
-use mezura_core::{TestPreset, get_test_presets, validate_test_patterns};
 
 use crate::config_files::{find_block_name, read_names_in_dir, strip_byte_order_mark};
 use crate::message_printer::wrap_message;
@@ -59,40 +58,20 @@ pub struct UserPreset {
     pub patterns: Vec<String>
 }
 
-// A '!' in front takes the preset back by putting one before each of its patterns. A pattern that
-// already takes something back is dropped, since negating it again would declare what it took back.
+// A '!' in front of a shipped preset keeps '!@name' in the list so the walk never turns that
+// preset on, and removes whatever an earlier '@name' in the same list added. A '!' in front of a
+// preset of the user's own removes what an earlier '@name' added and leaves no entry.
 pub fn expand_presets(written: Vec<String>, presets_dir: &str) -> Result<ExpandedPatterns, PresetError> {
-    expand_with(written, |name| match find_shipped_preset(name) {
-        Some(preset) => Ok(copy_patterns_of(preset)),
-        None => read_user_preset(presets_dir, name).map(|preset| preset.patterns)
+    let entries = expand_with(written, |name| read_user_preset_entries(presets_dir, name).map(|(_, entries)| entries))?;
+    Ok(ExpandedPatterns {
+        patterns: entries.iter().map(|entry| entry.pattern.clone()).collect(),
+        from_presets: entries.into_iter().filter(|entry| entry.from_preset).map(|entry| entry.pattern).collect()
     })
 }
 
 pub fn read_user_preset(presets_dir: &str, name: &str) -> Result<UserPreset, PresetError> {
-    if !can_name_a_preset(name) {
-        return Err(PresetError::Unknown(name.to_owned()));
-    }
-    let path = build_preset_path(presets_dir, name);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(PresetError::Unknown(name.to_owned())),
-        Err(error) => return Err(build_unusable(name, format!("'{path}' could not be read: {error}.")))
-    };
-    let lines = strip_byte_order_mark(&text).lines().collect::<Vec<_>>();
-    let Some(heading) = lines.iter().position(|line| find_block_name(line) == Some(crate::config_manager::TESTS)) else {
-        return Err(build_unusable(name, format!("'{path}' has no '{PATTERNS_HEADING}' line for its patterns to go under.")));
-    };
-    let written = lines[heading + 1..].iter().take_while(|line| !line.trim().is_empty())
-            .flat_map(|line| crate::args::parse_paths_to_vec(line)).collect::<Vec<_>>();
-    if written.is_empty() {
-        return Err(build_unusable(name, format!("'{path}' holds no pattern under '{PATTERNS_HEADING}'.")));
-    }
-    let expanded = expand_with(written, |inner| find_shipped_preset(inner).map(copy_patterns_of)
-            .ok_or_else(|| build_unusable(name, format!("It names '@{inner}', and a preset of your own \
-                    can name only a shipped one."))))?;
-    validate_test_patterns(&expanded.patterns).map_err(|error| build_unusable(name, error.to_string()))?;
-
-    Ok(UserPreset { description: lines[..heading].join("\n").trim().to_owned(), patterns: expanded.patterns })
+    let (description, entries) = read_user_preset_entries(presets_dir, name)?;
+    Ok(UserPreset { description, patterns: entries.into_iter().map(|entry| entry.pattern).collect() })
 }
 
 pub fn write_user_preset(presets_dir: &str, name: &str, patterns: &[String]) -> std::io::Result<String> {
@@ -128,34 +107,86 @@ pub fn is_about_a_preset_pattern(warning: &Warning, from_presets: &[String]) -> 
     warning.code == Code::PatternMatchedNothing && from_presets.contains(&warning.subject)
 }
 
-fn expand_with(written: Vec<String>, find: impl Fn(&str) -> Result<Vec<String>, PresetError>)
--> Result<ExpandedPatterns, PresetError>
+struct ExpandedEntry {
+    pattern: String,
+    from_preset: bool,
+    shipped: Option<&'static str>,
+    user: Option<String>
+}
+
+impl AsRef<str> for ExpandedEntry {
+    fn as_ref(&self) -> &str {
+        &self.pattern
+    }
+}
+
+fn read_user_preset_entries(presets_dir: &str, name: &str) -> Result<(String, Vec<ExpandedEntry>), PresetError> {
+    if !can_name_a_preset(name) {
+        return Err(PresetError::Unknown(name.to_owned()));
+    }
+    let path = build_preset_path(presets_dir, name);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(PresetError::Unknown(name.to_owned())),
+        Err(error) => return Err(build_unusable(name, format!("'{path}' could not be read: {error}.")))
+    };
+    let lines = strip_byte_order_mark(&text).lines().collect::<Vec<_>>();
+    let Some(heading) = lines.iter().position(|line| find_block_name(line) == Some(crate::config_manager::TESTS)) else {
+        return Err(build_unusable(name, format!("'{path}' has no '{PATTERNS_HEADING}' line for its patterns to go under.")));
+    };
+    let written = lines[heading + 1..].iter().take_while(|line| !line.trim().is_empty())
+            .flat_map(|line| crate::args::parse_paths_to_vec(line)).collect::<Vec<_>>();
+    if written.is_empty() {
+        return Err(build_unusable(name, format!("'{path}' holds no pattern under '{PATTERNS_HEADING}'.")));
+    }
+    let entries = expand_with(written, |inner| Err(build_unusable(name, format!("It names '@{inner}', and a preset of \
+            your own can name only a shipped one."))))?;
+    validate_test_patterns(&entries).map_err(|error| build_unusable(name, error.to_string()))?;
+
+    Ok((lines[..heading].join("\n").trim().to_owned(), entries))
+}
+
+fn expand_with(written: Vec<String>, read_user: impl Fn(&str) -> Result<Vec<ExpandedEntry>, PresetError>)
+-> Result<Vec<ExpandedEntry>, PresetError>
 {
     const PRESET_SIGIL : char = '@';
-    let mut expanded = ExpandedPatterns::default();
+    let mut entries: Vec<ExpandedEntry> = Vec::new();
     for pattern in written {
         let (negation, text) = split_negation(&pattern);
         let Some(name) = text.strip_prefix(PRESET_SIGIL) else {
-            expanded.patterns.push(pattern);
+            entries.push(ExpandedEntry { pattern, from_preset: false, shipped: None, user: None });
             continue;
         };
-        for named in find(name)? {
-            let added = if negation.is_empty() {
-                named
-            } else {
-                match split_negation(&named) {
-                    ("", rest) => format!("{negation}{rest}"),
-                    _ => continue
+        if let Some(preset) = find_shipped_preset(name) {
+            entries.retain(|entry| entry.shipped != Some(preset.name));
+            if negation.is_empty() {
+                for &named in preset.patterns {
+                    entries.push(ExpandedEntry { pattern: named.to_owned(), from_preset: !is_a_path_pattern(named),
+                            shipped: Some(preset.name), user: None });
                 }
-            };
-            if !is_a_path_pattern(&added) {
-                expanded.from_presets.push(added.clone());
+            } else {
+                entries.push(ExpandedEntry { pattern: format!("!@{}", preset.name), from_preset: false,
+                        shipped: Some(preset.name), user: None });
             }
-            expanded.patterns.push(added);
+            continue;
+        }
+        let user_entries = read_user(name)?;
+        let key = name.to_lowercase();
+        entries.retain(|entry| entry.user.as_deref() != Some(&key));
+        if negation.is_empty() {
+            entries.retain(|earlier| earlier.shipped.is_none_or(|shipped|
+                    !user_entries.iter().any(|entry| entry.shipped == Some(shipped))));
+            for mut entry in user_entries {
+                if entry.shipped.is_none() {
+                    entry.from_preset = !is_a_path_pattern(&entry.pattern);
+                }
+                entry.user = Some(key.clone());
+                entries.push(entry);
+            }
         }
     }
 
-    Ok(expanded)
+    Ok(entries)
 }
 
 fn collect_names_to_offer(presets_dir: &str) -> (Vec<&'static str>, Vec<String>) {
@@ -167,10 +198,6 @@ fn collect_names_to_offer(presets_dir: &str) -> (Vec<&'static str>, Vec<String>)
 // Without regard to case, since on Windows and macOS 'Jest.txt' is the file 'jest.txt' would be
 fn find_shipped_preset(name: &str) -> Option<&'static TestPreset> {
     get_test_presets().iter().find(|preset| preset.name.eq_ignore_ascii_case(name))
-}
-
-fn copy_patterns_of(preset: &TestPreset) -> Vec<String> {
-    preset.patterns.iter().map(|pattern| (*pattern).to_owned()).collect()
 }
 
 fn build_unusable(name: &str, why: String) -> PresetError {
@@ -189,8 +216,12 @@ mod tests {
         patterns.iter().map(|x| (*x).to_owned()).collect()
     }
 
+    fn copy_patterns_of(preset: &TestPreset) -> Vec<String> {
+        preset.patterns.iter().map(|pattern| (*pattern).to_owned()).collect()
+    }
+
     #[test]
-    fn a_preset_is_written_out_where_it_stands_and_a_bang_before_it_takes_each_of_its_patterns_back() {
+    fn a_preset_is_written_out_where_it_stands_and_a_bang_before_it_turns_it_off() {
         let dir = std::env::temp_dir().join("mezura-test-presets-expansion");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -205,16 +236,24 @@ mod tests {
         assert_eq!(written(&["test_*.py", "*_test.py", "conftest.py"]), expanded.from_presets);
         assert_eq!(written(&["conftest.py"]), expand_presets(written(&["@placed"]), &dir).unwrap().from_presets,
                 "a place a preset wrote would never say that it is missing");
-        assert_eq!(written(&["!*Tests/", "!*.Test/"]), expand_presets(written(&["!@dotnet"]), &dir).unwrap().patterns);
+        assert_eq!(written(&["!@dotnet"]), expand_presets(written(&["!@Dotnet"]), &dir).unwrap().patterns);
+        assert_eq!(written(&["!@gradle"]), expand_presets(written(&["@gradle", "!@gradle"]), &dir).unwrap().patterns);
+        assert_eq!(copy_patterns_of(find_shipped_preset("gradle").unwrap()),
+                expand_presets(written(&["!@gradle", "@gradle"]), &dir).unwrap().patterns);
         std::fs::write(dir.clone() + "Jest.txt", "===> tests\nmine/\n").unwrap();
         assert_eq!(copy_patterns_of(find_shipped_preset("jest").unwrap()), expand_presets(written(&["@Jest"]), &dir).unwrap().patterns,
                 "a file of the user's own was read under a shipped name, which '--show-presets' says never happens");
         assert_eq!(vec![dir.clone() + "Jest.txt"], collect_shadowed_file_warnings(&dir).into_iter()
                 .map(|warning| warning.subject).collect::<Vec<_>>());
 
-        assert_eq!(written(&["spec/", "!spec/fixtures/", "xt/"]), expand_presets(written(&["@mine"]), &dir).unwrap().patterns);
-        assert_eq!(written(&["!spec/", "!xt/"]), expand_presets(written(&["!@mine"]), &dir).unwrap().patterns,
-                "taking a preset back declared what it took back");
+        std::fs::write(dir.clone() + "mine.txt", "Our layout.\n\n===> tests\nspec/, !spec/fixtures/\n@pytest, !@jest\n").unwrap();
+        assert_eq!(written(&["spec/", "!spec/fixtures/", "test_*.py", "*_test.py", "conftest.py", "!@jest"]),
+                expand_presets(written(&["@mine"]), &dir).unwrap().patterns);
+        assert!(expand_presets(written(&["@mine", "!@mine"]), &dir).unwrap().patterns.is_empty(),
+                "taking a preset of the user's own back left what it added behind");
+        assert!(expand_presets(written(&["!@mine"]), &dir).unwrap().patterns.is_empty());
+        assert_eq!(written(&["spec/", "!spec/fixtures/", "!@jest", "!@pytest"]),
+                expand_presets(written(&["@mine", "!@pytest"]), &dir).unwrap().patterns);
         assert_eq!("Our layout.", read_user_preset(&dir, "mine").unwrap().description);
         write_user_preset(&dir, "saved", &written(&["xt/", "!xt/smoke/"])).unwrap();
         assert_eq!(written(&["xt/", "!xt/smoke/"]), expand_presets(written(&["@saved"]), &dir).unwrap().patterns,
