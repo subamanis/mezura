@@ -18,27 +18,28 @@ like a `.d` dependency file, is set aside. `EngineConfig::use_heuristics` turns 
 readings, and `count_not_code` counts such a file anyway while leaving the identification in place.
 Bundled and generated files are set aside the same way, under `count_minified` and
 `count_generated`, and `RunResult::skipped_files` names every file that was, by the reason it was
-set aside for. Each language's test code is also reported on its own in `RunResult::tests`, a
-breakdown of figures `per_language` already holds: what the language's own markers open or make
-test code whole, what its toolchain names as tests, what the test directory of a build tool holds,
-the default test names of a test tool found beside its configuration file, and what
-`EngineConfig::test_patterns` declares. `detect_tests` turns it off.
+set aside for. Each language's test code is also reported separately in `RunResult::tests` (as a subset of the
+figures in `per_language`): inline test blocks and file-level test annotations, toolchain test
+filenames, standard build-tool test directories, test runner presets enabled by a runner's
+configuration file, and custom globs in `EngineConfig::test_patterns`. Setting `detect_tests` to
+`false` disables test detection.
 
 This is the library. For the command line program, the report it prints and the settings it takes,
 see the [main README](https://github.com/subamanis/mezura).
 
-Counted by itself, on 2026-09-11:
+Counted by itself, on 2026-10-29:
 
 ```
 Details.
 
-Language   Files %      ⌄ Lines %       Code %       Comments %       Extra       Size
-──────────────────────────────────────────────────────────────────────────────────────
-Rust          22 100%    14,126 100%   8,532 60.4%      2,274 16.1%   3,320   718.6 KB
+Language    Files %       ↓ Lines %         Code %       Comments %       Extra       Size
+──────────────────────────────────────────────────────────────────────────────────────────
+Rust           31 100%     24,713 100%    16,148 65.3%      2,847 11.5%   5,718     1.3 MB
+ └─ tests      26 83.9%    11,067 44.8%    8,080 73.0%        791 7.15%   2,196   651.7 KB
 
 Keywords.
 
-Rust   enums: 22, structs: 71
+Rust   enums: 47, structs: 120, traits: 1
 ```
 
 ## Counting a directory

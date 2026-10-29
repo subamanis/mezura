@@ -1,4 +1,6 @@
-v3.3.0 - unreleased
+v3.3.0 - 2026-10-29
+
+  49,416 Total lines  -  32,655 Code lines
 
 Main changes:
   -> Test code detection: test code is now counted separately from production code, with a 'tests'
