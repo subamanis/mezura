@@ -407,11 +407,11 @@ pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configurati
     };
 
     let common_directory = find_common_directory_of(&result.targets);
-    result.modules.iter().map(|module| {
+    let selected = result.modules.iter().map(|module| {
         let shown = ShownFigures::of_module(module, without_tests);
         let (names, _) = find_shown_language_names(&shown.per_language, config);
 
-        names.iter().filter_map(|name| {
+        names.into_iter().filter_map(|name| {
             let (language, entries) = module.files.get_key_value(name.as_str())?;
             let mut files = entries.iter()
                     .filter(|file| !without_tests || !file.is_tests_whole())
@@ -419,11 +419,23 @@ pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configurati
             files.sort_by(|one, other| compare_files_by(one, other, config.view.sort_by, config.view.counting,
                     without_tests));
             let shown = by_file.shown_out_of(files.len());
-            Some((language.as_str(), FileRows {
-                shown: files[..shown].iter()
-                        .map(|file| (shorten_path(&file.path, &result.targets, common_directory), *file)).collect(),
-                hidden: files.len() - shown
-            }))
+            let hidden = files.len() - shown;
+            files.truncate(shown);
+            Some((language.as_str(), files, hidden))
+        }).collect::<Vec<_>>()
+    }).collect::<Vec<_>>();
+
+    let budget = selected.iter().flat_map(|module| module.iter())
+            .flat_map(|(_, files, _)| files.iter())
+            .map(|file| calculate_path_floor(find_relative_path(&file.path, &result.targets, common_directory)))
+            .max().unwrap_or(0).max(SHOWN_PATH_WIDTH);
+
+    selected.into_iter().map(|module| {
+        module.into_iter().map(|(language, files, hidden)| {
+            let shown = files.into_iter()
+                    .map(|file| (elide_long_path_to(find_relative_path(&file.path, &result.targets, common_directory), budget), file))
+                    .collect();
+            (language, FileRows { shown, hidden })
         }).collect()
     }).collect()
 }
@@ -464,17 +476,34 @@ pub(crate) fn find_common_directory_of(targets: &[mezura_core::Target]) -> &str 
     common
 }
 
+fn calculate_path_floor(relative: &str) -> usize {
+    let whole = calculate_widest_visible_line(relative);
+    let name = relative.rsplit('/').next().unwrap_or(relative);
+
+    whole.min(ELIDED.len() + 1 + calculate_widest_visible_line(name))
+}
+
 // What is too wide loses whole components out of its middle and never a piece of one. The file's own
 // name is what tells one row from another, so a name too wide on its own is the floor.
 pub(crate) fn elide_long_path(relative: &str) -> Cow<'_, str> {
-    if calculate_widest_visible_line(relative) <= SHOWN_PATH_WIDTH {
+    elide_long_path_to(relative, SHOWN_PATH_WIDTH)
+}
+
+fn elide_long_path_to(relative: &str, budget: usize) -> Cow<'_, str> {
+    if calculate_widest_visible_line(relative) <= budget {
         return Cow::Borrowed(relative);
     }
 
     let parts = relative.split('/').collect::<Vec<_>>();
     for kept in (1..parts.len().saturating_sub(1)).rev() {
         let shortened = format!("{}/{ELIDED}/{}", parts[0], parts[parts.len() - kept..].join("/"));
-        if calculate_widest_visible_line(&shortened) <= SHOWN_PATH_WIDTH {
+        if calculate_widest_visible_line(&shortened) <= budget {
+            return Cow::Owned(shortened);
+        }
+    }
+    for kept in (2..parts.len()).rev() {
+        let shortened = format!("{ELIDED}/{}", parts[parts.len() - kept..].join("/"));
+        if calculate_widest_visible_line(&shortened) <= budget {
             return Cow::Owned(shortened);
         }
     }
@@ -505,16 +534,14 @@ pub(crate) fn format_cut_list(items: &[impl AsRef<str>], shown: usize) -> String
     }
 }
 
-fn shorten_path<'a>(path: &'a str, targets: &[mezura_core::Target], common_directory: &str) -> Cow<'a, str> {
-    let relative = targets.iter().filter_map(|target| path.strip_prefix(&target.path))
+fn find_relative_path<'a>(path: &'a str, targets: &[mezura_core::Target], common_directory: &str) -> &'a str {
+    targets.iter().filter_map(|target| path.strip_prefix(&target.path))
             .map(|rest| rest.trim_start_matches('/'))
             .filter(|rest| !rest.is_empty())
             .min_by_key(|rest| rest.len())
             .or_else(|| path.strip_prefix(common_directory).filter(|rest| rest.starts_with('/'))
                     .map(|rest| rest.trim_start_matches('/')))
-            .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path));
-
-    elide_long_path(relative)
+            .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path))
 }
 
 #[derive(PartialEq,Eq,Clone,Copy)]
@@ -1384,6 +1411,14 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
                 kind: RowKind::Tests, depth: 0, baseline: tests_before.stats, subject: tests_now.stats });
     }
 
+    let budget = rows.iter().filter(|row| row.kind == RowKind::File)
+            .map(|row| calculate_path_floor(find_section_name_in(&row.name)))
+            .max().unwrap_or(0).max(SHOWN_PATH_WIDTH);
+    for row in rows.iter_mut().filter(|row| row.kind == RowKind::File) {
+        let (branch, path) = split_off_the_branch(&row.name);
+        row.name = format!("{branch}{}", elide_long_path_to(path, budget));
+    }
+
     (rows, files_hidden)
 }
 
@@ -1394,7 +1429,7 @@ fn create_compared_file_rows(files: Vec<super::diff::FileStatsChange>, complete:
     let count = files.len();
     files.into_iter().enumerate().map(|(at, file)| ComparedRow {
         name: format!("{indent}{BRANCH_INDENT}{}{}",
-                find_file_branch_marker(at + 1 == count && complete), elide_long_path(&file.path)),
+                find_file_branch_marker(at + 1 == count && complete), file.path),
         kind: RowKind::File, depth: 0, baseline: file.baseline, subject: file.subject
     }).collect()
 }
@@ -3823,6 +3858,10 @@ mod tests {
                 "the frame is not square once a header carries escapes: {widths:?}");
     }
 
+    fn shorten_path<'a>(path: &'a str, targets: &[mezura_core::Target], common_directory: &str) -> Cow<'a, str> {
+        elide_long_path(find_relative_path(path, targets, common_directory))
+    }
+
     #[test]
     fn a_file_row_drops_the_target_it_was_found_under() {
         let shortened = |path: &str, targets: &[mezura_core::Target]|
@@ -3857,6 +3896,12 @@ mod tests {
                 shortened("D:/x/src/components/Reusable/Shapes/ShapesSelector.vue"));
         assert_eq!("src/.../PatternRecognitionEditorWrapper.vue",
                 shortened("D:/x/src/components/Reusable/BoardsSpecialized/PatternRecognitionEditorWrapper.vue"));
+        // When the first directory itself pushes 'first/.../name' past the budget, the trailing
+        // directories still survive under '.../' before falling back to '.../name'
+        assert_eq!(".../api/Services/UserService.php",
+                shortened("D:/x/very_long_first_folder_name/api/Services/UserService.php"));
+        assert_eq!(".../Services/CustomerOnboardingService.php",
+                shortened("D:/x/very_long_first_folder_name/api/Services/CustomerOnboardingService.php"));
 
         // Nothing is ever shown wider than it started, and a name too wide on its own is the floor:
         // half a name reads as a different file
@@ -3869,6 +3914,55 @@ mod tests {
             assert!(shortened(path).chars().count() <= path.trim_start_matches("D:/x/").chars().count(),
                     "'{path}' came out wider than it went in: '{}'", shortened(path));
         }
+    }
+
+    #[test]
+    fn a_file_name_wider_than_the_default_budget_widens_the_budget_for_every_file_row() {
+        let stats = crate::test_support::plain_stats_of(1, 1000, 50, 40, 5, hashmap![]);
+        let entry = |path: &str| mezura_core::FileEntry {
+            path: path.to_owned(), stats: stats.clone(), nested_languages: HashMap::new(), tests: None
+        };
+        let module_of = |name: &str, lang: &str, path: &str| ModuleResult {
+            name: Some(name.to_owned()),
+            total: stats.clone(),
+            per_language: hashmap![lang.to_owned() => stats.clone()],
+            nested_languages: HashMap::new(),
+            tests: HashMap::new(),
+            files: hashmap![lang.to_owned() => vec![entry(path)]]
+        };
+        let php_path = "D:/x/compliance/api/Services/ComplianceBusinessHiringService.php";
+        let chart_path = "D:/x/vendor/http_cdnjs.cloudflare.com_ajax_libs_Chart.js_3.9.1_chart.js";
+        let run = RunResult {
+            per_language: hashmap!["PHP".to_owned() => stats.clone(), "JavaScript".to_owned() => stats.clone()],
+            modules: vec![module_of("backend", "PHP", php_path), module_of("frontend", "JavaScript", chart_path)],
+            nested_languages: HashMap::new(), tests: HashMap::new(), total: stats.clone(),
+            faulty_files: Vec::new(), skipped_files: mezura_core::SkippedFiles::default(),
+            files_present: FilesPresent::default(), targets: vec![mezura_core::Target::of("D:/x")],
+            unreadable_dirs: Vec::new(), warnings: Vec::new(), applied_presets: Vec::new(),
+            performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }
+        };
+        let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        config.view.by_file = Some(config_manager::ByFile::Capped(10));
+
+        let shown = find_files_to_show(&run, &config, false);
+        assert_eq!("compliance/api/Services/ComplianceBusinessHiringService.php", shown[0]["PHP"].shown[0].0);
+        assert_eq!(".../http_cdnjs.cloudflare.com_ajax_libs_Chart.js_3.9.1_chart.js", shown[1]["JavaScript"].shown[0].0);
+
+        let empty = RunResult {
+            per_language: HashMap::new(), modules: Vec::new(), nested_languages: HashMap::new(),
+            tests: HashMap::new(), total: Stats::default(), faulty_files: Vec::new(),
+            skipped_files: mezura_core::SkippedFiles::default(), files_present: FilesPresent::default(),
+            targets: vec![mezura_core::Target::of("D:/x")], unreadable_dirs: Vec::new(),
+            warnings: Vec::new(), applied_presets: Vec::new(),
+            performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }
+        };
+        let (compared, _) = create_compared_rows(None, &empty, &run, config.view.by_file, &config);
+        let file_rows = compared.iter().filter(|row| row.kind == RowKind::File)
+                .map(|row| find_section_name_in(&row.name)).collect::<Vec<_>>();
+        assert_eq!(vec![
+            ".../http_cdnjs.cloudflare.com_ajax_libs_Chart.js_3.9.1_chart.js",
+            "compliance/api/Services/ComplianceBusinessHiringService.php"
+        ], file_rows);
     }
 
     #[test]

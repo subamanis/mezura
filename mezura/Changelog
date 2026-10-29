@@ -1,3 +1,12 @@
+v3.4.0 - unreleased
+
+Bugfixes:
+  -> Long file paths under '--by-file' now keep their trailing folders ('.../Services/file.php')
+      when the first folder does not fit, and use the full width of the column when a long file
+      name has already widened it.
+
+-----------------------------------------------------------------------------------------------------------
+
 v3.3.0 - 2026-10-29
 
   49,386 Total lines  -  32,632 Code lines
