@@ -1,57 +1,55 @@
 # Test detection
 
-mezura tells the test code of a language from the rest of it. By default, every language that holds any gets a
-`tests` row under it in the report, the total gets one that adds them up, and the same figures are
-in the JSON document, in a `--diff` and in `--explain`. This page says what is counted as test code, what a test tool's own file turns on, how the
-rest is declared with `--tests`, and for each language what is found, what is refused and what is
-missed.
+mezura separates test code from production code. By default, every language with tests gets a
+`tests` row under it in the report, the total gets one that sums them up, and the same figures
+appear in the JSON output, `--diff`, and `--explain`.
 
-The rule behind all of it: **a production line counted as a test hurts more than a test line left
-uncounted.** So on its own mezura takes what the code itself states, what the build tool defines,
-and the default names of a test tool whose own file sits in the folder.
+The rule behind default detection is simple: **counting production code as a test is worse than
+missing a test.** Out of the box, mezura only counts code as tests when the source file, the
+toolchain, or a test runner's config file makes it unambiguous. Everything else can be declared
+with `--tests`.
 
 - [Detected by default](#detected-by-default)
-- [What a test tool's file turns on](#what-a-test-tools-file-turns-on)
-- [Declaring the rest with --tests](#declaring-the-rest-with---tests)
+- [Test tool presets](#test-tool-presets)
+- [Declaring custom test paths with `--tests`](#declaring-custom-test-paths-with---tests)
 - [Language by language](#language-by-language)
-- [What is refused for every language](#what-is-refused-for-every-language)
-- [Where the count shows](#where-the-count-shows)
+- [What is not detected](#what-is-not-detected)
+- [Where the count appears](#where-the-count-appears)
 
 
 ## Detected by default
 
-Three kinds of test code are found with no setup. The names a test tool's own file turns on are in
-the [next section](#what-a-test-tools-file-turns-on).
+mezura detects test code automatically in three ways, plus through [test tool presets](#test-tool-presets).
 
-### 1. Markers in the code
+### 1. Markers in the source code
 
-Rust, D and Zig write tests inside the source file, behind a marker the compiler reads: `#[test]`
-and `#[cfg(test)]` in Rust, `unittest` in D, `test "name" {` in Zig. mezura counts from the marker
-to the end of the item under it, its closing `}` or `;`. A marker inside a string or a comment is
-text. The markers are declared in the language file, under `Tests`, as the
-[language files guide](LANGUAGE_FILES_GUIDE.md) describes.
+- **Inline test blocks (Rust, D, Zig):** These languages mark test blocks directly in source files
+  (`#[test]` and `#[cfg(test)]` in Rust, `unittest` in D, `test "name" {` in Zig). mezura counts
+  from the marker to the closing `}` or `;` of the item under it. Markers inside strings or comments
+  are ignored.
+- **File-level test annotations (Java, Kotlin, C#):** When a file contains a test runner annotation
+  or attribute (such as `@Test` or `@BeforeEach` in Java/Kotlin, or `[Fact]`, `[Test]`,
+  `[TestFixture]` in C#), the entire file is counted as test code. Markers are matched as whole
+  words (`@TestOnly` does not match `@Test`) and are listed in each language file under
+  `FILE MARKERS`.
 
-Java, Kotlin and C# write tests as ordinary classes that the test runner finds by an annotation or
-an attribute: `@Test`, `@BeforeEach`, `[Fact]`, `[Test]`, `[TestFixture]`. One of these in a file
-makes the whole file test code. The list lives in the language file under `FILE MARKERS` and holds
-only names that a test framework defines and no production library uses, so `@VisibleForTesting`,
-`@TestOnly` and `[Category]` are not on it. The marker has to be a whole word: `@TestOnly` is not
-`@Test`, and `[TestFixture]` is not `[Test]`.
+### 2. File names required by the language toolchain
 
-### 2. Names the toolchain defines
+Some toolchains reserve specific file suffixes exclusively for tests:
+- Go: `*_test.go`
+- Perl: `*.t`
 
-`*_test.go` and Perl's `*.t`, as whole files. The go tool compiles a `_test.go` file for `go test`
-and nothing else, and a `.t` file is always a test script.
+Any file matching these names is counted as test code. Naming conventions that are not enforced by a
+toolchain (like `test_*.py`, `*Test.java`, or `*.spec.ts`) are not enabled globally by default,
+because production files sometimes share those names. They are enabled either automatically by a
+[test tool preset](#test-tool-presets) or manually with `--tests`.
 
-Names that are only a convention, `test_*.py`, `*Test.java`, `*.spec.ts`, `*_spec.rb`, are not
-detected, because production files carry them too: `NodeTest.java` in the JDK, `ZTest.cs` in Unity,
-`hit_test.rs` in a geometry crate. Declare them with `--tests`.
+### 3. Standard test directories next to a build file
 
-### 3. The test directory of a build tool, beside its build file
+When a build tool defines a fixed directory for tests, mezura counts that directory as test code
+whenever its build file is in the same project root:
 
-These directories are test code whole when the build file sits beside them:
-
-| build file | test directory beside it |
+| Build file | Test directory |
 |---|---|
 | `Cargo.toml` | `tests/` |
 | `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`, `build.sbt` | `src/test/` |
@@ -63,143 +61,94 @@ These directories are test code whole when the build file sits beside them:
 | `project.clj` | `test/` |
 | `rebar.config` | `test/` |
 | `elm.json` | `tests/` |
-| `DESCRIPTION` together with `NAMESPACE` | `tests/` |
-| `go.mod` | every `testdata/` below it, at any depth |
+| `DESCRIPTION` + `NAMESPACE` | `tests/` |
+| `go.mod` | any `testdata/` directory below it |
 
-The build file is never opened, only its presence counts, so a test directory moved elsewhere in
-its configuration, Maven's `testSourceDirectory`, is declared with `--tests`. Gradle's other source
-sets, `src/integrationTest` and Android's `src/androidTest`, come from the `@gradle` preset in the
-next section.
+Notes:
+- mezura checks for the build file's presence on disk rather than parsing custom directory
+  overrides inside it. If your project moves its test directory to a custom path, pass it with
+  `--tests`.
+- For multi-project Gradle (`settings.gradle`, `settings.gradle.kts`) and sbt (`build.sbt`) builds,
+  every `src/test/` in subprojects below the root is also counted (e.g. `core/src/test/`).
+- Build files that do not enforce a standard test directory (such as `package.json`,
+  `pyproject.toml`, `CMakeLists.txt`, or `.csproj`) do not mark a folder on their own; for those
+  ecosystems, mezura uses [test tool presets](#test-tool-presets) or `--tests`.
 
-`testdata` counts at any depth below a `go.mod`, since the go tool ignores folders of that name and
-keeps test inputs in them. Without a `go.mod` above it, it is an ordinary folder.
+### Counting a subdirectory or single file
 
-Under a `settings.gradle`, `settings.gradle.kts` or `build.sbt`, every `src/test` below it is test
-code, also in a subproject with no build file of its own: `core/src/test`, and sbt's
-`core/jvm/src/test`. A `pom.xml` covers its own folder only.
+You get the same result whether you count from the project root, a subdirectory (`mezura ./src`),
+or a single file (`mezura ./tests/api.rs --explain`). mezura walks upward from the target to find
+any enclosing build file or test runner config.
 
-Folder and build file names follow the case rules of the filesystem: on Windows and macOS a
-`Tests/` beside a `Cargo.toml` counts, on Linux it is production.
-
-`package.json`, `pyproject.toml`, `setup.py`, `composer.json`, `Gemfile`, `.csproj`,
-`CMakeLists.txt` and `build.zig` define no test directory, so JavaScript, TypeScript, Python, PHP,
-Ruby, C#, C, C++ and Zig get nothing from a build file: only what a test tool's file turns on, and
-what `--tests` declares. A folder named `test`, `tests` or `__tests__` means nothing by itself.
-
-### Counting part of a project
-
-The answer is the same however the project is reached: from its root, from inside its test
-directory (`mezura ./proj/tests`), from its sources (`mezura ./core/src`), by naming one file,
-with `--explain` on that file, or in the checkout of a `--diff` revision. A build file above the
-target is found wherever the count starts. A folder above the project never makes it tests:
-`D:/tests/app` is tests only if `D:/Cargo.toml` exists.
-
-One exception: a Rust file declared as a module under a test marker is test code only when the
-declaring file is in the same count. Counting a folder below it, naming only the declared file, or
-leaving the declaring file out with `--exclude`, a `.gitignore` or as generated makes it production.
-`--explain` reads the declaring files from disk in any case, so it answers like a count of the whole
-project.
+The one exception is Rust module files (`#[cfg(test)] mod helper;`): a separate module file is known
+to be test code only when the file that declares `mod helper;` is part of the same run (or when
+inspecting the file with `--explain`, which checks neighboring files on disk).
 
 
-## What a test tool's file turns on
+## Test tool presets
 
-A test tool's own file means the tool is in use, so its default test names apply under the folder
-holding it: a `jest.config.ts` makes every `__tests__/` and every `*.test.ts` below its folder test
-code, and the same names outside that folder are ordinary files. The file is only looked for and
-never opened, except pytest's configuration, below. These are the presets, and `--show-presets`
-lists them.
+In ecosystems where the build file does not fix a test location (JavaScript/TypeScript, Python, Ruby,
+PHP), mezura looks for the test runner's own config file. When found, it enables that runner's
+default test file patterns under the folder containing the config file.
 
-Only a file that belongs to one tool turns a preset on: `jest.config.ts`, `.rspec`, `phpunit.xml`,
-`conftest.py`. `package.json`, `pyproject.toml`, a `Gemfile`, `composer.json` and a `.csproj` turn
-nothing on. Two presets are narrower than the tool's own documentation:
+For example, if `frontend/jest.config.ts` exists, `__tests__/` and `*.test.ts` inside `frontend/`
+are counted as tests, without affecting other folders in a monorepo.
 
-- **pytest** is turned on by a `conftest.py`, or by a configuration file that declares `testpaths`,
-  under those folders only. A `pytest.ini` without `testpaths` turns nothing on, since at a project
-  root it would make library files such as aiohttp's `aiohttp/test_utils.py` count as tests.
-- **RSpec** needs a `Gemfile` beside the `.rspec`, since a `.rspec` in the home folder would
-  otherwise turn every `spec/` under it into tests.
+Run `--show-presets` to see all available presets:
 
-A preset applies under its file's folder only, so in a monorepo jest's names apply under
-`site/frontend/` and PHPUnit's under `site/backend/`. A file deeper down adds its own names and
-removes nothing above it. A file above the target counts too: counting `./frontend/src` finds
-`frontend/jest.config.ts`.
+| Preset | Activated automatically by | Patterns matched |
+|---|---|---|
+| `@jest` | `jest.config.*` | `__tests__/`, `*.test.{js,jsx,ts,tsx,mjs,cjs,mts,cts}`, `*.spec.{js,jsx,ts,tsx,mjs,cjs,mts,cts}` |
+| `@vitest` | `vitest.config.*`, `vitest.workspace.*`, `vite.config.*` | `*.test.{js,jsx,ts,tsx,mjs,cjs,mts,cts}`, `*.spec.{js,jsx,ts,tsx,mjs,cjs,mts,cts}` |
+| `@mocha` | `.mocharc.*` | `test/` |
+| `@pytest` | `conftest.py`, or `testpaths` in a pytest config (`pytest.ini`, `pyproject.toml`, `tox.ini`, `setup.cfg`) | `test_*.py`, `*_test.py`, `conftest.py` |
+| `@rspec` | `.rspec` (when a `Gemfile` is in the same folder) | `spec/` |
+| `@phpunit` | `phpunit.xml`, `phpunit.xml.dist`, `phpunit.dist.xml` | `tests/`, `Tests/`, `test/` |
+| `@gradle` | `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts` | `src/*Test/`, `src/testFixtures/` |
+| `@xt` | `Makefile.PL`, `Build.PL`, `dist.ini` | `xt/` |
+| `@unittest` | Manual only (`--tests "@unittest"`) | `test*.py` |
+| `@minitest` | Manual only (`--tests "@minitest"`) | `test/` |
+| `@dotnet` | Manual only (`--tests "@dotnet"`) | `*Tests/`, `*.Test/` |
+| `@jvm` | Manual only (`--tests "@jvm"`) | `src/test/` |
+| `@odin` | Manual only (`--tests "@odin"`) | `*_test.odin` |
 
-| preset | turned on by | patterns | the default it is |
-|---|---|---|---|
-| `@jest` | `jest.config.*` | `__tests__/`, `*.test.js`, `*.test.jsx`, `*.test.ts`, `*.test.tsx`, `*.test.mjs`, `*.test.cjs`, `*.test.mts`, `*.test.cts`, `*.spec.js`, `*.spec.jsx`, `*.spec.ts`, `*.spec.tsx`, `*.spec.mjs`, `*.spec.cjs`, `*.spec.mts`, `*.spec.cts` | jest's `testMatch`, without its bare `test.js` and `spec.js` |
-| `@vitest` | `vitest.config.*`, `vitest.workspace.*`, and `vite.config.*`, which vitest reads when it has no file of its own | `*.test.js`, `*.test.jsx`, `*.test.ts`, `*.test.tsx`, `*.test.mjs`, `*.test.cjs`, `*.test.mts`, `*.test.cts`, `*.spec.js`, `*.spec.jsx`, `*.spec.ts`, `*.spec.tsx`, `*.spec.mjs`, `*.spec.cjs`, `*.spec.mts`, `*.spec.cts` | vitest's `include`, which has no `__tests__/` |
-| `@mocha` | `.mocharc.*` | `test/` | mocha's `spec`, which takes the files at the top of `test/` and nothing below them; the preset takes the folder whole |
-| `@pytest` | `conftest.py`, or `pytest.toml`, `.pytest.toml`, `pytest.ini`, `.pytest.ini`, `pyproject.toml`, `tox.ini` or `setup.cfg` declaring `testpaths` | `test_*.py`, `*_test.py`, `conftest.py` | pytest's `python_files` |
-| `@unittest` | no file, typed only | `test*.py` | `unittest discover`, which takes `testutil.py` in CPython |
-| `@rspec` | `.rspec` with a `Gemfile` beside it | `spec/` | RSpec's `default_path` |
-| `@minitest` | no file, typed only | `test/` | the Rails layout |
-| `@phpunit` | `phpunit.xml`, `phpunit.xml.dist`, `phpunit.dist.xml` | `tests/`, `Tests/`, `test/` | the folders PHP projects name in that file, since PHPUnit has no default |
-| `@dotnet` | no file, typed only | `*Tests/`, `*.Test/` | the .NET naming, which takes `PerformanceTests/` in Unity |
-| `@gradle` | `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts` | `src/*Test/`, `src/testFixtures/` | Gradle's other test source sets and java-test-fixtures |
-| `@jvm` | no file, typed only | `src/test/` | the Maven layout with no build file beside it |
-| `@xt` | `Makefile.PL`, `Build.PL`, `dist.ini` | `xt/` | Dist::Zilla's author, release and smoke tests |
-| `@odin` | no file, typed only | `*_test.odin` | a convention the compiler gives no meaning |
+### Pytest configuration reading
 
-A preset with no file applies only when typed, `--tests "@unittest"`, because its names catch
-production code somewhere: `testutil.py` in CPython, `PerformanceTests/` in Unity, and anybody's
-`test/` or `src/test/`. jest's bare `test.js` and `spec.ts` are left out of its row, since
-`lib/test.js` and `lib/reporters/spec.js` are production in mocha. A typed preset's `test/` matches
-at any depth under the target; to mean one folder, write its place, `./test/`.
+For `@pytest`, mezura also reads `testpaths` and `python_files` from the project's pytest
+configuration (`pytest.toml`, `.pytest.toml`, `pytest.ini`, `.pytest.ini`, `pyproject.toml`,
+`tox.ini`, or `setup.cfg`, checked in pytest's precedence order):
+- `testpaths` scopes the preset to the listed directories. (A config file without `testpaths` and
+  without a `conftest.py` does not activate the preset across the whole repo.)
+- `python_files` overrides the default file patterns (`test_*.py`, `*_test.py`).
 
-**Pytest's configuration is the one file that is read.** The first of `pytest.toml`,
-`.pytest.toml`, `pytest.ini`, `.pytest.ini`, `pyproject.toml`, `tox.ini` and `setup.cfg` in a
-folder, in pytest's own order, is read for `testpaths` and `python_files`. `testpaths` limits the
-preset to those folders, and `python_files` replaces its names: files only, and a name without
-`test` in it applies only under `testpaths`. A `conftest.py` inside `testpaths` uses the shipped
-names whatever the configuration says. A `*` in `python_files` stops at a `/`, so mezura takes at
-most what pytest takes. No other tool's configuration is read, so a suite selected there is missed:
-babel's `test/` under its jest configuration, svelte's `tests/` under its vitest one, a jest
-`rootDir` pointing elsewhere.
+### Inspecting and overriding presets
 
-**The presets that applied are listed under the report:**
+When presets are auto-activated and match at least one file, they are listed at the bottom of the
+report:
 
-```
+```text
 Test presets applied:
   @jest      under ./frontend (jest.config.ts)
   @pytest    under ./tools, ./scripts and 3 more (conftest.py)
 To disable a test preset: '--tests "!@<name>"'. To disable test detection: '--hide tests'.
 ```
 
-Only a preset that matched a file is listed. Once the project's own configuration has a `tests`
-block, saved with `--save-local` or written under `===> tests` in `.mezura/config.txt`, the list is
-no longer printed; the presets still apply, and `scope.test_presets` in the JSON document and
-`--explain` still name them. When a `package.json`, `pyproject.toml`, `Gemfile` or `composer.json` in
-the target's folder names a test tool, no preset matched and that language has no tests, one line
-names the preset to type: `jest tests are declared with '--tests "@jest"'`.
-
-**A preset by name.** `@name` in `--tests` stands for the preset's patterns, applied everywhere
-under the target whether or not the tool's file is there: `--tests "@pytest,!tests/data/"`.
-`!@jest` turns a preset off, typed or turned on by a file, and leaves every other rule alone. A
-typed pattern always comes after what a file turned on, so `--tests "!tests/data/"` corrects the
-pytest preset and keeps the rest of it. A folder whose name starts with `@` is written as a place,
-`./@types/`. An unknown preset name stops the run and lists the known ones. In PowerShell a preset
-goes in quotation marks, since the shell reads a bare word starting with `@` as a variable.
-
-`--save` and `--save-local` write the patterns with every `@name` expanded and `!@name` kept as
-written, so a saved configuration does not depend on the presets of the machine that wrote it.
-
-**Your own.** `--save-preset <name>` saves the test patterns of a run as
-`data/test-presets/<name>.txt` in the data directory, and `--tests "@<name>"` uses it from then on,
-in any project. The file holds patterns under a `===> tests` line, comma-separated or one per line,
-and the text above that line is the description `--show-presets` prints. It may name a shipped
-preset, `@xt` or `!@jest`, and never another of yours. A shipped preset cannot be edited: take it
-back and add yours, `--tests "!@jest,@mine"`. A file of yours named like a shipped preset is
-ignored, with the warning `preset-file-shadowed` on every run until it is renamed.
-
-C and C++ have no preset, since where their tests live is up to each project: write the folder,
-`./tests/`.
+You can also control presets explicitly through `--tests`:
+- **Enable a preset manually:** `--tests "@pytest"` or `--tests "@dotnet"` applies the preset's
+  patterns across the entire target, even when no config file is present.
+- **Exclude specific paths from a preset:** `--tests "@pytest,!tests/data/"` keeps the preset but
+  marks `tests/data/` back as production code.
+- **Disable an auto-detected preset:** `--tests "!@jest"` turns off `@jest` while leaving all other
+  rules untouched.
+- **Save your own preset:** `--save-preset <name>` saves the `--tests` patterns of the current run
+  to `data/test-presets/<name>.txt` so you can reuse them across projects with `--tests "@<name>"`.
 
 
-## Declaring the rest with `--tests`
+## Declaring custom test paths with `--tests`
 
-`--tests` takes glob patterns, and what a pattern names is test code whole, files and folders
-alike. A `!` in front takes back what an earlier pattern, a build file or a toolchain's file name
-gave, and the last pattern that matches decides:
+Use `--tests` with comma-separated glob patterns to mark files or directories as test code, or
+prefix a pattern with `!` to mark it back as production code. When multiple patterns match a path,
+the last matching pattern wins:
 
 ```bash
 mezura ./ --tests "spec/,!spec/fixtures/"
@@ -207,282 +156,155 @@ mezura ./ --tests "test_*.py,*_test.py,conftest.py"
 mezura ./ --tests "!vendor/"
 ```
 
-The rules in short, with the full text under `--tests` in [COMMANDS.md](COMMANDS.md):
-
-- A pattern with no `./`, no `../` and no drive or root is a **name**, matched at any depth from the
-  target down, the target's own name included. Names are matched with their case.
-- A pattern starting with `./` or `../`, or written as a full path, is a **place**, read from the
-  directory the command runs in, and covers that place and everything under it.
-- A trailing `/` matches folders only, so `tests/` leaves a script named `tests` alone. `x/**`
-  means the folder `x`, and `**` the whole target.
-- A `!` leaves the markers in the code in place: a `#[cfg(test)]` under `!vendor/` is still test
-  code, and so is a module declared under one. It does undo a marker that makes a whole file test
-  code, such as `@Test`, so JUnit files kept as test data stay data under `--tests "!cases/"`.
-- A place missing from disk or outside every target is reported. A name that matched nothing is
-  reported when typed for the run, and stays quiet when it comes from a configuration or a preset.
-- In PowerShell, quote the whole list or escape each comma with a backtick.
-
-Patterns saved in the project's configuration, with `--save-local` or under `===> tests` in
-`.mezura/config.txt`, are read from the project directory, so they mean the same wherever inside
-the project the command runs, and they travel with the repository.
+Key pattern rules (see `--tests` in [COMMANDS.md](COMMANDS.md) for the full reference):
+- **Name patterns** (no `./`, `../`, or root prefix, e.g. `test_*.py` or `tests/`) match at any
+  depth under the target.
+- **Place patterns** (starting with `./`, `../`, or an absolute path, e.g. `./tests/`) are resolved
+  from the current working directory (or from the project root when saved in `.mezura/config.txt`)
+  and match that path and everything inside it.
+- **Directory-only patterns** end with `/` (e.g. `tests/`), matching directories and everything
+  inside them, but not a regular file named `tests`.
+- **Negation (`!`):** A `!` pattern overrides path-based test rules and file-level annotations
+  (like `@Test` in Java), turning matched files back into production code. It does not strip inline
+  test blocks (`#[cfg(test)]`, `unittest`, `test "..." {`) inside a file.
+- **PowerShell note:** Wrap the pattern list in quotes (`--tests "@pytest,!tests/data/"`), since
+  PowerShell treats unquoted `,` and `@` specially.
 
 
 ## Language by language
 
 ### Rust
 
-**Found.** Attributes, read as the compiler reads them:
+**Detected:**
+- Any item with `#[test]`, `#[bench]`, or an attribute containing `test` in its name
+  (`#[tokio::test]`, `#[rstest]`, `#[wasm_bindgen_test]`, `#[test_case]`).
+- `#[cfg(...)]` where `test` is required (`#[cfg(test)]`, `#[cfg(all(test, unix))]`). Conditions
+  like `#[cfg(not(test))]` or `#[cfg(any(test, feature = "x"))]` are kept as production code because
+  non-test builds can compile them.
+- `#[cfg_attr(predicate, attr)]` when the predicate requires `test` and `attr` contains `test`.
+- `#![cfg(test)]` for the remainder of its enclosing scope (or the entire file when placed at the
+  top).
+- Separate module files declared under a test marker (`#[cfg(test)] mod tests;`), along with any
+  submodules they declare.
+- Everything inside `tests/` next to a `Cargo.toml`.
 
-- `#[test]`, `#[bench]`, and any attribute with `test` in its name: `#[tokio::test]`, `#[rstest]`,
-  `#[wasm_bindgen_test]`, `#[test_case]`.
-- `#[cfg(...)]` with `test` outside every `not(...)` and every `any(...)`: `#[cfg(test)]`,
-  `#[cfg(all(test, unix))]`. `#[cfg(not(test))]` and `#[cfg(any(test, feature = "x"))]` are
-  production, since a normal build can compile them: 65 of the 66 `any(test, ...)` in a cargo
-  registry sit over code a default build ships. `#[cfg(testlib)]` is a cfg of its own.
-- `#[cfg_attr(predicate, attribute)]` when the predicate says test and the attribute has `test` in
-  its name: `#[cfg_attr(test, test)]` counts, `#[cfg_attr(test, derive(Debug))]` does not.
-- `#![cfg(test)]`: the rest of its scope, which at the top of a file is the whole file.
-- `#[cfg(test)] mod tests;`: the file it declares is test code whole, and so is every file that one
-  declares in turn. The file is found where rustc finds it. A file left out by `--exclude` or a
-  `.gitignore` is still read for the modules it declares. A `mod x;` anywhere inside test code counts
-  the same. The declaring file has to be in the same count, as
-  [above](#counting-part-of-a-project), and `--explain` on a declared file names the file that
-  declares it.
+From an inline marker, the test block extends to the matching `}` or `;` of the item (`if`/`else`
+chains stay together, and `#[test]` functions inside a `#[cfg(test)] mod` are counted once).
 
-From the marker, the test code runs to the `}` matching the first `{`, or to the first `;`,
-whichever comes first. `let`, `use`, `const`, `static`, `type` and `extern crate` end at their `;`,
-so `#[cfg(test)] let x = if a { 1 } else { 2 };` is one statement. An `if` carries on through its
-`else` arms. The `#[test]` functions inside a `#[cfg(test)] mod tests { }` are counted once.
-
-`tests/` beside a `Cargo.toml` is test code whole, helpers and fixtures included, and so is a
-`tests/` at the root of a virtual workspace; `--tests "!./tests/"`, typed at the root, takes it
-back. Everywhere else, `examples/`, `benches/` and `src/bin/` included, only the markers decide, and
-a `tests` folder under `src/` is a folder.
-
-Measured over the 4,695 Rust files of a cargo registry, 1.9 million lines: 341,282 of its 341,616
-test lines are found, and 29 lines are counted as tests wrongly.
-
-**Missed:**
-
-- A `#[cfg(any(test, X))]` where X is a cfg only test builds set, the kernel's `testlib` and tokio's
-  `fuzzing`: production.
-- A marker on a struct field, an enum variant, a match arm or a parameter runs to the `}` of the
-  block around it, taking the siblings after it:
-  ```rust
-  pub enum Shape {
-      Circle,
-      #[cfg(test)]
-      Probe,
-      Square,
-  }
-  ```
-  Lines 3 to 6 are test code, where the variant is lines 3 to 4.
-- An inner `#![cfg(test)]` inside a module counts from its own line, so the `mod checks {` above
-  it stays out.
-- A const generic in a signature, `fn sized() -> Wrapper<{ SIZE }> {`, ends the item at
-  `{ SIZE }`, so the body under it is production.
-
-**Refused.** Doc tests, since a `///` block is a comment. Tests a macro writes,
-`make_test!(a, b, c);`. Tests written at build time and pulled in with `include!`. A module declared
-under `#[path = "..."]` is never followed, since the file it names can sit anywhere; declare those
-files with `--tests`.
+**Limitations:**
+- A marker on a single struct field, enum variant, or match arm counts down to the closing `}` of
+  the enclosing block.
+- A const generic block in a function signature (`fn f() -> W<{ N }> {`) closes at `{ N }` rather
+  than the function body.
+- Modules using `#[path = "..."]`, tests generated by macros (`make_test!`), `include!` files, and
+  doc tests inside `///` comments are not followed or counted as test code.
 
 ### D
 
-**Found.** `unittest { }`, `@safe unittest { }` and `version(unittest) { }`, to the matching `}`.
-The `else` of a `version(unittest)` is production. `version(unittest):` with a colon covers the
-rest of its scope: the struct or block it sits in, or the rest of the file at module level.
-`myunittest` is another word.
+**Detected:** `unittest { }`, `@safe unittest { }`, and `version(unittest) { }` up to the matching
+`}` (any `else` branch is production). `version(unittest):` applies to the rest of its enclosing
+block or file.
 
-**Missed.** An attribute on its own line above the marker: with `@safe` on one line and `unittest`
-on the next, the count starts at `unittest`.
+**Limitation:** If an attribute like `@safe` is on the line above `unittest`, counting starts on the
+`unittest` line.
 
 ### Zig
 
-**Found.** `test "name" { }` and `test { }`, to the matching `}`. `test_helper` is another word.
-`build.zig` defines no test directory, so a `test/` folder is declared with `--tests`.
+**Detected:** `test "name" { }` and `test { }` blocks up to the matching `}`. Because `build.zig`
+has no fixed test directory, pass any standalone test folder with `--tests`.
 
 ### Go
 
-**Found.** `*_test.go` anywhere, whole: the tests, the examples, the benchmarks and the helpers
-beside them. Every `testdata/` below a `go.mod`, at any depth.
+**Detected:** Every `*_test.go` file, and every `testdata/` directory at any depth under a `go.mod`.
 
 ### Perl
 
-**Found.** `*.t` anywhere, whole, and `t/` beside a `Makefile.PL`, a `Build.PL` or a `dist.ini`.
-The same three files turn the `@xt` preset on, so `xt/` is test code there too.
+**Detected:** Every `*.t` file, plus `t/` and `xt/` (via `@xt`) next to `Makefile.PL`, `Build.PL`,
+or `dist.ini`.
 
 ### Java and Kotlin
 
-**Found.** `src/test/` beside a `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`,
-`settings.gradle.kts` or `build.sbt`, and every `src/test/` below a `settings.gradle`,
-`settings.gradle.kts` or `build.sbt`. `mezura ./core/src` finds the `core/pom.xml` above it.
+**Detected:**
+- `src/test/` next to `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`,
+  `settings.gradle.kts`, or `build.sbt` (including subprojects under a root settings/sbt file).
+- `src/*Test/` and `src/testFixtures/` under Gradle builds via the `@gradle` preset.
+- Any file containing `@Test`, `@ParameterizedTest`, `@RepeatedTest`, `@TestFactory`,
+  `@BeforeEach`, `@AfterEach`, `@BeforeAll`, `@AfterAll`, `@BeforeClass`, `@AfterClass`,
+  `@BeforeMethod`, `@AfterMethod`, `@DataProvider`, `@RunWith`, or Kotlin's `@BeforeTest` /
+  `@AfterTest`.
 
-Anywhere else, a file is test code whole when it holds one of these annotations: `@Test` (JUnit 4
-and 5, TestNG, kotlin.test), `@ParameterizedTest`, `@RepeatedTest`, `@TestFactory`, `@BeforeEach`,
-`@AfterEach`, `@BeforeAll`, `@AfterAll`, `@BeforeClass`, `@AfterClass`, `@BeforeMethod`,
-`@AfterMethod`, `@DataProvider` and `@RunWith`, and for Kotlin `@BeforeTest` and `@AfterTest` as
-well. So a test class under `src/main`, a base class with only a `@BeforeEach`, a TestNG data
-provider and a JUnit 4 suite are all found. Arguments are fine:
-`@Test(expected = IllegalStateException.class)`. Over the 53,155 Java files of the JDK, 4,531 files
-hold one of these, and only one sits outside `test/`: a javadoc snippet holding a test method as an
-example.
-
-**Missed**, counted as production:
-
-- JUnit 3, a class extending `TestCase` with no annotation, and Kotest's specs, `FunSpec`,
-  `StringSpec` and the rest.
-- A class with only a Spring test annotation, `@SpringBootTest`, `@WebMvcTest`, and no `@Test`.
-- `@org.junit.Test`, `@ Test`, the `@` and the name on separate lines, and `\u0040Test`.
-- A `*Test.java` outside `src/test` with no annotation; declare it with `--tests "*Test.java"`.
-
-**Refused**, because production code uses these names too: `@Before` and `@After` (AspectJ advice
-on Spring aspects), `@Rule` (Easy Rules), `@Ignore` (Room and Realm entity fields), `@Nested`
-(Gradle task properties), `@Category` (the JDK's `jdk.jfr`), `@ExtendWith` and `@TestTemplate`
-(meta-annotations in test-support libraries). A test class carrying only one of those is missed.
-
-A Gradle build file also turns the `@gradle` preset on under its folder, so `src/integrationTest/`,
-Android's `src/androidTest/` and `src/testFixtures/` are test code there. A `test/` beside a
-`pom.xml`, and a `testSourceDirectory` pointed elsewhere, are declared with `--tests`, with
-`!src/test/` where the default was moved away from.
+**Limitations:**
+- JUnit 3 classes (`extends TestCase` without annotations), Kotest spec classes (`FunSpec`, etc.),
+  and files with only Spring slice annotations (`@SpringBootTest`) and no `@Test` method are not
+  detected by content outside `src/test/`.
+- Fully qualified annotations (`@org.junit.Test`) or annotations whose name is shared with
+  production libraries (`@Before`, `@After`, `@Rule`, `@Ignore`, `@Category`) are not used as file
+  markers.
 
 ### Scala and Groovy
 
-**Found.** The same `src/test/` directories as Java, where ScalaTest, specs2 and Spock live.
-
-**Missed on purpose.** A test class outside `src/test`: ScalaTest and Spock find tests by a base
-class, `AnyFunSuite`, `Specification`, and any library can define a base class of that name.
-JUnit's `@Test` in a Scala or Groovy file outside `src/test` is production too.
+**Detected:** `src/test/` directories next to Maven, Gradle, or sbt build files. Test classes
+outside `src/test/` are not detected by content (ScalaTest and Spock rely on base class names rather
+than annotations).
 
 ### C#
 
-**Found.** A file is test code whole when it holds one of these attributes: NUnit's `[Test]`,
-`[TestFixture]`, `[TestCase]`, `[TestCaseSource]`, `[SetUp]`, `[TearDown]` and `[OneTimeSetUp]`,
-Unity's `[UnityTest]`, xUnit's `[Fact]` and `[Theory]`, and MSTest's `[TestClass]`, `[TestMethod]`
-and `[TestInitialize]`. Arguments and lists are fine, `[Fact(Skip = "slow")]`, `[Test, Order(1)]`,
-and other attribute lists may come first on the line, `[Category("Slow")] [Test]`. `[TestFixture]`,
-`[TestClass]` and the setup attributes also catch a fixture with a custom test attribute and a base
-fixture with no test. Over four Unity projects, 2.75 million lines of C#, these attributes find
-173,754 test lines and none wrongly; most of the 17,229 test lines left are helpers in `Tests/`
-folders, which `@dotnet` takes.
+**Detected:** Any file containing NUnit (`[Test]`, `[TestFixture]`, `[TestCase]`,
+`[TestCaseSource]`, `[SetUp]`, `[TearDown]`, `[OneTimeSetUp]`), xUnit (`[Fact]`, `[Theory]`),
+MSTest (`[TestClass]`, `[TestMethod]`, `[TestInitialize]`), or Unity (`[UnityTest]`) attributes.
+To also include helper files in naming-convention folders (`*Tests/`, `*.Test/`), pass
+`--tests "@dotnet"`.
 
-No build file defines a test directory; `--tests "@dotnet"` declares the usual ones, `*Tests/` and
-`*.Test/`.
+**Limitations:**
+- An attribute placed second inside a combined bracket list (`[Trait("a", "b"), Fact]`) or after
+  code on the same line (`class T { [Test] public void A() {} }`) is not matched unless another test
+  attribute appears at the start of a line in the same file.
+- Fully qualified attributes (`[NUnit.Framework.Test]`) and `[TestAttribute]` are not matched.
 
-**Missed**, counted as production:
+### Swift, Elixir, Dart, Julia, Clojure, Erlang, Elm, and R
 
-- An attribute after another in one list, `[Trait("Category", "Slow"), Fact]`, unless the file
-  holds another test attribute written first.
-- `[TestAttribute]`, `[NUnit.Framework.Test]`, `[ Test ]` and `[method: Test]`.
-- An attribute with code before it on its line, as in the one-line
-  `class T { [Test] public void A() { } }`.
+**Detected:** The standard test directory next to the project's build file, as listed in the
+[build tool table above](#3-standard-test-directories-next-to-a-build-file) (`Tests/` next to
+`Package.swift`, `test/` next to `mix.exs`, `test/` and `integration_test/` next to `pubspec.yaml`,
+etc.). Test files placed outside those directories require `--tests`.
 
-**Refused.** `[Category]` is `System.ComponentModel.Category`, on Unity runtime code, and
-`[Ignore]` is sqlite-net's, on model classes. `[InlineData]`, `[DataRow]` and `[ClassInitialize]`
-always sit beside an attribute already on the list. A bracket that is code, `map[Test]`,
-`args is [Test]`, `{ [Test] = 1 }`, `[Fact.Create(a)]`, marks nothing: a marker counts only where
-nothing but attribute lists stands before it on its line.
+### JavaScript, TypeScript, Python, PHP, Ruby, C, and C++
 
-### Swift
-
-**Found.** `Tests/` beside a `Package.swift`. A `*Tests.swift` under `Sources/`, or an
-`XCTestCase` outside `Tests/`, is production. For an Xcode project with no `Package.swift`, declare
-the test target's folder with `--tests`.
-
-### Elixir
-
-**Found.** `test/` beside a `mix.exs`. A `_test.exs` elsewhere is production; declare it with
-`--tests "*_test.exs"`.
-
-### Dart and Flutter
-
-**Found.** `test/` and `integration_test/` beside a `pubspec.yaml`. A `_test.dart` under `lib/` is
-production.
-
-### Julia
-
-**Found.** `test/` beside a `Project.toml` or a `JuliaProject.toml`.
-
-### Clojure
-
-**Found.** `test/` beside a `project.clj`. A `deps.edn` names its test paths in an alias, so with
-one the folders are declared.
-
-### Erlang
-
-**Found.** `test/` beside a `rebar.config`, where Common Test suites and EUnit's `_tests` modules
-live. An `-ifdef(TEST).` block inside a module is production.
-
-### Elm
-
-**Found.** `tests/` beside an `elm.json`.
-
-### R
-
-**Found.** `tests/` beside both a `DESCRIPTION` and a `NAMESPACE`, since an Octave package carries a
-`DESCRIPTION` too. testthat's `tests/testthat/` is inside it.
-
-### JavaScript, TypeScript, Python, PHP, Ruby, C and C++
-
-Nothing from a build file. What is found by path comes from a test tool's file, as
-[above](#what-a-test-tools-file-turns-on): jest's, vitest's and mocha's files, `conftest.py` and a
-pytest configuration declaring `testpaths`, `.rspec` beside a `Gemfile`, and `phpunit.xml`.
-Everything else is declared, `@unittest` and `@minitest` included, and for C and C++ the test
-folder. On Home Assistant, the pytest preset turned on by its `conftest.py` files finds 1,904,376 of
-its 1,980,689 test lines and none wrongly; what is left is helpers such as `common.py` and
-`__init__.py`. vitest's in-source tests, `if (import.meta.vitest) { }`, are code, Python's doctests are a
-string, and C++'s `TEST_CASE` and `TEST_F` macros are not detected.
-
-### OCaml
-
-**Refused.** `let%test` and `let%expect_test` have no closing symbol: the binding ends where the
-next one begins, which only the layout tells.
+**Detected:** Via [test tool presets](#test-tool-presets) when a runner config file (`jest.config.*`,
+`vitest.config.*`, `vite.config.*`, `.mocharc.*`, `conftest.py`, `pytest.ini` with `testpaths`,
+`.rspec` next to `Gemfile`, `phpunit.xml`) is present in the project, or manually via `--tests`.
+In-source framework calls (`describe(...)`, `it(...)`, C++ `TEST_CASE(...)`) are not parsed from
+file contents.
 
 
-## What is refused for every language
+## What is not detected
 
-- **Doc tests.** Rust's `///` blocks, a `>>>` in a Python docstring, Elixir's `iex>`: those lines
-  are comments.
-- **Tests a macro or a build script generates.** What is counted is what is written.
-- **A test framework's names**, `describe`, `it`, `pytest`, `TEST_CASE`: guessing them would
-  silently miscount somebody's project. What is detected lives in the language files, the
-  annotations of Java, Kotlin and C# under `FILE MARKERS`, or in `--tests`, where it can be seen and
-  edited.
-- **Test code inside a nested section.** vitest code in the `<script>` of a `.vue` file is
-  JavaScript inside Vue. A `<script>` inside a file that is test code whole goes to the tests of
-  that file, and its keywords are not counted.
-- **A test directory by its name.** `test`, `tests` and `__tests__` are ordinary folders: a build
-  file beside one, or a test tool's file above it, is what makes it tests. A project under
-  `D:/tests/` changes nothing.
+- **Doc tests** inside comments or docstrings (`///` in Rust, `>>>` in Python, `iex>` in Elixir)
+  remain counted as comments or strings.
+- **Macro-generated or build-generated tests** that do not appear as test declarations in the source
+  file.
+- **Framework function calls** such as `describe`, `it`, or `TEST_CASE` in languages without dedicated
+  syntax or annotations.
+- **Inline test blocks inside embedded language sections** (e.g. a `<script>` block inside a `.vue`
+  file, unless the entire `.vue` file is marked as a test file).
+- **Bare `test/` or `tests/` directories** when neither a matching build file nor a test runner
+  config file is present.
 
 
-## Where the count shows
+## Where the count appears
 
-- **The report.** A `tests` row under each language that has tests, and one under the total. Its
-  `Files %` and `Lines %` are its share of the language. In a language holding sections of other
-  languages, `tests` sits beside them and `X itself`. `--tests-breakdown split` adds a `production`
-  row above `tests`, under each language and under the total, and the sections hang under
-  `production`. `--tests-breakdown removed` leaves the tests out everywhere: no `tests` rows, and the
-  overview, `--sort`, `--top`, the keywords and the file rows use the figures without them; a run
-  that is all tests prints one sentence. The JSON document always carries the whole figures.
-  `--hide tests` turns the detection off, patterns included, which also makes the run faster.
-- **`--by-file`** draws nothing under a file row; the figures per file are in the JSON document.
-- **The JSON document.** `scope.tests_detected`; `languages[].tests` with the figures a language
-  carries, `keywords` when they are counted, and `whole_files`, the files that are test code from
-  their first line to their last; `total.tests`, `modules[].total.tests` and
-  `languages[].by_file[].tests`, the last without keywords. `scope.test_presets` lists the presets a
-  tool's file turned on, one entry per preset and folder, with the file and whether it matched
-  anything. A comparison carries the before and after pair under each figure, except in the file
-  rows.
-- **`--diff`** against a document written without detection, or by an older version, runs without
-  it and says so. A preset on in one reading and off in the other gets the note
-  `preset-on-one-side`.
-- **`--explain`** marks every line of test code `test code`, gives the total, and for a file that is
-  test code whole names the rule that decided it: the test directory with its build file, the name,
-  the pattern, the preset with the tool's file and the name that matched, the file that declares it
-  as a module, the annotation and its line, or the `#![cfg(test)]` at its top. The JSON document
-  carries `in_test` on those lines and the rule under `test_file`, a preset as `preset` with each
-  tool's name, folder, file and pattern, and `configured_by` where pytest's configuration declared
-  the names.
-- **Keywords** are counted over the whole language, its test code included, and shown once under
-  it. Those found in the test code are also counted apart.
+- **Terminal & Markdown reports:** A `tests` row appears under each language that has tests and
+  under the total, showing its share of `Files %` and `Lines %`.
+  - `--tests-breakdown share` (default): shows `tests` as a subset under the language row.
+  - `--tests-breakdown split`: shows `production` and `tests` rows side by side under each
+    language and under the total.
+  - `--tests-breakdown removed`: subtracts test code from every row and hides `tests` rows
+    completely.
+  - `--hide tests`: disables test detection and hides all test rows.
+- **JSON output (`--output json`):** Adds `scope.tests_detected`, `scope.test_presets`,
+  `languages[].tests`, `total.tests`, `modules[].total.tests`, and `languages[].by_file[].tests`.
+- **Comparisons (`--diff`):** Compares test counts alongside total counts. If a test preset applies
+  on only one side of a diff, the report emits a `preset-on-one-side` note.
+- **Line-by-line explanation (`--explain`):** Labels every test line as `test code`, prints the test
+  total in the summary, and states the exact rule (build file, preset, `--tests` pattern, module
+  declaration, or annotation) that marked a whole file as test code.

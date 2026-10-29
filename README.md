@@ -307,22 +307,22 @@ you, so those are skipped like any other found path.
 
 ### Test code
 
-The test code of each language is counted apart from the rest, as a `tests` row under the language
-and one under the total. Without being asked, mezura takes only what is certain: the tests a
-language marks in the source (`#[cfg(test)]` and `#[test]` in Rust, `unittest` in D, `test` in
-Zig, and the whole of a file holding `@Test` in Java and Kotlin or `[Fact]`, `[Test]` and the other
-attributes the runners collect tests by in C#), the file names a toolchain itself defines
-(`_test.go`, Perl's `.t`), and the directory a build tool compiles only for tests (`tests/` beside
-a `Cargo.toml`, `src/test/` beside a `pom.xml` or a `build.gradle`, `Tests/` beside a
-`Package.swift`, `test/` beside a `mix.exs`, and the same for Dart, Julia, Perl, Clojure, Erlang,
-Elm and R).   
-A folder named `tests` with no build file beside it is a folder. A test tool's own file
-turns the tool's default names on under the folder holding it: `*.test.ts` and `__tests__/` under
-a `jest.config.ts`, `spec/` under a `.rspec` beside a `Gemfile`, `test_*.py` under a `conftest.py`
-or where a pytest configuration's `testpaths` points. The report lists the presets so applied, and
-`--tests "!@jest"` takes one back. Everything else that is a convention, `*Test.java` outside
-`src/test`, `test/` without a `.mocharc`, is declared with `--tests`, which takes glob patterns, a
-`!` to take one back and a preset by name, and lives in the project's own configuration once saved:
+mezura separates test code from production code, displaying a `tests` row under each language that
+has tests and one under the total.
+
+Out of the box, mezura detects test code only when it is unambiguous:
+- **Source markers and annotations:** inline test blocks (`#[cfg(test)]` and `#[test]` in Rust,
+  `unittest` in D, `test` in Zig) and file-level test annotations (`@Test` in Java/Kotlin, `[Fact]`
+  and `[Test]` in C#).
+- **Toolchain file names and build directories:** test file suffixes required by a toolchain
+  (`*_test.go`, Perl's `*.t`) and standard test directories next to their build file (such as
+  `tests/` next to `Cargo.toml` or `src/test/` next to `pom.xml` / `build.gradle`).
+- **Test runner presets:** when a test tool's config file is present in a folder (such as
+  `jest.config.ts`, `vitest.config.ts`, `conftest.py`, or `.rspec` next to a `Gemfile`), mezura
+  enables that tool's default test patterns under that folder and lists the active presets below the
+  report.
+
+For anything else, pass glob patterns or preset names (`@pytest`, `@dotnet`, `!@jest`) to `--tests`:
 
 ```bash
 mezura ./ --tests "spec/,!spec/fixtures/"
@@ -330,15 +330,12 @@ mezura ./ --tests "__tests__/,*.test.ts,*.test.tsx"
 mezura ./ --tests "@pytest,!tests/data/"
 ```
 
-`--show-presets` lists the presets, the shipped ones and your own, and `--save-preset <name>` keeps
-the test patterns of a run as one of yours. `--tests-breakdown split` draws the rest of the language
-as a `production` row beside the tests, `--tests-breakdown removed` leaves the tests out of every
-row and shows them nowhere, `--hide tests` turns the whole thing off, and `--explain` marks each
-line of test code and says which rule made a whole file one. What is found for each language, what
-is refused (doc tests, tests a macro writes, `describe` and the other names a framework gives a
-function) and every known limitation with its example are in
-**[Test detection](https://github.com/subamanis/mezura/blob/HEAD/TEST_DETECTION.md)**, with the
-table of presets and the file that turns each one on.
+Run `--show-presets` to list all built-in and custom presets, or `--save-preset <name>` to save the
+patterns of a run for reuse. To change how test code is shown in the report, use
+`--tests-breakdown split` (separate `production` and `tests` rows), `--tests-breakdown removed`
+(subtract tests from all counts), or `--hide tests` (disable test detection completely). Full
+details and per-language rules are in
+**[Test detection](https://github.com/subamanis/mezura/blob/HEAD/TEST_DETECTION.md)**.
 
 `--tests-breakdown share`
 

@@ -1,151 +1,62 @@
 v3.3.0 - unreleased
 
 Main changes:
-  -> The test code of each language is counted apart from the rest, as a 'tests' row under the
-      language and one under the total. By default mezura takes only what is certain: the
-      tests a language marks in the source ('#[cfg(test)]' and '#[test]' in Rust, 'unittest' in D,
-      'test' in Zig), the file names a toolchain defines ('_test.go', Perl's '.t'), and the
-      directory a build tool compiles for tests ('tests' beside a 'Cargo.toml', 'src/test'
-      beside a 'pom.xml', 'test' beside a 'mix.exs', and the same for Swift, Dart, Julia, Perl,
-      Clojure, Erlang, Elm and R). Everything else can be manually declared or exempted with the
-      new '--tests' flag. TEST_DETECTION.md says what is found for each language and what is missed.
-  -> A Java, Kotlin or C# file holding one of the annotations a test runner collects tests by,
-      '@Test', '@BeforeEach', '[Fact]', '[Test]', '[TestFixture]', is test code whole wherever it
-      sits. The lists are in the language files under 'FILE MARKERS'. A '!' pattern of '--tests'
-      switches them off for what it names.
-  -> New '--tests': glob patterns for the files and directories to count as test code, a '!' in
-      front of one taking back what an earlier pattern or a build tool declared, the last match
-      winning.
-  -> A test tool's own file turns the tool's default test names on under the folder holding it:
-      '*.test.ts' and '__tests__' under a 'jest.config.ts', 'spec' under a '.rspec' beside a
-      'Gemfile', 'test_*.py' under a 'conftest.py', and the same for vitest, mocha, PHPUnit,
-      Gradle's test source sets and Perl's 'xt'. Pytest's 'testpaths' and 'python_files', read from
-      its configuration files, scope and rename what its preset takes. The presets a run applied
-      are listed under the report with their folders and files, and '--tests "!@jest"' takes one
-      back.
-  -> '--tests' takes a preset by name: '@pytest' stands for 'test_*.py', '*_test.py' and
-      'conftest.py', and '!@pytest' turns that preset off. New '--show-presets' lists the shipped
-      presets and your own, and new '--save-preset <name>' keeps the test patterns of a run as one
-      of your own, under 'data/test-presets', for '--tests "@<name>"'.
-  -> A 'testdata' folder below a 'go.mod', at any depth, is test code whole, as the go tool treats
-      it.
-  -> New '--tests-breakdown share|split|removed': one 'tests' row under the language, a 'production'
-      and a 'tests' row under it, or every row without its tests and no 'tests' row anywhere.
-  -> '--hide tests' hides the rows and turns the detection off.
-  -> '--explain' marks each line of test code, counts them under the totals, and names the rule
-      that made a whole file test code.
-  -> A '--diff' notes a test preset that applies in one of the two readings only, since the files
-      matching its names count as tests on that side only.
-  -> The JSON document carries 'scope.tests_detected', 'languages[].tests', 'total.tests' and
-      'by_file[].tests', the keywords found inside the test code under 'languages[].tests' and
-      'total.tests', and 'scope.test_presets', the presets a run turned on with their folders and
-      files; a comparison carries the figures as 'from', 'to' and 'change'. '--explain --output json'
-      marks a line with 'in_test' and names the rule under 'test_file'.
-  -> mezura-mcp 1.1.0: the two count tools take 'tests' patterns, a preset by name among them, and
-      the descriptions say what test code is found on its own, what a test tool's file turns on, and
-      how the rest is declared.
-  -> Themes gained the 'tests-*' and 'production-*' families, one for each of the two rows.
-  -> A bundled theme you edited gains the styles a new version brings and keeps every style you
-      set. Your copy as it was is kept in the 'replaced' folder of the data directory. An edited
-      'Mezura', the default look as a file, is replaced by a version that changes it, and your copy
-      is kept there too, so '--save-theme' no longer takes that name.
-  -> The default look paints its text in the terminal's own text color and its red, green, yellow
-      and cyan, with one mid grey for the percentages, so it reads on a light terminal as well as
-      on a dark one. The look of earlier versions is the new 'Mezura-classic' theme, apart from the
-      faint colors of '--explain'. A theme of your own takes the new look for every token it does
-      not name.
-  -> Catppuccin, Dracula, Forest, Gruvbox, Meadow and Ocean each have a '-light' version made for a
-      light terminal, and the theme editor draws a light background in a light terminal's colors.
-  -> The '-minimal' themes are withdrawn. A bundled theme you edited stays in your themes folder
-      as your own when a version stops shipping it.
-  -> A configuration naming a theme that is not there warns and runs with the default look.
-  -> New 'Uncolored' theme, with no color at all and bold, italic and dim for the rest. A theme
-      that gives the languages of the overview no color prints no overview.
-  -> 'NO_COLOR' takes the colors out and keeps bold, italic and dim, and with the default look the
-      report takes the look of 'Uncolored'. 'CLICOLOR=0' prints plain text.
-  -> '.t' files are counted as Perl.
-  -> Rust's raw strings past one hash, 'r##"..."##', and Lua's long bracket strings past the plain
-      form, '[==[ ]==]', are read as the strings they are, so a quote inside one opens nothing.
-  -> CoffeeScript ('.coffee') and Smalltalk ('.st') are counted. Their block comments open and
-      close with one symbol, '###' and '"', which a language file may now declare.
-  -> A '<script' or '<style' tag whose '>' sits on a later line opens its block, so what it holds
-      is counted as the language it is written in.
-  -> A heredoc, the shell's 'cat <<EOF', Perl's and Ruby's '<<~EOF' and PHP's '<<<EOF', down to the
-      line holding 'EOF', is read as the string it is, so a quote inside one opens nothing and a
-      '#' inside one comments nothing.
-  -> A C++ raw string carrying a delimiter, 'R"js(' down to ')js"', is read as the string it is, so
-      a ')"' or a comment symbol inside one ends or opens nothing.
-  -> Perl's documentation, from a line like '=head1' down to '=cut', is counted as comments, so an
-      apostrophe inside it no longer opens a string.
+  -> Test code detection: test code is now counted separately from production code, with a 'tests'
+      row under each language and under the total (plus in the JSON output, '--diff', '--explain'
+      and mezura-mcp 1.1.0). Out of the box, mezura detects inline test blocks (Rust, D, Zig),
+      file-level test annotations (Java, Kotlin, C#), toolchain test filenames ('_test.go', Perl's
+      '.t'), standard build-tool test directories ('tests/' next to 'Cargo.toml', 'src/test/' next
+      to 'pom.xml' / 'build.gradle', 'testdata/' under 'go.mod', etc.), and test runner presets
+      when a runner's config file is present ('jest.config.*', 'vitest.config.*', 'conftest.py',
+      'pytest.ini', '.rspec', 'phpunit.xml'). See TEST_DETECTION.md for full details.
+  -> New '--tests', '--show-presets', '--save-preset', and '--tests-breakdown': declare custom test
+      globs or presets ('--tests "@pytest,!tests/data/"'), disable an auto-detected preset
+      ('--tests "!@jest"'), save your own presets, or choose how tests are displayed with
+      '--tests-breakdown share|split|removed' (or disable detection with '--hide tests').
+  -> Light-terminal support and new themes: the default 'Mezura' look now uses the terminal's own
+      text and ANSI colors so it reads cleanly on both dark and light backgrounds (the earlier look
+      is available as 'Mezura-classic'). Added '-light' variants of Catppuccin, Dracula, Forest,
+      Gruvbox, Meadow and Ocean, a new 'Uncolored' theme, and support for 'NO_COLOR' and
+      'CLICOLOR=0'. The '-minimal' themes are removed.
+  -> Bundled themes that you edited now automatically receive any new tokens added in a release
+      while keeping your custom styles (with a backup saved under 'data/replaced').
+  -> New languages: CoffeeScript ('.coffee') and Smalltalk ('.st'), along with support for block
+      comments that open and close with the same symbol ('###' and '"'). Perl now also claims '.t'.
+  -> Stronger string, comment and tag parsing: Rust raw strings with multiple hashes ('r##"..."##'),
+      Lua leveled long brackets ('[==[...]==]'), C++ delimited raw strings ('R"delim(...)delim"'),
+      heredocs in Shell, Perl, Ruby and PHP ('<<EOF', '<<~EOF', '<<<EOF'), Perl POD blocks
+      ('=head1' to '=cut'), and HTML/Vue '<script>' and '<style>' opening tags split across
+      multiple lines.
 
 Bugfixes:
-  -> The lines figure is bold in the terminal's own text color under every bundled theme, so it
-      shows on a light terminal.
-  -> Where block comments nest, an opener sharing a byte with a closer, '/*/*/' in Rust, is read
-      the way the compiler reads it, so the comment no longer closes on that line.
-  -> Comment symbols sharing bytes are read by the rules of the file's language: '/* x /*/' in C
-      and '*/*/*/' closing three nested levels in Rust end the comment there, a '*//' in code
-      starts a line comment, a '//*' inside a Rust comment opens one more level, and a '/*' after
-      two stray '*/' in code opens its comment.
-  -> A block comment inside another in Dart, WGSL, Jai or Pascal no longer ends the outer one,
-      since all four let block comments nest. Pascal is read the way Free Pascal reads it, and
-      Delphi, whose comments do not nest, is unchanged.
-  -> Ruby's '=begin' and '=end' count only at the start of a line, so one inside a longer word,
-      'from=beginning_of_day', no longer opens a comment over the rest of the file.
-  -> MATLAB's '%{' and '%}' count only as the whole of their line, so a '%{ note' is the line
-      comment it is and the code under it stays code. The blocks still nest.
-  -> A raw string opener written inside a block comment that closes on its line, '/* r#" */', no
-      longer pairs with a real closer after it, so what follows the comment is read as it is.
-  -> The JSON document now carries the keywords of each nested language, so a '--diff' against a
-      saved document no longer reports every keyword inside a nested language as new.
-  -> A target typed as an absolute path holding '..', 'D:/proj/tests/..', is resolved to the folder
-      it names, so beside a target inside that folder it is no longer counted twice.
-  -> A relative target typed on a network share, './src' from '\\server\share\proj', no longer fails
-      with "does not exist".
-  -> An '--exclude' pattern no longer matches folders above the counted tree, so
-      '--exclude "tests/**"' no longer drops a project that sits under a folder named 'tests'.
-  -> Under '--diff', a pattern no longer sees the checkout's own folder.
-  -> A pattern starting with './', '--exclude ./services/api/gen', excludes what it names.
-  -> An exclude pattern in a configuration that cannot be read is named with its reason, the way
-      one typed on the command line is.
-  -> The '.git' file of a worktree or a submodule is no longer counted among the files found, so a
-      comparison against a git revision finds the same number of files on both sides.
-  -> A full-path pattern works under a folder with brackets in its name and in any letter case.
-  -> The note of '--diff' that took 'hide keywords' from a document no longer asks for a value to be
-      typed that no command can type.
-  -> A C# interpolated verbatim string written '@$"' is read as a string across its lines, so a
-      '//' inside it is no longer a comment.
-  -> In Java, Kotlin and C# a quote written as a character, '"', no longer opens a string, which
-      could turn the rest of the file into comment lines.
-  -> In C# and F# a doubled quote inside an '@"' string that crosses lines no longer ends it, so
-      the lines below it are counted as the string they are.
-  -> In Kotlin and Scala a raw string whose text ends in a quote, '"""say "hi""""', ends at its last
-      three quotes, so what follows it on its line is no longer read as a string.
-  -> In the table, the boxed table and a comparison, the branch before a nested language or a file
-      takes the theme's 'nested-branch' or 'file-branch' color, as it already did in the list.
-  -> A keyword with a tab before or after it, a tab between 'typedef' and 'struct', counts as it
-      does with a space.
+  -> Block comments that nest are now enabled for Dart, WGSL, Jai and Free Pascal, and comment
+      symbols sharing bytes ('/*/*/' in Rust, '/* x /*/' in C, '*//', '//*') are resolved by the
+      language's rules.
+  -> Ruby's '=begin'/'=end' and MATLAB's '%{'/'%}' now only open or close a block comment when they
+      stand at the start of a line (Ruby) or alone on their line (MATLAB).
+  -> Fixed string edge cases in Rust ('/* r#" */' before a closing raw string on the same line),
+      C# and F# ('@$"..."' across lines, doubled '""' inside verbatim strings), Java/Kotlin/C#
+      ('"' character literals), and Kotlin/Scala (raw strings ending in four or more quotes).
+  -> Fixed '--exclude' and '--tests' path matching for './' relative prefixes, targets containing
+      '..', network share paths ('\\server\share'), paths with brackets, '.git' files in worktrees
+      and submodules, and folders above the counted target or '--diff' checkout.
+  -> The JSON output now includes keywords for nested languages, fixing false keyword diffs when
+      comparing against a saved JSON file.
+  -> Keywords preceded or followed by a tab are now matched the same way as with a space.
+  -> In the table, boxed and comparison layouts, branches before nested languages and files now use
+      the theme's 'nested-branch' and 'file-branch' styles, matching the list layout.
 
 Change in commands:
-  -> A name pattern that reaches above a target no longer matches: 'services/api/gen' with the
-      target './services/api' is written 'api/gen' or './services/api/gen'. A path that names
-      nothing on disk or a place outside every target is reported, and so is a name typed for the
-      run that matched nothing, for '--exclude' and '--tests' alike.
-  -> 'x/**' means the folder 'x', which is skipped and leaves the excluded count.
-  -> A trailing '/' means a folder only, so '--exclude "test/"' does not match a script named
-      'test'.
-  -> '--exclude' refuses a pattern starting with '!'.
-  -> A path pattern in a project's configuration is read from the project directory, so './build'
-      in it means the project's 'build' from wherever inside the project the command is typed.
+  -> Path patterns in '--exclude' and '--tests': a trailing '/' matches directories only, 'x/**'
+      skips the directory 'x' as a whole, relative patterns in '.mezura/config.txt' resolve from
+      the project root, and unmatched or out-of-target patterns typed for the run are reported.
+      '--exclude' no longer accepts '!' patterns.
 
 Other:
-  -> mezura-core 2.0.0. New major release for the engine:
-     'EngineConfig' gained 'detect_tests' and 'test_patterns', 'exclude_dirs'
-      became 'exclude_patterns', and 'RunResult', 'ModuleResult', 'FileEntry', 'Language',
-      'ExplainedLine' and 'FileExplanation' gained the fields the above need. Its own CHANGELOG has
-      the whole of it.
-  -> The theme editor opens on the Mezura theme, and its preview is shorter, so more of the tokens
-      under it fit on the same screen.
+  -> mezura-core 2.0.0: adds test detection and path pattern support across 'EngineConfig',
+      'RunResult', 'ModuleResult', 'FileEntry', 'Language', 'ExplainedLine' and 'FileExplanation'
+      (see mezura-core/CHANGELOG.md).
+  -> The theme editor now opens on the default 'Mezura' theme with a more compact preview.
 
 -----------------------------------------------------------------------------------------------------------
 
