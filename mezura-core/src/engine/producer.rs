@@ -1,6 +1,7 @@
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::fs::DirEntry;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -64,6 +65,8 @@ fn search_for_files(id: usize, files_injector: &Injector<ParsableFile>, dirs_inj
     let mut files_present = FilesPresent::default();
     let mut unreadable_dirs = Vec::new();
     let mut should_terminate = false;
+    let mut entries = Vec::new();
+    let mut ignore_files = Vec::new();
     let mut patterns_found = Vec::new();
     let presets_taken_back = test_patterns.get_presets_taken_back();
 
@@ -87,17 +90,20 @@ fn search_for_files(id: usize, files_injector: &Injector<ParsableFile>, dirs_inj
             }
 
             match fs::read_dir(&dir.path) {
-                Ok(entries) => {
+                Ok(read_dir) => {
                     // The whole listing is read before a single child is pushed, so the build files
                     // in it settle the scope of every child before anything under that child is
                     // found. A listing made streaming would break that without a word.
-                    let entries = entries.flatten().collect::<Vec<_>>();
-                    let (present, build_files, trigger_files) = find_ignore_build_and_trigger_files_among(&entries,
-                            ObeyedIgnoreFiles::of(config), config.detect_tests);
+                    entries.extend(read_dir.flatten().map(|entry| {
+                        let file_name = entry.file_name();
+                        (entry, file_name)
+                    }));
+                    let (build_files, trigger_files) = find_ignore_build_and_trigger_files_among(&entries,
+                            ObeyedIgnoreFiles::of(config), config.detect_tests, &mut ignore_files);
                     let gitignore_stack = GitignoreStack::extend_with_ignore_files(&dir.path,
-                            dir.gitignore_stack.clone(), &present);
+                            dir.gitignore_stack.clone(), &ignore_files);
                     let with_presets = turn_on_presets(&dir.scope, trigger_files, &dir.path, presets_taken_back, applied_presets);
-                    traverse_dir(files_injector, entries, &worker, language_lookups, exclude_patterns, dir.exclude_root,
+                    traverse_dir(files_injector, &mut entries, &worker, language_lookups, exclude_patterns, dir.exclude_root,
                             test_patterns, &mut patterns_found, &gitignore_stack, config, modules, dir.module,
                             with_presets.as_ref().unwrap_or(&dir.scope), build_files, &dir.path, &mut files_present, progress)
                 },
@@ -147,14 +153,17 @@ fn steal_a_dir(id: usize, dirs_injector: &Injector<TraversedDir>, stealers: &[St
     None
 }
 
-fn find_ignore_build_and_trigger_files_among(entries: &[DirEntry], obeyed: ObeyedIgnoreFiles, detect_tests: bool)
--> (Vec<&'static str>, BuildFilesSeen, TriggerFilesSeen)
+fn find_ignore_build_and_trigger_files_among(entries: &[(DirEntry, OsString)], obeyed: ObeyedIgnoreFiles, detect_tests: bool,
+        ignore_files: &mut Vec<&'static str>)
+-> (BuildFilesSeen, TriggerFilesSeen)
 {
-    let mut present = Vec::new();
+    ignore_files.clear();
     let mut build_files = BuildFilesSeen::default();
     let mut trigger_files = TriggerFilesSeen::default();
-    for entry in entries {
-        let file_name = entry.file_name();
+    if obeyed.obeys_nothing() && !detect_tests {
+        return (build_files, trigger_files);
+    }
+    for (entry, file_name) in entries {
         let name = file_name.as_encoded_bytes();
         let ignore_file = obeyed.get_file_names().find(|wanted| is_the_same_name(name, wanted.as_bytes()));
         let is_a_build_file = detect_tests && BuildFilesSeen::is_a_build_file(name);
@@ -171,8 +180,8 @@ fn find_ignore_build_and_trigger_files_among(entries: &[DirEntry], obeyed: Obeye
         if !is_a_file {
             continue;
         }
-        if let Some(wanted) = ignore_file {
-            present.push(wanted);
+        if let Some(wanted) = ignore_file && !ignore_files.contains(&wanted) {
+            ignore_files.push(wanted);
         }
         if is_a_build_file {
             build_files.note(name);
@@ -183,7 +192,10 @@ fn find_ignore_build_and_trigger_files_among(entries: &[DirEntry], obeyed: Obeye
     }
 
     // Back into the order they overrule each other in, which a listing has no reason to hold them in
-    (obeyed.get_file_names().filter(|name| present.contains(name)).collect(), build_files, trigger_files)
+    if ignore_files.len() > 1 {
+        ignore_files.sort_unstable_by_key(|name| obeyed.get_file_names().position(|wanted| wanted == *name));
+    }
+    (build_files, trigger_files)
 }
 
 // Before the listing is walked, so that a test file beside the tool's own file is taken as one
@@ -200,7 +212,7 @@ fn turn_on_presets(scope: &DirectoryScope, trigger_files: TriggerFilesSeen, dire
 
 // 'module' is decided when the directory is queued and its entries inherit it. The two lookups below
 // only happen in a run with a target inside another target.
-fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>, dirs_worker: &Worker<TraversedDir>,
+fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: &mut Vec<(DirEntry, OsString)>, dirs_worker: &Worker<TraversedDir>,
         language_lookups: &ModuleLookups, exclude_patterns: &PathPatternMatcher, exclude_root: usize, test_patterns: &PathPatternMatcher,
         patterns_found: &mut Vec<usize>, gitignore_stack: &Option<Arc<GitignoreStack>>, config: &EngineConfig, modules: &Modules,
         module: ModuleId, scope: &DirectoryScope, build_files: BuildFilesSeen, dir_path: &Path, files_present: &mut FilesPresent,
@@ -210,7 +222,7 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
     let mut local_relevant_files = 0;
     let mut local_excluded_files = 0;
     let (dir_boundaries, file_boundaries) = (modules.has_dir_boundaries(), modules.has_file_boundaries());
-    for e in entries {
+    for (e, file_name) in entries.drain(..) {
         if let Ok(ft) = e.file_type() {
             // A link is where files already counted elsewhere get counted again. Tested before the
             // two arms below and not inside them, because the second is reached by everything that
@@ -222,7 +234,6 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                 continue;
             }
             if ft.is_file() {
-                let file_name = e.file_name();
                 // A worktree or a submodule keeps in a '.git' file what a repository keeps in its folder
                 if file_name == ".git" { continue; }
                 local_total_files += 1;
@@ -231,7 +242,7 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                 // after, because a module can be given rules of its own: a file that is a target
                 // itself, sitting inside a directory target of another module, would otherwise be
                 // identified by the rules of the module it is only passing through.
-                let of_module = file_boundaries.then(|| dir_path.join(&file_name));
+                let of_module = file_boundaries.then(|| join_path(dir_path, &file_name));
                 let module = match &of_module {
                     Some(path) => modules.at_file(path, module),
                     None => module
@@ -241,7 +252,7 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                 if claimed.is_none() && !language_lookup.needs_a_shebang_probe(name) {
                     continue;
                 }
-                let path_buf = of_module.unwrap_or_else(|| dir_path.join(&file_name));
+                let path_buf = of_module.unwrap_or_else(|| join_path(dir_path, &file_name));
                 // The ignore checks sit between the name lookup and the probe, so a covered file
                 // is never opened. Only a claimed file counts as excluded; an unclaimed candidate
                 // was never identified, so it stays in the uncounted remainder.
@@ -271,7 +282,6 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                 // Read lossily, and only to ask whether it is dotted, which a lossy reading answers
                 // correctly since a leading '.' is ASCII and survives any replacement. Demanding
                 // valid UTF-8 skips the whole directory over a name used for nothing else.
-                let file_name = e.file_name();
                 let dir_name = file_name.to_string_lossy();
                 // '--search-in-dotted' opens the directories somebody made, and git's object database
                 // is not one: nothing in it is source. Tested by name at every depth, so a submodule
@@ -279,7 +289,7 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
                 if dir_name == ".git" { continue; }
                 if !config.should_search_in_dotted && dir_name.starts_with('.') { continue; }
 
-                let pathbuf = dir_path.join(&file_name);
+                let pathbuf = join_path(dir_path, &file_name);
                 if exclude_patterns.matches(&pathbuf, exclude_root, true, patterns_found) {
                     continue;
                 }
@@ -301,12 +311,17 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: Vec<DirEntry>,
     files_present.excluded_files += local_excluded_files;
 }
 
+fn join_path(dir_path: &Path, file_name: &OsStr) -> PathBuf {
+    let mut path = PathBuf::with_capacity(dir_path.as_os_str().len() + 1 + file_name.len());
+    path.push(dir_path);
+    path.push(file_name);
+    path
+}
+
 // These drive the traversal directly instead of going through 'run': what they are about is what the
 // walk queued and under which module, which a result has already folded into buckets.
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
-
     use super::*;
     use crate::engine::config::Target;
     use crate::engine::path_patterns::TakingBack;

@@ -672,6 +672,7 @@ impl ScanBuffers {
 #[derive(Debug, Default)]
 pub(crate) struct ParseBuffers {
     scan: ScanBuffers,
+    positions: Vec<u32>,
     alias_indices: Vec<usize>,
     // every stretch of the file that is code, gathered line by line so that the keywords can be
     // searched once over the whole buffer instead of once per alias per line
@@ -1186,9 +1187,9 @@ struct MaskedLines<'a> {
 }
 
 impl<'a> MaskedLines<'a> {
-    fn of(contents: &'a str, finder: &'a MaskFinder) -> MaskedLines<'a> {
+    fn of(contents: &'a str, finder: &'a MaskFinder, positions: Vec<u32>) -> MaskedLines<'a> {
         let mut lines = MaskedLines { contents, finder, start: 0, block_at: 0, newlines: 0, candidates: 0,
-                booked: [[0; 3]; 3], positions: Vec::new() };
+                booked: [[0; 3]; 3], positions };
         lines.read_block();
         lines
     }
@@ -1587,7 +1588,7 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
     tests_by_path: TestsByPath, test_walk: Option<TestWalk<'a>>, mut declarations: Option<ModuleDeclarations<'a>>,
     log: &mut ExplainLog) -> FileReport
 {
-    let ParseBuffers { scan, alias_indices, code_spans, test_ranges, .. } = buffers;
+    let ParseBuffers { scan, positions, alias_indices, code_spans, test_ranges, .. } = buffers;
     let mut shell_stats = if config.count_keywords { FileStats::with_keywords(&language.keywords) }
             else { FileStats::default() };
     code_spans.clear();
@@ -1624,7 +1625,7 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
     // two look next, the way the lean loop books all of them
     let books_lines = !FULL || (!EXPLAIN && language.heredoc.is_none() && !language.declares_line_bound_comments()
             && language.nested_languages.is_empty());
-    let mut lines = MaskedLines::of(contents, &plan.finder);
+    let mut lines = MaskedLines::of(contents, &plan.finder, std::mem::take(positions));
     let mut handed_back = None;
     loop {
         // A string that ends with its line and a line comment carried by a continuation are left to the walk
@@ -1762,6 +1763,7 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
     }
 
     lines.move_booked_lines_to(&mut shell_stats);
+    *positions = lines.positions;
     if let Some(quiet) = quiet_lines {
         let claimed = tests.book_quiet_lines(&quiet, &shell_stats, contents.len());
         if collecting_spans { extend_test_ranges(test_ranges, quiet.from, contents.len()); }
@@ -5333,7 +5335,7 @@ mod tests {
         for case in cases {
             let expected = case.lines().collect::<Vec<&str>>();
             let finder = MaskFinder::of(b"");
-            let actual = MaskedLines::of(case, &finder).map(|(_, line, _)| line).collect::<Vec<&str>>();
+            let actual = MaskedLines::of(case, &finder, Vec::new()).map(|(_, line, _)| line).collect::<Vec<&str>>();
             assert_eq!(expected, actual, "disagreed on {case:?}");
         }
     }
@@ -5357,9 +5359,9 @@ mod tests {
         ];
         for case in &cases {
             let expected = case.lines().map(|line| line.bytes().any(|byte| searched.contains(&byte))).collect::<Vec<bool>>();
-            let actual = MaskedLines::of(case, &finder).map(|(_, _, candidate)| candidate).collect::<Vec<bool>>();
+            let actual = MaskedLines::of(case, &finder, Vec::new()).map(|(_, _, candidate)| candidate).collect::<Vec<bool>>();
             assert_eq!(expected, actual, "disagreed on {case:?}");
-            let starts = MaskedLines::of(case, &finder).map(|(start, line, _)| (start, line)).collect::<Vec<_>>();
+            let starts = MaskedLines::of(case, &finder, Vec::new()).map(|(start, line, _)| (start, line)).collect::<Vec<_>>();
             for (start, line) in starts {
                 assert_eq!(&case[start..start + line.len()], line);
             }
@@ -5381,7 +5383,7 @@ mod tests {
             "".to_owned(),
         ];
         for case in &cases {
-            let mut lines = MaskedLines::of(case, &finder);
+            let mut lines = MaskedLines::of(case, &finder, Vec::new());
             for expected in case.lines() {
                 let (_, line, has_candidates) = lines.next().unwrap();
                 assert_eq!(expected, line);
@@ -5411,7 +5413,7 @@ mod tests {
             "\t\t\t\t\t\t\t\t\t\t\t\t{long}{long}/* {long} */ \"{long}\"   \r\n",
             "end // {long}"), long = long);
         let plan = get_or_build_plan_of(&RUST);
-        let mut lines = MaskedLines::of(&contents, &plan.finder);
+        let mut lines = MaskedLines::of(&contents, &plan.finder, Vec::new());
         let mut seen = 0;
         while let Some((_, raw_line, _)) = lines.next() {
             let from_start = raw_line.trim_ascii_start();
