@@ -1083,6 +1083,10 @@ pub const SAVE_HELP  :  &str =
     The run happens as normal, and a .txt file of that name is written into 'data/config/' holding
     the flags it ran with. '--load <name>' brings them back.
 
+    Target paths are written only when they were given (or already in a configuration '--load'
+    brought in on the same run), and never into 'default', so a '--save' with no path writes a
+    group of settings that works in any directory.
+
 ";
 pub const LOAD_HELP  :  &str =
 "--load

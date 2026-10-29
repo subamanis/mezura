@@ -5,6 +5,12 @@ Bugfixes:
       when the first folder does not fit, and use the full width of the column when a long file
       name has already widened it.
 
+Change in commands:
+  -> '--save <name>' now writes target paths only when they were explicitly given (or already in a
+      configuration loaded with '--load' in the same run), and never into 'default', so saving
+      without a target path creates a reusable settings bundle instead of pinning to the current
+      working directory.
+
 -----------------------------------------------------------------------------------------------------------
 
 v3.3.0 - 2026-10-29

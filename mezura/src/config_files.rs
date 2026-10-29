@@ -246,12 +246,11 @@ pub fn read_names_in_dir(dir: &str, extension: Option<&str>) -> Vec<String> {
     names
 }
 
-// The targets must be set before this is called: they are unwrapped below.
 // 'relative_to' is the project a configuration of its own is being written for, and the targets are
 // then written the way that project reads them back.
 pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<String>, config_name: &str,
         relative_to: Option<&str>, config_builder: &ConfigurationBuilder)
--> std::io::Result<()>
+-> std::io::Result<bool>
 {
     let config_dir = if let Some(dir) = config_path {dir} else {PERSISTENT_APP_PATHS.config_dir.clone()};
     let file_name = config_dir + config_name + ".txt";
@@ -260,13 +259,21 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
 
     writer.write_all(b"Auto-generated config file.")?;
 
-    // One target per line, which is what the block reader expects: a module name only reaches the
-    // paths written after it when a comma joins them.
-    write_block(&mut writer, config_manager::TARGETS,
-            &config_builder.targets.as_ref().unwrap().iter().map(|target| match relative_to {
-                Some(project_dir) => config_manager::format_declared_form_relative_to(project_dir, target),
-                None => config_manager::format_declared_form(target)
-            }).collect::<Vec<_>>().join("\n"))?;
+    let is_default = relative_to.is_none()
+            && config_name.trim().eq_ignore_ascii_case(DEFAULT_CONFIG_NAME.trim_end_matches(".txt"));
+    let saved_targets = match config_builder.targets.as_ref().filter(|_| !is_default) {
+        Some(targets) => {
+            // One target per line, which is what the block reader expects: a module name only reaches the
+            // paths written after it when a comma joins them.
+            write_block(&mut writer, config_manager::TARGETS,
+                    &targets.iter().map(|target| match relative_to {
+                        Some(project_dir) => config_manager::format_declared_form_relative_to(project_dir, target),
+                        None => config_manager::format_declared_form(target)
+                    }).collect::<Vec<_>>().join("\n"))?;
+            true
+        },
+        None => false
+    };
 
     let format_patterns = |patterns: &mezura_core::PathPatterns|
             config_manager::format_patterns_inside(relative_to, &patterns.patterns).join(",");
@@ -375,7 +382,7 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
     writer.write_all(b"\n")?;
     writer.flush()?;
 
-    Ok(())
+    Ok(saved_targets)
 }
 
 fn write_block(writer: &mut impl Write, name: &str, value: &str) -> std::io::Result<()> {

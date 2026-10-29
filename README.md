@@ -532,7 +532,9 @@ specify many flags in a *configuration file*, and have the program just load tha
 Configurations can be created automatically by specifying all the flags once, along with the
 command `--save`, and a name for the configuration. Then the program, along with its normal
 execution, will automatically create a config file with the name you specified, and dump all the
-flags in there. The next time you want to run the program on this project, you can do it like this:
+flags in there. Target paths are saved only when you specify them on the command line (and never in
+`default`), so saving without a target path creates a settings bundle you can load in any directory;
+saving with explicit target paths (`mezura ./ --save <config_name>`) remembers those paths too:
 `mezura --load <config_name>`
 
 By default, there is a configuration file named "default" already present in the "config" folder of

@@ -1360,15 +1360,12 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     if let Some(name) = &config_builder.config_name_to_save {
-        if config_builder.targets.is_none() {
-            config_builder.targets = Some(create_targets_from_working_dir()?);
-        }
-
         match super::config_files::save_existing_commands_from_config_builder_to_file(None, name, None, &config_builder) {
             Err(error) => eprintln!("\n{}", wrap_message(&format!(
                     "Configuration '{name}' could not be written to '{}': {error}",
                     crate::paths::PERSISTENT_APP_PATHS.config_dir)).yellow()),
-            Ok(_) => eprintln!("\nConfiguration '{name}' saved. Load it with '--{LOAD} {name}'.")
+            Ok(true) => eprintln!("\nConfiguration '{name}' saved (with target paths). Load it with '--{LOAD} {name}'."),
+            Ok(false) => eprintln!("\nConfiguration '{name}' saved (settings only, no target paths). Load it with '--{LOAD} {name}'.")
         }
     }
 
@@ -1578,7 +1575,7 @@ fn save_the_local_configuration(config_builder: &mut ConfigurationBuilder, typed
     match written {
         Err(error) => eprintln!("\n{}", wrap_message(&format!(
                 "The settings of this project could not be written to '{}': {error}", local.get_config_path())).yellow()),
-        Ok(()) => {
+        Ok(_) => {
             // A folder this run made is a folder this run has, so a '--log' beside it writes into
             // the project rather than being told there is nowhere to write
             config_builder.local_dir = Some(local.clone());
@@ -2249,6 +2246,8 @@ mod tests {
 
         let mut saved_config = create_config_builder_from_args("--threads 1 5 --languages lang1, lang2 --save test000").unwrap();
         assert!(Path::new(test_file_path).exists());
+        assert_eq!(None, crate::config_files::parse_config_file(Some("test000"), None).unwrap().0.targets,
+                "an untargeted '--save' wrote the working directory into the configuration file");
         assert_eq!(saved_config.targets.clone().unwrap()[0], Target::of(mezura_core::convert_to_absolute("./")));
         assert_eq!(saved_config.threads.unwrap(), Threads::new(1, 5));
         assert_eq!(saved_config.languages_of_interest.clone().unwrap(), vec!["lang1", "lang2"]);
@@ -2256,21 +2255,39 @@ mod tests {
         let mut loaded_config = create_config_builder_from_args("--load test000").unwrap();
         saved_config.config_name_to_save = None;
         loaded_config.config_name_to_load = None;
-        // Bookkeeping about where the targets came from, not a value that was saved
-        loaded_config.targets_source = None;
+        assert_eq!(None, loaded_config.targets_source);
         // A fact about each command line and not a value that was saved: the first typed its
         // languages, the second loaded them
         assert!(saved_config.typed_explicitly.languages && !loaded_config.typed_explicitly.languages);
         saved_config.typed_explicitly = TypedExplicitlyOnCommandLine::default();
         assert_eq!(saved_config, loaded_config);
 
+        // Editing an untargeted configuration keeps it untargeted
+        create_config_builder_from_args("--load test000 --top 5 --save test000").unwrap();
+        assert_eq!(None, crate::config_files::parse_config_file(Some("test000"), None).unwrap().0.targets);
+
         loaded_config = create_config_builder_from_args("--load test000 --threads 1 4 --targets ./").unwrap();
         assert_eq!(saved_config.targets, loaded_config.targets);
         assert_ne!(saved_config.threads, loaded_config.threads);
 
+        // Explicitly given targets are written, and preserved by a subsequent edit that names none
         saved_config = create_config_builder_from_args("--load test000 --threads 1 4 --targets ./ --save test000").unwrap();
         saved_config.config_name_to_save = None;
         assert_eq!(saved_config, loaded_config);
+        let expected_targets = Some(vec![Target::of(mezura_core::convert_to_absolute("./"))]);
+        assert_eq!(expected_targets, crate::config_files::parse_config_file(Some("test000"), None).unwrap().0.targets);
+        create_config_builder_from_args("--load test000 --top 3 --save test000").unwrap();
+        assert_eq!(expected_targets, crate::config_files::parse_config_file(Some("test000"), None).unwrap().0.targets);
+
+        // 'default' never writes targets, even when the builder holds some
+        let isolated = std::env::temp_dir().join("mezura-test-save-default");
+        std::fs::create_dir_all(&isolated).unwrap();
+        let isolated_dir = format!("{}/", crate::paths::normalise_separators(&isolated.to_string_lossy()));
+        let saved_targets = crate::config_files::save_existing_commands_from_config_builder_to_file(
+                Some(isolated_dir.clone()), "Default", None, &saved_config).unwrap();
+        assert!(!saved_targets);
+        assert_eq!(None, crate::config_files::parse_config_file(Some("Default"), Some(isolated_dir)).unwrap().0.targets);
+        let _ = std::fs::remove_dir_all(&isolated);
 
         std::fs::remove_file(test_file_path).unwrap();
     }
