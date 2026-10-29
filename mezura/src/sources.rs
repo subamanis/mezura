@@ -268,7 +268,7 @@ mod tests {
         std::fs::write(root.join("api/src/gen/g.rs"), "fn e() {}\n").unwrap();
         commit_everything_in(&root);
 
-        let repository = crate::paths::normalise_separators(&root.to_string_lossy()).into_owned();
+        let (repository, _) = crate::git::find_repository_of(&root.to_string_lossy()).unwrap();
         let parsed = mezura_core::language_file::parse_languages_in_dir(CORE_LANGUAGES_DIR).unwrap().0;
         let both_sides = |config: &Configuration| {
             let resolved = prepare_revisions(&["HEAD"], &config.engine).unwrap();
