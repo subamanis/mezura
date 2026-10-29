@@ -703,9 +703,9 @@ On native Debian 13:
 
 | tool | time | vs fastest | lines/s | files | lines |
 |---|---|---|---|---|---|
-| mezura 3.2.0 | 86 ms ± 3 | 1.00x | 417.7M | 63,738 | 36,018,801 |
-| scc 4.1.0 | 208 ms ± 2 | 2.41x | 173.3M | 63,738 | 36,018,801 |
-| tokei 15.0.0 | 414 ms ± 2 | 4.80x | 87.1M | 63,793 | 36,027,518 |
+| mezura 3.3.0 | 78 ms ± 1 | 1.00x | 461.8M | 63,741 | 36,018,888 |
+| scc 4.1.0 | 208 ms ± 2 | 2.67x | 173.3M | 63,738 | 36,018,801 |
+| tokei 15.0.0 | 414 ms ± 2 | 5.31x | 87.1M | 63,793 | 36,027,518 |
 
 On Windows 11, the same machine and the same tree:
 
