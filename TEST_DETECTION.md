@@ -101,7 +101,7 @@ Run `--show-presets` to see all available presets:
 | `@jest` | `jest.config.*` | `__tests__/`, `*.test.{js,jsx,ts,tsx,mjs,cjs,mts,cts}`, `*.spec.{js,jsx,ts,tsx,mjs,cjs,mts,cts}` |
 | `@vitest` | `vitest.config.*`, `vitest.workspace.*`, `vite.config.*` | `*.test.{js,jsx,ts,tsx,mjs,cjs,mts,cts}`, `*.spec.{js,jsx,ts,tsx,mjs,cjs,mts,cts}` |
 | `@mocha` | `.mocharc.*` | `test/` |
-| `@pytest` | `conftest.py`, or `testpaths` in a pytest config (`pytest.ini`, `pyproject.toml`, `tox.ini`, `setup.cfg`) | `test_*.py`, `*_test.py`, `conftest.py` |
+| `@pytest` | `conftest.py`, or `testpaths` in a pytest config (`pytest.toml`, `.pytest.toml`, `pytest.ini`, `.pytest.ini`, `pyproject.toml`, `tox.ini`, `setup.cfg`) | `test_*.py`, `*_test.py`, `conftest.py` |
 | `@rspec` | `.rspec` (when a `Gemfile` is in the same folder) | `spec/` |
 | `@phpunit` | `phpunit.xml`, `phpunit.xml.dist`, `phpunit.dist.xml` | `tests/`, `Tests/`, `test/` |
 | `@gradle` | `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts` | `src/*Test/`, `src/testFixtures/` |

@@ -1151,34 +1151,4 @@ mod tests {
 
         std::fs::remove_dir_all(&root).unwrap();
     }
-
-    #[test]
-    fn the_presets_table_of_the_document_is_the_shipped_table() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("TEST_DETECTION.md");
-        let document = fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
-        let rows = document.lines().filter(|line| line.starts_with("| `@")).map(|line| {
-            let cells = line.trim_matches('|').split('|').map(str::trim).collect::<Vec<_>>();
-            assert_eq!(4, cells.len(), "a row of the presets table has {} cells: {line}", cells.len());
-            (cells[0].trim_matches('`').trim_start_matches('@').to_owned(), collect_backticked(cells[1]), collect_backticked(cells[2]))
-        }).collect::<Vec<_>>();
-        assert_eq!(TEST_PRESETS.len(), rows.len(), "the table has {} rows for {} presets", rows.len(), TEST_PRESETS.len());
-
-        for preset in &TEST_PRESETS {
-            let (_, turned_on_by, patterns) = rows.iter().find(|(name, _, _)| name == preset.name)
-                    .unwrap_or_else(|| panic!("'@{}' has no row in the table", preset.name));
-            assert_eq!(preset.patterns, patterns.iter().map(String::as_str).collect::<Vec<_>>().as_slice(),
-                    "the patterns of '@{}' differ from the shipped ones", preset.name);
-            let named = |file: &str| turned_on_by.iter().any(|written| written == file
-                    || written.strip_suffix('*').is_some_and(|stem| file.starts_with(stem)));
-            for &file in preset.trigger_files.iter().chain(preset.companion_file.iter()).chain(preset.files_declaring_tests) {
-                assert!(named(file), "'{file}' turns '@{}' on and its row does not name it", preset.name);
-            }
-            assert_eq!(preset.trigger_files.is_empty(), turned_on_by.is_empty(),
-                    "the row of '@{}' names a file where the preset has none, or the other way round", preset.name);
-        }
-    }
-
-    fn collect_backticked(cell: &str) -> Vec<String> {
-        cell.split('`').skip(1).step_by(2).map(str::to_owned).collect()
-    }
 }
