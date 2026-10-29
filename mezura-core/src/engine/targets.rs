@@ -708,7 +708,7 @@ mod target_path_tests {
         std::fs::create_dir_all(root.join("a").join("src")).unwrap();
         std::fs::create_dir_all(root.join("b").join("src")).unwrap();
         std::fs::write(root.join("a").join("src").join("one.rs"), "fn main() {}").unwrap();
-        let root_str = root.to_str().unwrap().replace('\\', "/");
+        let root_str = convert_to_absolute(&root.join("a/..").to_string_lossy());
         let declared = [Target::of(format!("{root_str}/a")), Target::of(format!("{root_str}/b/src/../src")),
                 Target::of(format!("{root_str}/*/src")), Target::of(format!("{root_str}/a/src/one.rs"))];
         let resolved = resolve(&declared, obey_every_ignore_file(), false).unwrap();
