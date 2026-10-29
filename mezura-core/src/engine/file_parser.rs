@@ -3389,6 +3389,101 @@ mod tests {
         }
     }
 
+    #[test]
+    fn comment_symbols_sharing_bytes_read_byte_for_byte_as_a_reference_lexer() {
+        const ALPHABET: [char; 4] = ['/', '*', ' ', 'x'];
+        let languages = [(&LANGUAGE_MAP_REF["C"], false), (&LANGUAGE_MAP_REF["Rust"], true)];
+        let mut seed = 0x517C_C1B7_2722_0A95u64;
+        let mut next = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+
+        for _ in 0..2000 {
+            let mut contents = String::new();
+            for _ in 0..(next() % 8 + 1) {
+                for _ in 0..=(next() % 14) {
+                    contents.push(ALPHABET[(next() % ALPHABET.len() as u64) as usize]);
+                }
+                contents.push('\n');
+            }
+
+            for (language, nests) in languages {
+                let (walked, log) = parse_lines_explained(&contents, language, &empty_lookup(),
+                        &EngineConfig::default(), TestsByPath::Nothing);
+                let mut depth = 0u32;
+                let mut expected_classes = LineClasses::default();
+
+                for (raw_line, record) in contents.lines().zip(log.records()) {
+                    let trimmed = raw_line.trim_ascii();
+                    if trimmed.is_empty() {
+                        assert!(record.spans.is_empty(), "{contents:?} in {}", language.name);
+                        let class = if depth == 0 { LineClass::Blank } else { LineClass::BlankInComment };
+                        assert_eq!(class, record.class, "{contents:?} in {}", language.name);
+                        expected_classes.bump(class);
+                        continue;
+                    }
+
+                    let bytes = trimmed.as_bytes();
+                    let mut expected_bytes = Vec::with_capacity(bytes.len());
+                    let mut i = 0;
+                    while i < bytes.len() {
+                        if depth == 0 {
+                            if bytes[i..].starts_with(b"//") {
+                                expected_bytes.resize(bytes.len(), SpanKind::Comment);
+                                break;
+                            } else if bytes[i..].starts_with(b"/*") {
+                                depth = 1;
+                                expected_bytes.extend([SpanKind::Comment; 2]);
+                                i += 2;
+                            } else {
+                                expected_bytes.push(SpanKind::Code);
+                                i += 1;
+                            }
+                        } else if bytes[i..].starts_with(b"*/") {
+                            depth -= 1;
+                            expected_bytes.extend([SpanKind::Comment; 2]);
+                            i += 2;
+                        } else if nests && bytes[i..].starts_with(b"/*") {
+                            depth += 1;
+                            expected_bytes.extend([SpanKind::Comment; 2]);
+                            i += 2;
+                        } else {
+                            expected_bytes.push(SpanKind::Comment);
+                            i += 1;
+                        }
+                    }
+
+                    let has_code = bytes.iter().zip(&expected_bytes)
+                            .any(|(&ch, &kind)| kind == SpanKind::Code && !ch.is_ascii_whitespace());
+                    let words_in_code = bytes.iter().zip(&expected_bytes)
+                            .any(|(&ch, &kind)| kind == SpanKind::Code && ch.is_ascii_alphanumeric());
+                    let has_words = bytes.iter().any(|&ch| ch.is_ascii_alphanumeric());
+                    let expected_class = if words_in_code { LineClass::WordsInCode }
+                            else if has_words {
+                                if has_code { LineClass::CommentWordsBesideCode } else { LineClass::WordsInComment }
+                            } else if has_code { LineClass::PunctuationInCode }
+                            else { LineClass::PunctuationInComment };
+                    expected_classes.bump(expected_class);
+
+                    let lead = raw_line.len() - raw_line.trim_ascii_start().len();
+                    let mut at = lead;
+                    let mut explained_bytes = Vec::with_capacity(bytes.len());
+                    for span in &record.spans {
+                        assert_eq!(at, span.from, "{contents:?} in {}", language.name);
+                        assert!(span.to > span.from, "{contents:?} in {}", language.name);
+                        explained_bytes.resize(explained_bytes.len() + (span.to - span.from), span.kind);
+                        at = span.to;
+                    }
+                    assert_eq!(lead + bytes.len(), at, "{contents:?} in {}", language.name);
+                    assert_eq!((expected_class, expected_bytes), (record.class, explained_bytes),
+                            "{contents:?} in {}", language.name);
+                }
+
+                assert_eq!(expected_classes, walked.shell.classes, "{contents:?} in {}", language.name);
+                assert_eq!(expected_classes, parse_lines_whole(&contents, language).classes,
+                        "{contents:?} in {}", language.name);
+            }
+        }
+    }
+
     fn c_like_with_a_splice() -> Language {
         Language::new("c-like", ["c"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], [])
                 .with_line_continuation(LineContinuation { symbol: "\\".to_owned(), in_strings: true, in_comments: true })
