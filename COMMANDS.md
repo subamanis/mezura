@@ -631,6 +631,8 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
       keywords        the keyword counts, keeping the rest of the details rows. This one also
                       stops them being counted, so it is one of the two names here that make a
                       run faster
+      modules         the grouping by module, so a configuration that names its targets prints
+                      as one flat report
       nested-languages  the rows that break a container file down, so a '.vue' weighs whole on
                       the Vue row with no sign of the TypeScript and CSS inside it
       tests           the rows that split a language into its test code and the rest. Test code
@@ -939,8 +941,8 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     The counts are plain numbers of lines and bytes, with no thousands separators, no KB or MB,
     no percentages and no colors, whatever the other settings say. '--sort' and '--top' still
     order and cut the languages, and the count of the ones left out is in the document. Of the
-    '--hide' list only 'keywords' and 'timing' apply, since the rest name printed sections a JSON
-    run does not have.
+    '--hide' list only 'keywords', 'nested-languages', 'tests', 'modules' and 'timing' apply,
+    since the rest name printed sections or columns a JSON run does not have.
 
     Warnings and errors go to the error output, so no stray line lands inside the document, and
     the warnings are in it as well under 'warnings', each with a 'code' safe to branch on, an

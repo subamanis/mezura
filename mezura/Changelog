@@ -7,9 +7,10 @@ Bugfixes:
 
 Change in commands:
   -> '--save <name>' now writes target paths only when they were explicitly given (or already in a
-      configuration loaded with '--load' in the same run), and never into 'default', so saving
+      configuration loaded with '--load' in the same run), and not into 'default', so saving
       without a target path creates a reusable settings bundle instead of pinning to the current
       working directory.
+  -> '--hide modules' prints a configuration or run with named modules as a single flat report.
 
 -----------------------------------------------------------------------------------------------------------
 

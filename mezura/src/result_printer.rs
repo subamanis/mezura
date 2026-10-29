@@ -108,10 +108,14 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
     let mut layout = config.view.layout;
     if !markdown && layout == Layout::Matrix && !is_grouped(&groups) {
         layout = Layout::Table;
-        eprintln!("\n{}", super::theme::get_active().warning.paint(
-                "'--layout matrix' has nothing to cross, since no target was given a name, so the \
-                'table' layout was printed. Use the modules feature to get a matrix: 'mezura \
-                frontend=./web backend=./api'."));
+        let message = match config.view.hidden.modules && result.has_modules() {
+            true => "'--layout matrix' crosses languages with modules and '--hide modules' hides the \
+                    modules, so the 'table' layout was printed.",
+            false => "'--layout matrix' has nothing to cross, since no target was given a name, so the \
+                    'table' layout was printed. Use the modules feature to get a matrix: 'mezura \
+                    frontend=./web backend=./api'."
+        };
+        eprintln!("\n{}", super::theme::get_active().warning.paint(message));
     }
     // The matrix crosses languages with modules and has no third direction for a file to hang in.
     let files_are_shown = markdown || layout != Layout::Matrix;
@@ -344,23 +348,31 @@ fn create_groups_of<'a>(result: &'a RunResult, config: &Configuration) -> Vec<Gr
     // sorted: that order is the only say the user has over the columns of a matrix. What no name
     // claimed comes last.
     let without_tests = leaves_tests_out(config);
-    let mut groups = result.modules.iter().map(|module| {
-        let shown = ShownFigures::of_module(module, without_tests);
+    let create_group = |name: Option<&'a str>, shown: ShownFigures<'a>,
+            nested: &'a HashMap<String, HashMap<String, Stats>>, tests: &'a HashMap<String, TestCode>| {
         let (languages, hidden) = find_shown_language_names(&shown.per_language, config);
         Group {
-            name: module.name.as_deref(),
+            name,
             languages,
             hidden,
             per_language: shown.per_language,
             // Emptied here and not at each layout, or the next layout forgets to obey the flag
-            nested: if config.view.hidden.nested_languages {&NO_NESTED} else {&module.nested_languages},
-            tests: if config.view.hidden.tests {&NO_TESTS} else {&module.tests},
+            nested: if config.view.hidden.nested_languages {&NO_NESTED} else {nested},
+            tests: if config.view.hidden.tests {&NO_TESTS} else {tests},
             tests_breakdown: config.view.tests_breakdown,
             files: HashMap::new(),
             total: shown.total,
             baseline: None
         }
-    }).collect::<Vec<_>>();
+    };
+    let mut groups = match config.view.hidden.modules && result.has_modules() {
+        true => vec![create_group(None, ShownFigures::of_run(result, without_tests),
+                &result.nested_languages, &result.tests)],
+        false => result.modules.iter()
+                .map(|module| create_group(module.name.as_deref(), ShownFigures::of_module(module, without_tests),
+                        &module.nested_languages, &module.tests))
+                .collect()
+    };
 
     for (group, files) in groups.iter_mut().zip(find_files_to_show(result, config, without_tests)) {
         group.files = files;
@@ -402,18 +414,27 @@ pub(crate) type FileRowsOfModule<'a> = HashMap<&'a str, FileRows<'a>>;
 pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configuration, without_tests: bool)
 -> Vec<FileRowsOfModule<'a>>
 {
+    let flatten_modules = config.view.hidden.modules && result.has_modules();
     let Some(by_file) = config.view.by_file else {
-        return result.modules.iter().map(|_| HashMap::new()).collect();
+        return (0..if flatten_modules {1} else {result.modules.len()}).map(|_| HashMap::new()).collect();
     };
 
     let common_directory = find_common_directory_of(&result.targets);
-    let selected = result.modules.iter().map(|module| {
-        let shown = ShownFigures::of_module(module, without_tests);
+    let groups_of_modules = match flatten_modules {
+        true => vec![(ShownFigures::of_run(result, without_tests), result.modules.as_slice())],
+        false => result.modules.iter()
+                .map(|module| (ShownFigures::of_module(module, without_tests), std::slice::from_ref(module)))
+                .collect()
+    };
+    let selected = groups_of_modules.into_iter().map(|(shown, modules)| {
         let (names, _) = find_shown_language_names(&shown.per_language, config);
 
         names.into_iter().filter_map(|name| {
-            let (language, entries) = module.files.get_key_value(name.as_str())?;
-            let mut files = entries.iter()
+            let language = modules.iter()
+                    .find_map(|module| module.files.get_key_value(name.as_str()).map(|(key, _)| key.as_str()))?;
+            let mut files = modules.iter()
+                    .filter_map(|module| module.files.get(name.as_str()))
+                    .flatten()
                     .filter(|file| !without_tests || !file.is_tests_whole())
                     .collect::<Vec<_>>();
             files.sort_by(|one, other| compare_files_by(one, other, config.view.sort_by, config.view.counting,
@@ -421,19 +442,22 @@ pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configurati
             let shown = by_file.shown_out_of(files.len());
             let hidden = files.len() - shown;
             files.truncate(shown);
-            Some((language.as_str(), files, hidden))
+            Some((language, files, hidden))
         }).collect::<Vec<_>>()
     }).collect::<Vec<_>>();
 
+    // Without module headings to say which folder a file came from, stripping each module's own
+    // path leaves two 'src/main.rs' or 'Cargo.toml' rows looking identical in the flat list
+    let relative_targets = if flatten_modules && !common_directory.is_empty() {&[][..]} else {&result.targets};
     let budget = selected.iter().flat_map(|module| module.iter())
             .flat_map(|(_, files, _)| files.iter())
-            .map(|file| calculate_path_floor(find_relative_path(&file.path, &result.targets, common_directory)))
+            .map(|file| calculate_path_floor(find_relative_path(&file.path, relative_targets, common_directory)))
             .max().unwrap_or(0).max(SHOWN_PATH_WIDTH);
 
     selected.into_iter().map(|module| {
         module.into_iter().map(|(language, files, hidden)| {
             let shown = files.into_iter()
-                    .map(|file| (elide_long_path_to(find_relative_path(&file.path, &result.targets, common_directory), budget), file))
+                    .map(|file| (elide_long_path_to(find_relative_path(&file.path, relative_targets, common_directory), budget), file))
                     .collect();
             (language, FileRows { shown, hidden })
         }).collect()
@@ -1241,7 +1265,7 @@ fn draw_markdown_table(columns: &[Column], rows: &[Vec<String>], kinds: &[RowKin
 pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configuration) {
     let theme = super::theme::get_active();
     let (baseline, subject) = (&comparison.baseline, &comparison.subject);
-    let pairs = comparison.module_pairs();
+    let pairs = (!config.view.hidden.modules).then(|| comparison.module_pairs()).flatten();
 
     let markdown_wanted = config.view.output == config_manager::OutputFormat::Markdown;
     if markdown_wanted {
@@ -2998,7 +3022,7 @@ fn print_comparison_to_previous_runs(result: &RunResult, log_content: &str, conf
                         then.calculate_extra_lines(model), total.calculate_extra_lines(model))));
         // A run that named no module says nothing about them here either. The modified targets tag
         // is what already reports that the targets are not the ones they were.
-        if result.has_modules() {
+        if result.has_modules() && !config.view.hidden.modules {
             comparison_str.push_str(&format_module_comparison_lines(entry, &result.modules, model, without_tests));
         }
         comparison_str.push('\n');
@@ -4505,6 +4529,56 @@ mod tests {
         assert!(outside.contains("60") && outside.contains("40") && !outside.contains("90"), "{outside}");
         let unrecorded = format_module_comparison_lines(&entry(None), &[now], CountingModel::Content, true);
         assert!(unrecorded.contains("90") && unrecorded.contains("60"), "an entry without tests was not shown whole: {unrecorded}");
+    }
+
+    #[test]
+    fn hiding_the_modules_flattens_the_groups_the_files_and_the_comparison() {
+        let stats = |files, lines, code| crate::test_support::plain_stats_of(files, lines * 10, lines, code, 0, hashmap![]);
+        let file = |path: &str, lines, code| mezura_core::FileEntry { path: path.to_owned(),
+                stats: stats(1, lines, code), nested_languages: hashmap![], tests: None };
+        let module = |name: &str, first: (&str, usize), second: (&str, usize)| {
+            let per_language = hashmap!["Rust".to_owned() => stats(2, first.1 + second.1, first.1 + second.1)];
+            mezura_core::ModuleResult {
+                name: Some(name.to_owned()),
+                total: Stats::calculate_total_of(&per_language),
+                per_language,
+                nested_languages: hashmap![],
+                tests: hashmap![],
+                files: hashmap!["Rust".to_owned() => vec![file(first.0, first.1, first.1), file(second.0, second.1, second.1)]]
+            }
+        };
+        let result = RunResult {
+            per_language: hashmap!["Rust".to_owned() => stats(4, 200, 200)],
+            total: stats(4, 200, 200),
+            nested_languages: hashmap![],
+            tests: hashmap![],
+            modules: vec![module("core", ("D:/proj/core/big.rs", 90), ("D:/proj/core/small.rs", 10)),
+                          module("cli", ("D:/proj/cli/mid.rs", 70), ("D:/proj/cli/tiny.rs", 30))],
+            faulty_files: Vec::new(),
+            skipped_files: mezura_core::SkippedFiles::default(),
+            files_present: mezura_core::FilesPresent { total_files: 4, relevant_files: 4, excluded_files: 0 },
+            performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) },
+            targets: vec![mezura_core::Target::named("core", "D:/proj/core"),
+                          mezura_core::Target::named("cli", "D:/proj/cli")],
+            unreadable_dirs: Vec::new(),
+            warnings: Vec::new(),
+            applied_presets: Vec::new()
+        };
+
+        let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        config.view.by_file = Some(ByFile::Capped(2));
+        let grouped = create_groups_of(&result, &config);
+        assert!(is_grouped(&grouped) && grouped.len() == 2);
+        assert_eq!(0, count_hidden_files(&grouped));
+        assert_eq!("big.rs", grouped[0].files["Rust"].shown[0].0.as_ref());
+
+        config.view.hidden.modules = true;
+        let flat = create_groups_of(&result, &config);
+        assert!(!is_grouped(&flat) && flat.len() == 1);
+        assert_eq!(200, flat[0].total.lines);
+        assert_eq!(2, count_hidden_files(&flat));
+        let shown_paths = flat[0].files["Rust"].shown.iter().map(|(path, _)| path.as_ref()).collect::<Vec<_>>();
+        assert_eq!(vec!["core/big.rs", "cli/mid.rs"], shown_paths);
     }
 
     #[test]

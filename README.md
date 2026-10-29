@@ -231,7 +231,8 @@ then records how each module grew.
 
 <img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/modules-matrix.png" width="700">
 
-The full rules (glob patterns, repeated names, ordering) are under `--targets` in
+`--hide modules` drops the grouping for a single run, so a configuration that names its targets
+prints as one flat report. The full rules (glob patterns, repeated names, ordering) are under `--targets` in
 [COMMANDS.md](https://github.com/subamanis/mezura/blob/HEAD/COMMANDS.md).
 
 ### Layouts

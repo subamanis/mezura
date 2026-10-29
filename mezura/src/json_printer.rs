@@ -27,9 +27,10 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
     let (shown, hidden) = result_printer::find_shown_language_names(per_language, config);
     // The document carries every file whole, with its tests beside it, whatever the report leaves out
     let file_rows = result_printer::find_files_to_show(result, config, false);
+    let has_modules = result.has_modules() && !config.view.hidden.modules;
     // With modules the rows are written once, inside each module's own languages, and so are the
     // counts of what the cap hid: every file belongs to exactly one module
-    let (files, files_hidden) = match result.has_modules() {
+    let (files, files_hidden) = match has_modules {
         true => (HashMap::new(), 0),
         false => (file_rows.first().map(find_shown_files).unwrap_or_default(),
                 file_rows.iter().flat_map(HashMap::values).map(|rows| rows.hidden).sum::<usize>())
@@ -60,7 +61,7 @@ pub fn create_document(result: &RunResult, datetime_now: &DateTime<Local>, confi
     ];
     // Absent from a run that named no module, the same way the block is absent from the printed
     // report: a consumer that never asked for a second axis is not handed one holding everything
-    if result.has_modules() {
+    if has_modules {
         members.push(format!("\"modules\":{}", create_modules_array(result, &file_rows, config)));
     }
     // The only volatile block apart from the timestamp, so hiding the timing is also what makes the
@@ -89,7 +90,7 @@ fn create_comparison_document(comparison: &super::diff::Comparison, datetime_now
     let keywords_counted = !config.view.hidden.keywords;
     // Written only when both readings named the same modules, since a module only one of them has
     // has nothing to be compared against
-    let pairs = comparison.module_pairs();
+    let pairs = (!config.view.hidden.modules).then(|| comparison.module_pairs()).flatten();
 
     // The changed files under each language, the same gate and the same single placement the run
     // document has: inside the modules when they are written, at the top level otherwise
@@ -1054,6 +1055,14 @@ mod tests {
         assert_eq!(2, written.matches("\"by_file\"").count(), "{written}");
         assert!(!written[..modules_at].contains("\"by_file\""), "{written}");
 
+        config.view.hidden.modules = true;
+        let flattened = create_document(&result, &Local::now(), &config);
+        assert!(!flattened.contains("\"modules\""), "{flattened}");
+        assert_eq!(2, flattened.matches("\"by_file\"").count(), "{flattened}");
+        assert!(flattened.contains("\"path\":\"D:/x/api/a.rs\"") && flattened.contains("\"path\":\"D:/x/web/i.html\""),
+                "{flattened}");
+        config.view.hidden.modules = false;
+
         // and a run that named no module keeps them at the top level
         result.modules = vec![mezura_core::ModuleResult {name: None, per_language: result.per_language.clone(),
                 total: result.total.clone(), nested_languages: HashMap::new(), tests: HashMap::new(),
@@ -1143,13 +1152,22 @@ mod tests {
         assert!(serde_json::from_str::<serde_json::Value>(&document).is_ok(), "{document}");
 
         // A module only one of them has takes the whole key with it, and the reader is told why
-        let renamed = with_modules(crate::diff::Source::Run,
+        let renamed = || with_modules(crate::diff::Source::Run,
                 vec![module(Some("api"), "Rust", 150, 5), module(None, "HTML", 40, 0)]);
-        let document = create_comparison_document(&crate::diff::Comparison::of(from(), renamed, &config, Vec::new()), &datetime, &config);
+        let document = create_comparison_document(&crate::diff::Comparison::of(from(), renamed(), &config, Vec::new()), &datetime, &config);
         assert!(!document.contains("\"modules\""), "{document}");
         assert!(document.contains("\"code\":\"modules-differ\""), "{document}");
         assert!(document.contains("\"affects\":\"settings\""));
         assert!(document.contains("\"subject\":\"'backend', '(unnamed)' -> 'api', '(unnamed)'\""), "{document}");
+
+        let mut hidden_modules = config.clone();
+        hidden_modules.view.hidden.modules = true;
+        let same_hidden = create_comparison_document(&crate::diff::Comparison::of(from(), from(), &hidden_modules, Vec::new()),
+                &datetime, &hidden_modules);
+        assert!(!same_hidden.contains("\"modules\""), "{same_hidden}");
+        let renamed_hidden = create_comparison_document(&crate::diff::Comparison::of(from(), renamed(), &hidden_modules, Vec::new()),
+                &datetime, &hidden_modules);
+        assert!(!renamed_hidden.contains("\"modules\"") && !renamed_hidden.contains("modules-differ"), "{renamed_hidden}");
 
         let plain = create_comparison_document(&crate::diff::Comparison::of(
                 reading_of(crate::diff::Source::Run, HashMap::new()),

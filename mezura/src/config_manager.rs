@@ -237,6 +237,7 @@ pub struct Hidden {
     pub progress_bar: bool,
     pub animations: bool,
     pub keywords: bool,
+    pub modules: bool,
     pub nested_languages: bool,
     pub tests: bool,
     pub files: bool,
@@ -257,10 +258,11 @@ pub struct Hidden {
 }
 
 impl Hidden {
-    fn get_pairs(self) -> [(&'static str, bool); 23] {
+    fn get_pairs(self) -> [(&'static str, bool); 24] {
         [("version", self.version), ("directory-info", self.directory_info), ("parsing-info", self.parsing_info),
          ("progress-bar", self.progress_bar), ("animations", self.animations), ("keywords", self.keywords),
-         ("nested-languages", self.nested_languages), ("tests", self.tests), ("files", self.files), ("comments", self.comments),
+         ("modules", self.modules), ("nested-languages", self.nested_languages), ("tests", self.tests),
+         ("files", self.files), ("comments", self.comments),
          ("extra", self.extra), ("blanks", self.blanks), ("size", self.size), ("percentages", self.percentages),
          ("files-percentages", self.files_percentages), ("lines-percentages", self.lines_percentages),
          ("code-percentages", self.code_percentages), ("comments-percentages", self.comments_percentages),
@@ -293,6 +295,7 @@ impl Hidden {
                 "progress-bar" => hidden.progress_bar = true,
                 "animations" => hidden.animations = true,
                 "keywords" => hidden.keywords = true,
+                "modules" => hidden.modules = true,
                 "nested-languages" => hidden.nested_languages = true,
                 "tests" => hidden.tests = true,
                 "files" => hidden.files = true,
