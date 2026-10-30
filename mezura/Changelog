@@ -1,5 +1,11 @@
 v3.4.0 - unreleased
 
+Main changes:
+  -> Local git revisions ('@v3.2.0', './src@030e6e7') and remote git repositories
+      ('https://github.com/owner/repo', 'https://github.com/owner/repo@v1.0',
+      'git@github.com:owner/repo@main') can now be counted directly as targets, under module names,
+      with '--explain', and as either side of '--diff'.
+
 Bugfixes:
   -> Long file paths under '--by-file' now keep their trailing folders ('.../Services/file.php')
       when the first folder does not fit, and use the full width of the column when a long file
@@ -20,6 +26,8 @@ Change in commands:
 Other:
   -> MATLAB now also counts GNU Octave's '#' line comments and '#{' / '#}' block comments, and
       recognises '##' headers when settling '.m' files.
+  -> The default thread count now obeys process CPU affinity on Windows and cgroups v2 CPU quotas on
+      Linux.
 
 -----------------------------------------------------------------------------------------------------------
 

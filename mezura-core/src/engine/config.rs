@@ -330,7 +330,7 @@ impl From<(usize,usize)> for Threads {
 
 impl Default for Threads {
     fn default() -> Self {
-        let threads = num_cpus::get();
+        let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         let (threads_per_producer, consumers_per_thread) = if cfg!(windows) {(2, 4)} else {(4, 2)};
         Threads {
             producers: (threads / threads_per_producer).clamp(2, Self::MAX_PRODUCERS),
