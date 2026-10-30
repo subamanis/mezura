@@ -109,6 +109,7 @@ const PAIRED_STRINGS_ESCAPED_BY_DOUBLING : &str = "Paired strings escaped by dou
 const PAIRED_STRINGS_WITH_A_DELIMITER : &str = "Paired strings with a delimiter";
 const HEREDOC                  : &str = "Heredoc";
 const CHARACTER_LITERALS       : &str = "Character literal symbols";
+const LINE_STRINGS             : &str = "Line string symbols";
 const ESCAPE_CHARACTER         : &str = "Escape character";
 const ESCAPES_NOTHING          : &str = "none";
 const LINE_CONTINUATION        : &str = "Line continuation";
@@ -354,6 +355,14 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines)?;
     }
 
+    // A raw string that runs to the end of its own line with no closing symbol, Zig's '\\'.
+    let mut line_strings = Vec::new();
+    if header == LINE_STRINGS {
+        line_strings = split_line_on_whitespace(&read_value_line(lines)?);
+        if line_strings.is_empty() {return None;}
+        header = read_next_header(lines)?;
+    }
+
     // A symbol belongs to exactly one of the lists, the way a comment symbol does: a string that
     // ends with its line goes above, one that crosses lines goes here. Declaring the same symbol
     // twice would leave the two answers to argue, so it refuses the file.
@@ -436,7 +445,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     // escapes.
     let mut escape_character = None;
     let declares_a_string = !string_symbols.is_empty() || !char_literals.is_empty()
-            || !multiline_strings.is_empty() || !raw_multiline_strings.is_empty()
+            || !line_strings.is_empty() || !multiline_strings.is_empty() || !raw_multiline_strings.is_empty()
             || !string_pairs.is_empty() || !leveled_strings.is_empty() || heredoc.is_some();
     if header == ESCAPE_CHARACTER {
         let value = read_value_line(lines)?;
@@ -479,6 +488,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     if string_symbols.iter().any(opens_a_crossing_string) {return None;}
     if char_literals.iter().any(|literal| string_symbols.contains(literal)
             || opens_a_crossing_string(literal)) {return None;}
+    if line_strings.iter().any(|symbol| string_symbols.contains(symbol)
+            || char_literals.contains(symbol) || opens_a_crossing_string(symbol)) {return None;}
     // One symbol in two string blocks would leave them to argue about which one it opens
     if crossing_openers.iter().enumerate()
             .any(|(at, open)| crossing_openers[at + 1..].contains(open)) {return None;}
@@ -568,8 +579,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         let cancelling = split_line_on_whitespace(&read_value_line(lines)?);
         if cancelling.len() != symbols.len() {return None;}
         if cancelling.iter().any(|text| text.len() != 1) {return None;}
-        let declared = string_symbols.iter().chain(&char_literals).chain(&multiline_strings)
-                .chain(&raw_multiline_strings)
+        let declared = string_symbols.iter().chain(&char_literals).chain(&line_strings)
+                .chain(&multiline_strings).chain(&raw_multiline_strings)
                 .chain(string_pairs.iter().flat_map(|(open, close)| [open, close]))
                 .chain(&comment_symbols)
                 .chain(multiline_comments.iter().flat_map(|(start, end)| [start, end]))
@@ -661,6 +672,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     }
             .with_symbols(string_symbols)
             .with_char_literals(char_literals)
+            .with_line_strings(line_strings)
             .with_multiline_strings(multiline_strings)
             .with_raw_multiline_strings(raw_multiline_strings);
     let strings = string_pairs.iter().fold(strings, |strings, pair| if doubling_openers.contains(&pair.0) {
@@ -1528,12 +1540,23 @@ pl      Perl, Prolog
         let empty = good.replace("Character literal symbols\n'\n\n", "Character literal symbols\n\n\n");
         assert!(parse(&empty).is_none());
 
-        // the shipped declarations that use the block
+        // the shipped declarations that use the blocks
         for name in ["Rust.txt", "D.txt", "Java.txt", "Kotlin.txt", "C#.txt"] {
             let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
             assert_eq!(vec!["'".to_owned()], language.strings.get_char_literals(),
                     "{name} lost its character literal declaration");
         }
+        let zig = parse_language_file(LANGUAGES_DIR.to_owned() + "Zig.txt").unwrap();
+        assert_eq!(vec!["\\\\".to_owned()], zig.strings.get_line_strings());
+
+        let with_line_string = "Language\nZiglike\n\nExtensions\nzgl\n\nString symbols\n\"\n\n\
+                Character literal symbols\n'\n\nLine string symbols\n\\\\\n\n\
+                Escape character\n\\\n\nComment symbols\n//\n";
+        let parsed = parse(with_line_string).expect("the line string declaration must parse");
+        assert_eq!(vec!["\\\\".to_owned()], parsed.strings.get_line_strings());
+        assert!(parse(&with_line_string.replace("Line string symbols\n\\\\\n\n", "Line string symbols\n\n\n")).is_none());
+        assert!(parse(&with_line_string.replace("Line string symbols\n\\\\", "Line string symbols\n\"")).is_none());
+        assert!(parse(&with_line_string.replace("Line string symbols\n\\\\", "Line string symbols\n'")).is_none());
     }
 
     #[test]
@@ -1687,7 +1710,8 @@ pl      Perl, Prolog
             let name = &language.name;
             assert!(!language.extensions.is_empty() || !language.filenames.is_empty(),
                     "{name} declares neither an extension nor a filename");
-            assert!(!language.strings.get_symbols().is_empty() || !language.strings.get_multiline_strings().is_empty()
+            assert!(!language.strings.get_symbols().is_empty() || !language.strings.get_line_strings().is_empty()
+                    || !language.strings.get_multiline_strings().is_empty()
                     || name == "HTML" || !language.nested_languages.is_empty(),
                     "{name} declares no string symbol");
         }

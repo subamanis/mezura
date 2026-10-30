@@ -654,7 +654,7 @@ A file with **no extension at all** is named by the same `#!` line, so a script 
 
 **[Language choices](https://github.com/subamanis/mezura/blob/HEAD/LANGUAGE_CHOICES.md)** is the short page behind those answers: which language gets each contested extension, and which files are left out of the count.
 
-**[The language files guide](https://github.com/subamanis/mezura/blob/HEAD/LANGUAGE_FILES_GUIDE.md)** is a page of its own: a whole language file to copy, every block with an example, which of the five string blocks a symbol belongs in, and the two mistakes that cost people the most time.
+**[The language files guide](https://github.com/subamanis/mezura/blob/HEAD/LANGUAGE_FILES_GUIDE.md)** is a page of its own: a whole language file to copy, every block with an example, which of the six string blocks a symbol belongs in, and the two mistakes that cost people the most time.
 
 
 ## Accuracy and limitations

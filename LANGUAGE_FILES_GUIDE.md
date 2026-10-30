@@ -60,6 +60,7 @@ Three things to know before you start:
 | `Identifying line contains` *(opt)* | The same, found anywhere in a line | `std::` |
 | `String symbols` | Strings that end with the line | `" '` |
 | `Character literal symbols` *(opt)* | Wraps a single character, like Rust's `'a'` | `'` |
+| `Line string symbols` *(opt)* | Raw string that runs to the end of its line with no closing symbol, like Zig's `\\` | `\\` |
 | `Multi line string symbols` *(opt)* | Crosses lines, backslash escapes | `"""` |
 | `Multi line raw string symbols` *(opt)* | Crosses lines, nothing escapes | `` ` `` |
 | `Paired string openers` *(opt)* | Opens with one symbol, closes with another, a `*` marking a counted run | `R"( @" r#*"` |
@@ -111,6 +112,7 @@ a whole string ending in a backslash, because a backtick string escapes nothing.
 |---|---|
 | Ends with the line | `String symbols` |
 | One character, `'a'` | `Character literal symbols` |
+| Runs to the end of its line, no closer | `Line string symbols` |
 | Crosses lines, backslash escapes | `Multi line string symbols` |
 | Crosses lines, nothing escapes | `Multi line raw string symbols` |
 | Different symbol at each end | `Paired string openers` + `closers` |

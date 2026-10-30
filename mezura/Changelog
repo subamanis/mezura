@@ -13,6 +13,9 @@ Bugfixes:
   -> Counting a subfolder or targets other than the project's or loaded configuration's own (or
       loading a settings-only configuration with no target paths) no longer compares against or
       logs into that project's or configuration's history.
+  -> Zig's '\\' multiline string lines are now read as strings to the end of their line ('Line
+      string symbols' in language files), so '//' and 'test' inside them are no longer counted as
+      comments or test blocks.
   -> Blank and comment lines between the closing brace of a test-marked 'if' arm and its 'else'
       stay in the test extent when code follows the 'else' arm on its closing line.
 

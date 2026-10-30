@@ -223,33 +223,43 @@ impl Language {
     }
 
     // The scan numbers every string symbol of a language in one sequence, the single line ones
-    // first, the character literals after them, then the crossing ones and the leveled pairs last,
-    // which is the order the plan is built in. A leveled pair has no fixed spelling to answer with
-    // here, and 'find_leveled_string' answers for it.
+    // first, the character literals and line strings after them, then the crossing ones and the
+    // leveled pairs last, which is the order the plan is built in. A leveled pair has no fixed
+    // spelling to answer with here, and 'find_leveled_string' answers for it.
     pub(crate) fn get_string_pair_of(&self, symbol: u8) -> (&str, &str) {
-        let (symbols, literals) = (self.strings.get_symbols(), self.strings.get_char_literals());
+        let (symbols, literals, lines) = (self.strings.get_symbols(), self.strings.get_char_literals(),
+                self.strings.get_line_strings());
         let symbol = symbol as usize;
         if let Some(single) = symbols.get(symbol) {
             return (single, single);
         }
-        match literals.get(symbol - symbols.len()) {
-            Some(literal) => (literal, literal),
-            None => match self.strings.get_multiline_strings().get(symbol - symbols.len() - literals.len()) {
-                Some(crossing) => (&crossing.open, &crossing.close),
-                // The heredoc, numbered after the leveled pairs, whose closer each opener chooses
-                None => {
-                    let heredoc = symbol - symbols.len() - literals.len() - self.strings.get_multiline_strings().len()
-                            - self.strings.get_leveled_pairs().len();
-                    let rules = self.heredoc.filter(|_| heredoc == 0)
-                            .expect("a string number that names no string of the language");
-                    (rules.get_opener(), "")
-                }
+        if let Some(literal) = literals.get(symbol - symbols.len()) {
+            return (literal, literal);
+        }
+        if let Some(line) = lines.get(symbol - symbols.len() - literals.len()) {
+            return (line, "");
+        }
+        let single_line = self.count_single_line_strings();
+        match self.strings.get_multiline_strings().get(symbol - single_line) {
+            Some(crossing) => (&crossing.open, &crossing.close),
+            // The heredoc, numbered after the leveled pairs, whose closer each opener chooses
+            None => {
+                let heredoc = symbol - single_line - self.strings.get_multiline_strings().len()
+                        - self.strings.get_leveled_pairs().len();
+                let rules = self.heredoc.filter(|_| heredoc == 0)
+                        .expect("a string number that names no string of the language");
+                (rules.get_opener(), "")
             }
         }
     }
 
+    pub(crate) fn count_single_line_strings(&self) -> usize {
+        self.strings.get_symbols().len() + self.strings.get_char_literals().len()
+                + self.strings.get_line_strings().len()
+    }
+
     pub(crate) fn string_crosses_lines(&self, symbol: u8) -> bool {
-        symbol as usize >= self.strings.get_symbols().len() + self.strings.get_char_literals().len()
+        symbol as usize >= self.count_single_line_strings()
     }
 
     pub(crate) fn string_escapes_by_doubling(&self, symbol: u8) -> bool {
@@ -266,8 +276,7 @@ impl Language {
     }
 
     pub(crate) fn find_leveled_string(&self, symbol: u8) -> Option<&LeveledPair> {
-        let first_leveled = self.strings.get_symbols().len() + self.strings.get_char_literals().len()
-                + self.strings.get_multiline_strings().len();
+        let first_leveled = self.count_single_line_strings() + self.strings.get_multiline_strings().len();
         (symbol as usize).checked_sub(first_leveled).and_then(|leveled| self.strings.get_leveled_pairs().get(leveled))
     }
 
@@ -364,7 +373,7 @@ impl Language {
     }
 
     fn find_crossing_string(&self, symbol: u8) -> Option<&MultilineString> {
-        let first_crossing = self.strings.get_symbols().len() + self.strings.get_char_literals().len();
+        let first_crossing = self.count_single_line_strings();
         (symbol as usize).checked_sub(first_crossing).and_then(|crossing| self.strings.get_multiline_strings().get(crossing))
     }
 }
@@ -450,6 +459,7 @@ pub struct StringRules {
     escape : Option<u8>,
     symbols : Vec<String>,
     char_literals : Vec<String>,
+    line_strings : Vec<String>,
     multiline : Vec<MultilineString>,
     leveled : Vec<LeveledPair>
 }
@@ -458,13 +468,13 @@ impl StringRules {
     /// Rules whose strings are escaped by the given byte, usually a backslash.
     pub fn escaping_with(escape: u8) -> StringRules {
         StringRules { escape: Some(escape), symbols: Vec::new(), char_literals: Vec::new(),
-                multiline: Vec::new(), leveled: Vec::new() }
+                line_strings: Vec::new(), multiline: Vec::new(), leveled: Vec::new() }
     }
 
     /// Rules for the languages that escape a quote by doubling it and have no escape byte at all.
     pub fn escaping_nothing() -> StringRules {
-        StringRules { escape: None, symbols: Vec::new(), char_literals: Vec::new(), multiline: Vec::new(),
-                leveled: Vec::new() }
+        StringRules { escape: None, symbols: Vec::new(), char_literals: Vec::new(), line_strings: Vec::new(),
+                multiline: Vec::new(), leveled: Vec::new() }
     }
 
     /// Adds quotes that open a string ending with its own line.
@@ -478,6 +488,13 @@ impl StringRules {
     /// shields its quote.
     pub fn with_char_literals(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         self.char_literals.extend(owned_strings(symbols));
+        self
+    }
+
+    /// Adds symbols that open a raw string running to the end of its own line with no closing
+    /// delimiter, Zig's `\\`.
+    pub fn with_line_strings(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.line_strings.extend(owned_strings(symbols));
         self
     }
 
@@ -537,6 +554,11 @@ impl StringRules {
     /// The quotes that open a character literal.
     pub fn get_char_literals(&self) -> &[String] {
         &self.char_literals
+    }
+
+    /// The symbols whose string runs to the end of its own line with no closing delimiter.
+    pub fn get_line_strings(&self) -> &[String] {
+        &self.line_strings
     }
 
     /// The forms whose string may run past the end of its line.

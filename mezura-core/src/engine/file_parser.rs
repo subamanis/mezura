@@ -77,6 +77,8 @@ const ROLE_RAW     : u8 = 4;
 const ROLE_RAW_ESCAPED : u8 = 5;
 // The opener of a pair whose writer picks the delimiter, searched without its last character
 const ROLE_DELIMITED : u8 = 6;
+// Opens a raw string running to the end of its own line with no closer
+const ROLE_LINE : u8 = 7;
 
 pub(crate) struct FileReport {
     pub shell: FileStats,
@@ -380,8 +382,9 @@ struct StringShape {
 
 impl ScanPlan {
     pub(crate) fn build(language: &Language) -> ScanPlan {
-        // The single line symbols first, the character literals after them, then the crossing ones
-        // and the leveled pairs last, which is the numbering 'Language::get_string_pair_of' answers to
+        // The single line symbols first, the character literals and line strings after them, then
+        // the crossing ones and the leveled pairs last, which is the numbering
+        // 'Language::get_string_pair_of' answers to
         let mut entries : Vec<PlanEntry> = Vec::new();
         let (symbols, literals) = (language.strings.get_symbols(), language.strings.get_char_literals());
         for (i, symbol) in symbols.iter().enumerate() {
@@ -391,8 +394,13 @@ impl ScanPlan {
             let index = (symbols.len() + i) as u8;
             entries.push(PlanEntry::of(STRINGS, index, ROLE_LITERAL, symbol.as_bytes()));
         }
-        for (i, crossing) in language.strings.get_multiline_strings().iter().enumerate() {
+        for (i, symbol) in language.strings.get_line_strings().iter().enumerate() {
             let index = (symbols.len() + literals.len() + i) as u8;
+            entries.push(PlanEntry::of(STRINGS, index, ROLE_LINE, symbol.as_bytes()));
+        }
+        let single_line = language.count_single_line_strings();
+        for (i, crossing) in language.strings.get_multiline_strings().iter().enumerate() {
+            let index = (single_line + i) as u8;
             let (open, close) = (&crossing.open, &crossing.close);
             // Only what stands in front of the delimiter is a symbol, and the closer is looked for
             // by the string it closes
@@ -407,7 +415,7 @@ impl ScanPlan {
             }
         }
         // A closer several pairs share is searched once, under the first of them
-        let first_leveled = symbols.len() + literals.len() + language.strings.get_multiline_strings().len();
+        let first_leveled = single_line + language.strings.get_multiline_strings().len();
         let leveled = language.strings.get_leveled_pairs();
         for (i, pair) in leveled.iter().enumerate() {
             let index = (first_leveled + i) as u8;
@@ -498,10 +506,9 @@ impl ScanPlan {
         let finder = MaskFinder::of(&searched);
         let strings = &language.strings;
         let heredoc = language.heredoc.map(|rules| (memmem::Finder::new(rules.get_opener().as_bytes()).into_owned(),
-                (strings.get_symbols().len() + strings.get_char_literals().len()
-                        + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()) as u8, rules));
-        let string_count = strings.get_symbols().len() + strings.get_char_literals().len()
-                + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len() + usize::from(heredoc.is_some());
+                (single_line + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()) as u8, rules));
+        let string_count = single_line + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()
+                + usize::from(heredoc.is_some());
         let string_shapes = (0..string_count as u8).map(|symbol| StringShape {
             opener: language.calculate_string_opener_width(symbol, 0) as u8,
             closer: language.calculate_string_closer_width(symbol, 0) as u8,
@@ -2792,8 +2799,12 @@ fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language
                 str_counter += 1;
                 if !has_more_strs(str_counter) {
                     note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::String);
+                    let symbol = str_symbols[str_counter - 1];
+                    if shapes[symbol as usize].closer == 0 {
+                        return (LineInfo::of(!code_ranges.is_empty(), true), OpenedHere::default());
+                    }
                     return (LineInfo::with_open_string(!code_ranges.is_empty(),
-                            Some((str_symbols[str_counter-1], str_levels[str_counter-1]))),
+                            Some((symbol, str_levels[str_counter-1]))),
                             OpenedHere { string: true, ..OpenedHere::default() });
                 }
 
@@ -3057,13 +3068,13 @@ fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_sy
         }
         let shape = shapes[symbol as usize];
         // A cancelled opener stands inside a comment, so the bytes it spans are comment text too
-        if (role == ROLE_OPEN || role == ROLE_DELIMITED) && cancelled.contains(&at) {
+        if (role == ROLE_OPEN || role == ROLE_DELIMITED || role == ROLE_LINE) && cancelled.contains(&at) {
             consumed_up_to = at + shape.opener as usize + level as usize;
             continue;
         }
         let (at, length, level) = match open {
             Some((open_symbol, open_level)) => {
-                if role == ROLE_OPEN || role == ROLE_DELIMITED || match shape.leveled {
+                if role == ROLE_OPEN || role == ROLE_DELIMITED || role == ROLE_LINE || match shape.leveled {
                     false => open_symbol != symbol,
                     true => !language.string_is_closed_by((open_symbol, open_level), (symbol, level))
                 } {
@@ -3087,6 +3098,12 @@ fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_sy
                 // A closer opens nothing, and neither does a raw symbol the language escaped.
                 // Outside a string there is nothing for the escape to be an ordinary byte of
                 if role == ROLE_CLOSE || role == ROLE_RAW_ESCAPED { continue; }
+                if role == ROLE_LINE {
+                    strings.push(at);
+                    string_symbols.push(symbol);
+                    string_levels.push(0);
+                    break;
+                }
                 if role == ROLE_DELIMITED {
                     let (opener, closer) = language.get_string_pair_of(symbol);
                     let (from, bracket) = (at + opener.len() - 1, opener.as_bytes()[opener.len() - 1]);
@@ -6771,6 +6788,36 @@ mod tests {
             "int w;\n");
         assert_eq!(find_test_lines(source, LANGUAGE_MAP_REF.get("D").unwrap(), &EngineConfig::default()),
                 vec![1, 2, 3, 5, 6, 8]);
+    }
+
+    #[test]
+    fn a_line_string_runs_to_the_end_of_its_line_and_never_into_the_next() {
+        let source = concat!(
+            "const text =\n",
+            "    \\\\// not a comment\n",
+            "    \\\\\"unclosed quote\n",
+            "    \\\\test \"not a test\" {\n",
+            "    \\\\struct NotCounted\n",
+            ";\n",
+            "const slash = \"\\\\\"; // a comment\n",
+            "const ch = '\\\\'; // another comment\n",
+            "// only comment\n");
+        let zig = LANGUAGE_MAP_REF.get("Zig").unwrap();
+        let report = parse_lines_report(source, zig, &shipped_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
+        assert!(report.tests.is_none(), "a test marker inside a line string opened a test block");
+        assert_eq!((9, 7, 1), content_counts(&report.shell));
+        let stats = content_info_of(report.shell, "Zig");
+        assert_eq!(Some(&0), stats.keyword_occurrences.get("structs"));
+
+        let with_block_comments = Language::new("ZigWithBlocks", ["zwb"],
+                StringRules::escaping_with(b'\\').with_symbols(["\""]).with_line_strings(["\\\\"]),
+                ["//"], &[("/*", "*/")], []);
+        let map = hashmap!("ZigWithBlocks".to_owned() => with_block_comments.clone());
+        let ext = hashmap!("zwb".to_owned() => Arc::<str>::from("ZigWithBlocks"));
+        let lookup = NestedLanguageLookup { languages: &map, extension_to_name: &ext, set_aside: &NO_SET_ASIDE };
+        let commented = parse_lines_report("/* \\\\ */ \"// in string\"\n// after\n", &with_block_comments,
+                &lookup, &EngineConfig::default(), TestsByPath::Nothing);
+        assert_eq!((2, 1, 1), content_counts(&commented.shell));
     }
 }
 

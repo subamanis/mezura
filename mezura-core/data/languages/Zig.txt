@@ -13,6 +13,9 @@ String symbols
 Character literal symbols
 '
 
+Line string symbols
+\\
+
 Escape character
 \
 
