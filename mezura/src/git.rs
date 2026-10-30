@@ -600,7 +600,7 @@ fn hash_to_twelve_hex(text: &str) -> String {
 }
 
 fn remove_worktree(repository: &str, path: &str) {
-    let _ = Command::new("git").args(["-C", repository, "worktree", "remove", "--force", path]).output();
+    let _ = Command::new("git").args(["-C", repository, "worktree", "remove", "--force", "--force", path]).output();
     if let Some(holder) = Path::new(path).parent() {
         let _ = remove_directory_tree(holder);
     }
@@ -700,13 +700,23 @@ mod tests {
         assert!(!Path::new(&path).parent().unwrap().exists(), "the folder holding the checkout outlived it");
 
         let killed = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + "0123456789ab-1");
+        let locked_holder = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + "fedcba987654-1");
+        let locked_worktree = locked_holder.join("locked-checkout");
         let ours = std::env::temp_dir().join(format!("{CHECKOUT_PREFIX}0123456789ab-{}", std::process::id()));
         let somebody_elses = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + "notes");
-        for folder in [&killed, &ours, &somebody_elses] {
+        let _ = remove_directory_tree(&locked_holder);
+        for folder in [&killed, &locked_holder, &ours, &somebody_elses] {
             std::fs::create_dir_all(folder).unwrap();
         }
+        assert!(Command::new("git").arg("-C").arg(&root)
+                .args(["worktree", "add", "--detach", "--force", "--quiet"])
+                .arg(&locked_worktree).arg("HEAD").output().unwrap().status.success());
+        let locked_admin = repo.join(".git/worktrees/locked-checkout");
+        std::fs::write(locked_admin.join("locked"), "initializing\n").unwrap();
         remove_leftover_checkouts(&root);
         assert!(!killed.exists(), "the empty folder a killed run left was not swept");
+        assert!(!locked_holder.exists(), "the locked checkout folder a killed run left was not swept");
+        assert!(!locked_admin.exists(), "a locked worktree registration left by an interrupted checkout was not swept");
         assert!(ours.exists(), "a folder of this run was swept");
         assert!(somebody_elses.exists(), "a folder that only starts with the prefix was swept");
         remove_directory_tree(&ours).unwrap();
