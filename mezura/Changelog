@@ -13,6 +13,8 @@ Bugfixes:
   -> Counting a subfolder or targets other than the project's or loaded configuration's own (or
       loading a settings-only configuration with no target paths) no longer compares against or
       logs into that project's or configuration's history.
+  -> Blank and comment lines between the closing brace of a test-marked 'if' arm and its 'else'
+      stay in the test extent when code follows the 'else' arm on its closing line.
 
 Change in commands:
   -> '--save <name>' now writes target paths only when they were explicitly given (or already in a

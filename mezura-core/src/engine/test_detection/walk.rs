@@ -147,7 +147,7 @@ impl<'a> TestWalk<'a> {
                         self.state = State::Seeking { depth: 0, ends: Terminator::BraceOrSemicolon };
                     },
                     Look::Other => {
-                        self.held.clear();
+                        if !is_test { self.held.clear(); }
                         self.state = State::Idle;
                     }
                 }
@@ -598,6 +598,33 @@ mod tests {
         assert_eq!(vec![vec![(0, 21), (22, 30)]], spans_of("#[cfg(test)] if a { } else { } x;"));
         assert_eq!(vec![vec![(0, usize::MAX)], vec![(13, usize::MAX)], vec![(25, usize::MAX)], vec![(40, 41)], vec![]],
                 spans_of("#[cfg(test)]\nmod tests {\n    mod cases;\n}\nmod y;\n"));
+    }
+
+    #[test]
+    fn lines_held_before_an_else_arm_stay_held_when_code_follows_the_arm_on_its_closing_line() {
+        let language = Language::new("Rust", ["rs"], crate::StringRules::escaping_nothing(), ["//"], &[], [])
+                .with_test_markers(["#["]);
+        let held_after = |source: &str| {
+            let mut walk = TestWalk::of(&language, source, true, TestsByPath::Nothing).unwrap();
+            let mut line_start = 0;
+            for line in source.split_inclusive('\n') {
+                let raw_line = line.trim_end_matches('\n');
+                let trimmed = raw_line.trim_ascii();
+                let lead = raw_line.len() - raw_line.trim_ascii_start().len();
+                let is_comment = trimmed.starts_with("//");
+                let code = if is_comment || trimmed.is_empty() { Vec::new() } else { vec![(0, trimmed.len())] };
+                let class = if trimmed.is_empty() { LineClass::Blank }
+                        else if is_comment { LineClass::WordsInComment }
+                        else { LineClass::WordsInCode };
+                walk.observe_line(line_start, raw_line, !code.is_empty(), lead, &code, class, line.len());
+                line_start += line.len();
+            }
+            walk.take_held().collect::<Vec<_>>()
+        };
+        assert_eq!(vec![(LineClass::WordsInComment, 8), (LineClass::Blank, 1)],
+                held_after("#[cfg(test)] if a {\n}\n// held\n\nelse { a(); } b();\n"));
+        assert_eq!(Vec::<(LineClass, usize)>::new(),
+                held_after("#[cfg(test)] if a {\n}\n// dropped\n\nb();\n"));
     }
 
     #[test]
