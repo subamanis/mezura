@@ -4,6 +4,9 @@ Bugfixes:
   -> Long file paths under '--by-file' now keep their trailing folders ('.../Services/file.php')
       when the first folder does not fit, and use the full width of the column when a long file
       name has already widened it.
+  -> Counting a subfolder or targets other than the project's or loaded configuration's own (or
+      loading a settings-only configuration with no target paths) no longer compares against or
+      logs into that project's or configuration's history.
 
 Change in commands:
   -> '--save <name>' now writes target paths only when they were explicitly given (or already in a

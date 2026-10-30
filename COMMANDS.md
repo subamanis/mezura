@@ -966,9 +966,10 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
     The log belongs to a set of settings rather than to a run: with a configuration loaded the entry
     is appended to that configuration's file in the 'data/logs' directory, and inside a project with
-    a '.mezura' folder it goes to the log in that folder, beside the code. With neither, there is
-    nothing for the entry to belong to and the command says so instead of writing one. The file is
-    created if it is not there yet, and any words you give are kept with the entry as its
+    a '.mezura' folder it goes to the log in that folder, beside the code. With neither, or when a
+    named configuration declares no target paths or this run counts targets other than its own,
+    there is nothing for the entry to belong to and the command says so instead of writing one. The
+    file is created if it is not there yet, and any words you give are kept with the entry as its
     description.
 
     Cannot be saved in a configuration file, so loading one never writes an entry on its own. A
@@ -986,7 +987,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     1 argument: a number between 0 and 10. Default: 1
 
     Reads the entries '--log' wrote, so it needs the same thing that command needs: a configuration
-    loaded, or a project with a '.mezura' folder to be inside. 0 turns the comparison off.
+    with target paths loaded, or a project with a '.mezura' folder, and this run counting those
+    targets. A run over a subfolder or other targets skips the comparison. 0 turns the comparison
+    off.
 
     Every log entry records the settings that decide what is counted, and an entry that was written
     with different ones is marked 'modified:' followed by their names. The comparison is still shown,

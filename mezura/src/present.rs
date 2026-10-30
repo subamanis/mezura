@@ -321,12 +321,13 @@ fn get_activated_languages_as_str(config: &Configuration) -> String {
     msg
 }
 
-// A named configuration keeps its history where every named one's history is kept. A run that named
-// none and found a project's own folder writes into that folder instead, so the history of the
-// project sits beside its code.
+// A named configuration keeps its history where every named one's history is kept, when it has
+// targets of its own and this run counts them. A run that named none and found a project's own
+// folder writes into that folder instead, so the history of the project sits beside its code.
 fn determine_log_file_path(config: &Configuration) -> Option<String> {
     match config.view.config_name_to_save.as_ref().or(config.view.config_name_to_load.as_ref()) {
-        Some(name) => Some(PERSISTENT_APP_PATHS.logs_dir.clone() + name + ".jsonl"),
+        Some(name) => config.view.counts_the_named_config
+                .then(|| PERSISTENT_APP_PATHS.logs_dir.clone() + name + ".jsonl"),
         None => config.view.find_project_of_the_log().map(crate::paths::LocalDir::get_log_path)
     }
 }
@@ -518,5 +519,14 @@ mod tests {
         config.view.config_name_to_load = Some("portal".to_owned());
         assert_eq!(Some("portal.jsonl".to_owned()), determine_log_file_path(&config)
                 .map(|path| std::path::Path::new(&path).file_name().unwrap().to_string_lossy().into_owned()));
+
+        config.view.counts_the_named_config = false;
+        assert_eq!(None, determine_log_file_path(&config));
+
+        config.view.config_name_to_load = None;
+        if let Some(local) = &mut config.view.local_dir {
+            local.counts_the_project = false;
+        }
+        assert_eq!(None, determine_log_file_path(&config));
     }
 }

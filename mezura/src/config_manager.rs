@@ -128,6 +128,7 @@ pub struct ViewConfig {
     pub compare_level: usize,
     pub config_name_to_save: Option<String>,
     pub config_name_to_load: Option<String>,
+    pub counts_the_named_config: bool,
     pub theme_name_to_save: Option<String>,
     pub test_patterns_from_presets: Vec<String>,
     // The project's own folder, when the run is inside one and was not told to ignore it. It
@@ -177,7 +178,7 @@ impl ViewConfig {
             return None;
         }
 
-        self.local_dir.as_ref()
+        self.local_dir.as_ref().filter(|local| local.counts_the_project)
     }
 
     #[cfg(test)]
@@ -205,6 +206,7 @@ impl Default for ViewConfig {
             compare_level: DEF_COMPARE_LEVEL,
             config_name_to_save: None,
             config_name_to_load: None,
+            counts_the_named_config: true,
             theme_name_to_save: None,
             test_patterns_from_presets: Vec::new(),
             local_dir: None,
@@ -789,7 +791,7 @@ impl TypedExplicitlyOnCommandLine {
             count_not_code, no_gitignore, no_ignore_files, no_heuristics, no_shebang, hidden,
             targets: _, targets_source: _, threads: _, should_show_faulty_files: _,
             should_show_skipped_files: _, theme_name: _,
-            log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _,
+            log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _, counts_the_named_config: _,
             theme_name_to_save: _, preset_name_to_save: _, test_patterns_from_presets: _, local_dir: _, bar_thickness: _,
             progress_bar: _, number_separator: _, decimal_separator: _,
             layout: _, output: _, explain: _, diff_against: _, sort_by: _, top_n: _, by_file: _,
@@ -851,6 +853,7 @@ pub struct ConfigurationBuilder {
     pub compare_level:            Option<usize>,
     pub config_name_to_save:      Option<String>,
     pub config_name_to_load:      Option<String>,
+    pub counts_the_named_config:  bool,
     pub theme_name_to_save:       Option<String>,
     pub preset_name_to_save:      Option<String>,
     // Bookkeeping about the command line like 'typed_explicitly', so never merged from a file
@@ -933,7 +936,7 @@ impl ConfigurationBuilder {
             bar_thickness: _, progress_bar: _, number_separator: _, decimal_separator: _, layout: _,
             sort_by: _, top_n: _, by_file: _, tests_breakdown: _, config_styles: _,
             // never carried by a configuration file, so never merged out of one either
-            targets_source: _, log: _, config_name_to_save: _, config_name_to_load: _,
+            targets_source: _, log: _, config_name_to_save: _, config_name_to_load: _, counts_the_named_config: _,
             theme_name_to_save: _, preset_name_to_save: _, test_patterns_from_presets: _, local_dir: _, output: _,
             explain: _, diff_against: _, styles: _, theme_styles: _, typed_explicitly: _ } = &mut self;
 
@@ -1073,6 +1076,7 @@ impl ConfigurationBuilder {
                 compare_level: self.compare_level.unwrap_or(DEF_COMPARE_LEVEL),
                 config_name_to_save: self.config_name_to_save.clone(),
                 config_name_to_load: self.config_name_to_load.clone(),
+                counts_the_named_config: self.counts_the_named_config,
                 theme_name_to_save: self.theme_name_to_save.clone(),
                 test_patterns_from_presets: self.test_patterns_from_presets.clone(),
                 local_dir: self.local_dir.clone(),
@@ -1349,14 +1353,10 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     let typed_paths = config_builder.targets.iter().flatten().map(|target| target.path.clone()).collect::<Vec<_>>();
     config_builder.local_dir = if no_local {None} else {crate::paths::find_local_dir(&typed_paths)};
 
-    // '--save-local' counts as a folder of its own, since a run that writes one has somewhere to
-    // keep a log by the time it would be written
-    print_warnings_for_commands_that_need_a_loaded_configuration(&config_builder,
-            config_builder.local_dir.is_some() || save_local);
-
     // Before the configuration files below fill anything in, which is what makes the answer the
     // command line's own
     config_builder.typed_explicitly = TypedExplicitlyOnCommandLine::of(&config_builder);
+    let compare_typed = config_builder.compare_level;
 
     // Checked here, while every field is still the command line's own: a value one of the files
     // below merges in must not kill an explain run, only a command actually typed beside it.
@@ -1373,10 +1373,12 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     }
 
     let mut targets_config_source = None;
+    let mut named_config_targets = None;
     if let Some((custom, issues)) = custom_config {
         let config_name = config_builder.config_name_to_load.clone().unwrap_or_default();
         print_config_file_warnings(&issues.warnings, &config_name);
         resolve_invalid_config_fields(&config_builder, &issues.invalid_fields, &config_name)?;
+        named_config_targets.clone_from(&custom.targets);
         let targets_were_missing = config_builder.targets.is_none();
         config_builder.add_missing_fields(custom);
         if targets_were_missing && config_builder.targets.is_some() {
@@ -1386,10 +1388,11 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
 
     // Naming a configuration is asking for that one and no other, so the project's settings are not
     // merged underneath it. What is left, a run that named none, is where the project answers.
+    let mut project_targets = None;
     if let Some(local) = config_builder.local_dir.clone()
         && config_builder.config_name_to_load.is_none() && config_builder.config_name_to_save.is_none() {
         let targets_were_missing = config_builder.targets.is_none();
-        if apply_local_configuration(&mut config_builder, &local)? {
+        if apply_local_configuration(&mut config_builder, &local, &mut project_targets)? {
             if let Some(found) = &mut config_builder.local_dir {
                 found.configuration_applied = true;
             }
@@ -1402,16 +1405,25 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     // Above the default configuration and below the project's own, so that what is written is the
     // command line over the project's settings and nothing of this machine's
     if save_local {
-        save_the_local_configuration(&mut config_builder, &typed_paths)?;
+        save_the_local_configuration(&mut config_builder, &typed_paths, &mut project_targets)?;
     }
 
-    if let Some(name) = &config_builder.config_name_to_save {
-        match super::config_files::save_existing_commands_from_config_builder_to_file(None, name, None, &config_builder) {
-            Err(error) => eprintln!("\n{}", wrap_message(&format!(
-                    "Configuration '{name}' could not be written to '{}': {error}",
-                    crate::paths::PERSISTENT_APP_PATHS.config_dir)).yellow()),
-            Ok(true) => eprintln!("\nConfiguration '{name}' saved (with target paths). Load it with '--{LOAD} {name}'."),
-            Ok(false) => eprintln!("\nConfiguration '{name}' saved (settings only, no target paths). Load it with '--{LOAD} {name}'.")
+    if let Some(name) = config_builder.config_name_to_save.clone() {
+        match super::config_files::save_existing_commands_from_config_builder_to_file(None, &name, None, &config_builder) {
+            Err(error) => {
+                config_builder.config_name_to_save = None;
+                eprintln!("\n{}", wrap_message(&format!(
+                        "Configuration '{name}' could not be written to '{}': {error}",
+                        crate::paths::PERSISTENT_APP_PATHS.config_dir)).yellow());
+            },
+            Ok(true) => {
+                named_config_targets.clone_from(&config_builder.targets);
+                eprintln!("\nConfiguration '{name}' saved (with target paths). Load it with '--{LOAD} {name}'.");
+            },
+            Ok(false) => {
+                named_config_targets = None;
+                eprintln!("\nConfiguration '{name}' saved (settings only, no target paths). Load it with '--{LOAD} {name}'.");
+            }
         }
     }
 
@@ -1442,6 +1454,18 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     if config_builder.targets.is_none() {
         config_builder.targets = Some(create_targets_from_working_dir()?);
     }
+
+    // Decided last, once every layer and the working directory fallback have settled what this run
+    // counts. A project whose config declares no targets counts its own root directory.
+    let run_targets = config_builder.targets.as_deref().unwrap_or_default();
+    config_builder.counts_the_named_config = named_config_targets.as_deref()
+            .is_some_and(|declared| targets_match(run_targets, declared));
+    if let Some(local) = &mut config_builder.local_dir {
+        let expected = project_targets.unwrap_or_else(|| vec![Target::of(local.project_dir.clone())]);
+        local.counts_the_project = targets_match(run_targets, &expected);
+    }
+    print_warnings_for_commands_that_need_a_loaded_configuration(&config_builder,
+            compare_typed, named_config_targets.is_some());
 
     Ok(config_builder)
 }
@@ -1534,7 +1558,8 @@ fn take_name(command: &str, arguments: &str) -> Result<String, ArgParsingError> 
 
 // The project's own configuration, merged under the command line. Answers whether the folder held
 // one at all, since it may hold nothing but a log.
-fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &LocalDir)
+fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &LocalDir,
+        project_targets: &mut Option<Vec<Target>>)
 -> Result<bool, ArgParsingError>
 {
     let file_name = crate::paths::LOCAL_CONFIG_FILE_NAME.trim_end_matches(".txt");
@@ -1563,6 +1588,7 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
     if let Some(found) = &mut config_builder.local_dir {
         found.declares_test_patterns = local_config.test_patterns.is_some();
     }
+    project_targets.clone_from(&local_config.targets);
     config_builder.add_missing_fields(local_config);
 
     Ok(true)
@@ -1600,7 +1626,8 @@ fn apply_default_configuration(config_builder: &mut ConfigurationBuilder)
 // Written where the next run will look for it. That is the folder this one found, from wherever
 // inside the project the command was typed, and otherwise a new folder at the directory holding the
 // targets.
-fn save_the_local_configuration(config_builder: &mut ConfigurationBuilder, typed_paths: &[String])
+fn save_the_local_configuration(config_builder: &mut ConfigurationBuilder, typed_paths: &[String],
+        project_targets: &mut Option<Vec<Target>>)
 -> Result<(), ArgParsingError>
 {
     let Some(local) = config_builder.local_dir.clone()
@@ -1624,6 +1651,10 @@ fn save_the_local_configuration(config_builder: &mut ConfigurationBuilder, typed
         Ok(_) => {
             // A folder this run made is a folder this run has, so a '--log' beside it writes into
             // the project rather than being told there is nowhere to write
+            if config_builder.config_name_to_save.is_none() {
+                config_builder.config_name_to_load = None;
+            }
+            project_targets.clone_from(&config_builder.targets);
             config_builder.local_dir = Some(local.clone());
             eprintln!("\nSaved as the settings of this project, in '{}'.", local.get_config_path());
         }
@@ -1642,7 +1673,7 @@ fn rebase_targets_on(project_dir: &str, targets: Vec<Target>) -> Vec<Target> {
             target
         } else {
             let inside = target.path.trim_start_matches("./");
-            let path = if inside.is_empty() {project_dir.to_owned()} else {format!("{project_dir}/{inside}")};
+            let path = if inside.is_empty() || inside == "." {project_dir.to_owned()} else {format!("{project_dir}/{inside}")};
             Target { module: target.module, path }
         }
     }).collect()
@@ -1694,7 +1725,8 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             // them and they never reach 'invalid_fields'
             languages_of_interest: _, excluded_languages: _,
             // not carried by a configuration file at all
-            config_name_to_save: _, config_name_to_load: _, theme_name_to_save: _, preset_name_to_save: _, output: _,
+            config_name_to_save: _, config_name_to_load: _, counts_the_named_config: _,
+            theme_name_to_save: _, preset_name_to_save: _, output: _,
             explain: _, diff_against: _, log: _, targets_source: _, local_dir: _, typed_explicitly: _,
             test_patterns_from_presets: _,
             // a style that does not parse is reported per line and skipped, and the rest of the file
@@ -1754,8 +1786,27 @@ fn report_ignored_config_value(field: &str, why: Option<&str>, config_name: &str
             format!("Invalid value for the command '--{field}', in config '{config_name}'.{why} The value will be ignored.")));
 }
 
+// 'convert_to_absolute' leaves a glob relative, whereas 'validate_and_absolutize' resolves its
+// directory prefix so a glob from the command line matches one rebased on the project folder.
+fn targets_match(one: &[Target], other: &[Target]) -> bool {
+    let normalise = |targets: &[Target]| {
+        let mut keys = targets.iter().map(|target| {
+            let absolute = mezura_core::validate_and_absolutize(std::slice::from_ref(target)).ok()
+                    .and_then(|mut prepared| prepared.pop())
+                    .map_or_else(|| mezura_core::convert_to_absolute(&target.path), |prepared| prepared.path);
+            (target.module.as_deref().map(str::to_lowercase),
+                    crate::paths::fold_for_comparison(&absolute).into_owned())
+        }).collect::<Vec<_>>();
+        keys.sort_unstable();
+        keys.dedup();
+        keys
+    };
+
+    normalise(one) == normalise(other)
+}
+
 fn print_warnings_for_commands_that_need_a_loaded_configuration(builder: &ConfigurationBuilder,
-        a_local_dir_was_found: bool)
+        compare_typed: Option<usize>, named_config_has_targets: bool)
 {
     // Printed here rather than kept for later, since this runs before the theme is resolved, and
     // kept as well, so that a machine consumer learns a command it gave was dropped
@@ -1770,17 +1821,44 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(builder: &Config
     if let Some(log) = &builder.log && log.should_log && builder.diff_against.is_some() {
         ignored(LOG, "'--log' command will be ignored: a comparison is not logged.".to_owned());
     }
+    let log_typed = builder.log.as_ref().is_some_and(|log| log.should_log) && builder.diff_against.is_none();
+    // '--compare 0' turns off a compare level inherited from the project or config file, so when
+    // history is already suppressed for this run's targets there is nothing to warn about.
+    let asks_to_compare = compare_typed.is_some_and(|level| level > 0);
+
+    let warn_both = |why: &str| {
+        if log_typed {
+            ignored(LOG, format!("'--{LOG}' command will be ignored: {why}"));
+        }
+        if asks_to_compare {
+            ignored(COMPARE_LEVEL, format!("'--{COMPARE_LEVEL}' command will be ignored: {why}"));
+        }
+    };
+
+    if let Some(name) = builder.config_name_to_save.as_ref().or(builder.config_name_to_load.as_ref()) {
+        if !named_config_has_targets {
+            warn_both(&format!("configuration '{name}' declares no target paths, so it keeps no log."));
+        } else if !builder.counts_the_named_config {
+            warn_both(&format!("this run counts targets other than those of configuration '{name}'."));
+        } else if builder.config_name_to_load.is_none() && compare_typed.is_some() {
+            ignored(COMPARE_LEVEL, "'--compare' command will be ignored, since no config file was specified for loading.".to_owned());
+        }
+        return;
+    }
 
     // A project's folder is a configuration without a name: it has a log of its own, so these two
     // have somewhere to write to and somewhere to read from even when nothing was named.
-    if builder.config_name_to_load.is_none() && !a_local_dir_was_found {
-        if let Some(log) = &builder.log && builder.config_name_to_save.is_none()
-                && log.should_log && builder.diff_against.is_none() {
-            ignored(LOG, "'--log' command will be ignored, since no config file was specified.".to_owned());
-        }
-
-        if builder.compare_level.is_some() {
-            ignored(COMPARE_LEVEL, "'--compare' command will be ignored, since no config file was specified for loading.".to_owned());
+    match &builder.local_dir {
+        Some(local) if !local.counts_the_project =>
+                warn_both("this run counts targets other than the project's own."),
+        Some(_) => {},
+        None => {
+            if log_typed {
+                ignored(LOG, "'--log' command will be ignored, since no config file was specified.".to_owned());
+            }
+            if compare_typed.is_some() {
+                ignored(COMPARE_LEVEL, "'--compare' command will be ignored, since no config file was specified for loading.".to_owned());
+            }
         }
     }
 }
@@ -2347,12 +2425,15 @@ mod tests {
         assert_eq!(None, crate::config_files::parse_config_file(Some("test000"), None).unwrap().0.targets);
 
         loaded_config = create_config_builder_from_args("--load test000 --threads 1 4 --targets ./").unwrap();
+        assert!(!loaded_config.counts_the_named_config);
         assert_eq!(saved_config.targets, loaded_config.targets);
         assert_ne!(saved_config.threads, loaded_config.threads);
 
         // Explicitly given targets are written, and preserved by a subsequent edit that names none
         saved_config = create_config_builder_from_args("--load test000 --threads 1 4 --targets ./ --save test000").unwrap();
+        assert!(saved_config.counts_the_named_config);
         saved_config.config_name_to_save = None;
+        loaded_config.counts_the_named_config = true;
         assert_eq!(saved_config, loaded_config);
         let expected_targets = Some(vec![Target::of(mezura_core::convert_to_absolute("./"))]);
         assert_eq!(expected_targets, crate::config_files::parse_config_file(Some("test000"), None).unwrap().0.targets);
@@ -2806,5 +2887,76 @@ mod tests {
                 .find(|x| x.code == crate::warning_collector::AnyCode::Program(ProgramCode::CommandIgnored)
                         && x.subject == TESTS).unwrap();
         assert!(warned.message.contains("'--hide tests' turns the detection off"), "{}", warned.message);
+    }
+
+    #[test]
+    fn a_run_over_targets_other_than_the_projects_or_configurations_own_leaves_its_log_alone() {
+        let count_matching_warnings = |needle: &str| crate::warning_collector::get_collected_warnings().into_iter()
+                .filter(|x| x.code == crate::warning_collector::AnyCode::Program(ProgramCode::CommandIgnored)
+                        && x.message.contains(needle)).count();
+
+        let project = build_test_project("subfolder-history",
+                "===> targets\ncore=./src\n\n===> exclude\nnode_modules\n\n===> compare\n3\n");
+        std::fs::create_dir_all(format!("{project}/other")).unwrap();
+
+        let whole = create_config_from_args(&format!("core={project}/src")).unwrap();
+        assert_eq!(Some(project.clone()), whole.view.find_project_of_the_log().map(|x| x.project_dir.clone()));
+
+        let subfolder = create_config_from_args(&format!("{project}/other")).unwrap();
+        assert_eq!(vec!["node_modules".to_owned()], subfolder.engine.exclude_patterns.patterns,
+                "counting another folder inside the project lost the project's settings");
+        assert_eq!(None, subfolder.view.find_project_of_the_log(),
+                "a run over another folder still claimed the project's log");
+        assert_eq!(0, count_matching_warnings("targets other than the project's own"),
+                "'--compare' from the project's configuration warned on a subfolder run");
+
+        let _ = create_config_from_args(&format!("{project}/other --{COMPARE_LEVEL} 0")).unwrap();
+        assert_eq!(0, count_matching_warnings("targets other than the project's own"),
+                "'--compare 0' warned when turning history off on a subfolder run");
+
+        let _ = create_config_from_args(&format!("{project}/other --{LOG} --{COMPARE_LEVEL} 2")).unwrap();
+        assert_eq!(1, count_matching_warnings("'--log' command will be ignored: this run counts targets other than the project's own."));
+        assert_eq!(1, count_matching_warnings("'--compare' command will be ignored: this run counts targets other than the project's own."));
+        std::fs::remove_dir_all(&project).unwrap();
+
+        // A project whose configuration declares no targets owns the project root itself
+        let untargeted_project = build_test_project("untargeted-project-history", "===> exclude\nbuild\n");
+        let root_run = create_config_from_args(&untargeted_project).unwrap();
+        assert_eq!(Some(untargeted_project.clone()),
+                root_run.view.find_project_of_the_log().map(|x| x.project_dir.clone()));
+        let inner_run = create_config_from_args(&format!("{untargeted_project}/src")).unwrap();
+        assert_eq!(None, inner_run.view.find_project_of_the_log());
+        std::fs::remove_dir_all(&untargeted_project).unwrap();
+
+        // A named configuration with no target paths keeps no log, and one with targets keeps it
+        // only when those targets are what the run counts
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let bundle_path = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/zz-bundle-no-log.txt");
+        let targeted_path = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/zz-targeted-log.txt");
+        let src_abs = mezura_core::convert_to_absolute("./src");
+        std::fs::write(&bundle_path, "===> top\n5\n").unwrap();
+        std::fs::write(&targeted_path, format!("===> targets\n{src_abs}\n")).unwrap();
+
+        let from_bundle = create_config_from_args("./ --load zz-bundle-no-log --log").unwrap();
+        assert!(!from_bundle.view.counts_the_named_config);
+        assert_eq!(1, count_matching_warnings("configuration 'zz-bundle-no-log' declares no target paths"));
+
+        let saved_from_bundle = build_test_project("save-local-from-bundle", "");
+        let initialized = create_config_from_args(
+                &format!("{saved_from_bundle} --{LOAD} zz-bundle-no-log --{SAVE_LOCAL} --{LOG}")).unwrap();
+        assert_eq!(Some(saved_from_bundle.clone()),
+                initialized.view.find_project_of_the_log().map(|x| x.project_dir.clone()));
+        assert_eq!(1, count_matching_warnings("configuration 'zz-bundle-no-log' declares no target paths"));
+        std::fs::remove_dir_all(&saved_from_bundle).unwrap();
+
+        let matching_targeted = create_config_from_args("--load zz-targeted-log").unwrap();
+        assert!(matching_targeted.view.counts_the_named_config);
+
+        let overridden_targeted = create_config_from_args("./tests --load zz-targeted-log --log").unwrap();
+        assert!(!overridden_targeted.view.counts_the_named_config);
+        assert_eq!(1, count_matching_warnings("targets other than those of configuration 'zz-targeted-log'"));
+
+        std::fs::remove_file(&bundle_path).unwrap();
+        std::fs::remove_file(&targeted_path).unwrap();
     }
 }
