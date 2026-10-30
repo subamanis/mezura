@@ -803,10 +803,7 @@ fn determine_comparison_notes(baseline: &Reading, subject: &Reading, config: &Co
             }
         }
     }
-    let modules_hidden_in_document = |reading: &Reading| !reading.result.has_modules()
-            && reading.result.targets.iter().any(|target| target.module.is_some());
     if modules_unpaired && !config.view.hidden.modules
-            && !modules_hidden_in_document(baseline) && !modules_hidden_in_document(subject)
             && (baseline.result.has_modules() || subject.result.has_modules()) {
         notes.push(Note::ModulesDiffer { baseline: baseline.determine_display_name(),
                 subject: subject.determine_display_name(), baseline_modules: format_module_names(&baseline.result),

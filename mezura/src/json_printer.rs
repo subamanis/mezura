@@ -113,8 +113,8 @@ fn create_comparison_document(comparison: &super::diff::Comparison, datetime_now
         String::from("\"kind\":\"comparison\""),
         format!("\"mezura_version\":\"{}\"", escape(config.view.version.trim_start_matches('v'))),
         format!("\"generated_at\":\"{}\"", datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false)),
-        format!("\"from\":{}", create_side_object(baseline)),
-        format!("\"to\":{}", create_side_object(subject)),
+        format!("\"from\":{}", create_side_object(baseline, config.view.hidden.modules)),
+        format!("\"to\":{}", create_side_object(subject, config.view.hidden.modules)),
         format!("\"total\":{}", create_compared_total_object(&baseline.result.total, &subject.result.total,
                 find_tests(&baseline.result.tests, config), find_tests(&subject.result.tests, config),
                 keywords_counted, config.view.counting)),
@@ -302,7 +302,7 @@ fn create_compared_total_object(baseline: &Stats, subject: &Stats,
 
 // Each kind of source has its own shape, behind the 'source' discriminator, so a consumer never
 // guesses from which keys exist. The counts are not here, being the halves of the triads.
-fn create_side_object(reading: &super::diff::Reading) -> String {
+fn create_side_object(reading: &super::diff::Reading, hide_modules: bool) -> String {
     let mut members = vec![match &reading.source {
         super::diff::Source::Run => String::from("\"source\":\"run\""),
         super::diff::Source::Document { path } =>
@@ -319,7 +319,7 @@ fn create_side_object(reading: &super::diff::Reading) -> String {
     members.push(format!("\"scan\":{}", create_scan_object(&reading.result.files_present,
             reading.faulty_files_count, &reading.skipped_counts, reading.unreadable_dirs_count)));
     members.push(format!("\"scope\":{}", create_scope_object_of(&reading.scope, &reading.result.targets,
-            &reading.result.applied_presets)));
+            &reading.result.applied_presets, hide_modules)));
     // Only what the side's own document recorded: what this very process warned about belongs to
     // the comparison and sits at its top level, wherever the run appears in it
     members.push(format!("\"warnings\":{}", create_document_warnings_array(&reading.warnings)));
@@ -331,10 +331,10 @@ fn create_side_object(reading: &super::diff::Reading) -> String {
 // targets are in it because two sides that measured different trees would otherwise read as code
 // that changed.
 fn create_scope_object_of(scope: &super::json_reader::Scope, targets: &[mezura_core::Target],
-        applied_presets: &[AppliedPreset]) -> String
+        applied_presets: &[AppliedPreset], hide_modules: bool) -> String
 {
     let members = [
-        format!("\"targets\":{}", create_targets_array(targets)),
+        format!("\"targets\":{}", create_targets_array(targets, hide_modules)),
         format!("\"exclude\":{}", create_string_array(&scope.exclude)),
         format!("\"tests\":{}", create_string_array(&scope.tests)),
         format!("\"languages\":{}", create_string_array(&scope.languages)),
@@ -483,7 +483,7 @@ fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target], 
     let members = [
         // The resolved list off the result, not the declared one off the configuration: the same
         // './src' over two different trees is two different measurements
-        format!("\"targets\":{}", create_targets_array(targets)),
+        format!("\"targets\":{}", create_targets_array(targets, config.view.hidden.modules)),
         format!("\"exclude\":{}", create_string_array(&config.engine.exclude_patterns.patterns)),
         format!("\"tests\":{}", create_string_array(&config.engine.test_patterns.patterns)),
         format!("\"languages\":{}", create_string_array(&config.engine.languages_of_interest.to_written_form())),
@@ -760,9 +760,10 @@ fn create_performance_object(performance: &mezura_core::Performance) -> String {
 // One entry per target and not one per module: a module given several paths is several targets that
 // share a name, and grouping them would lose the order they were declared in, which the columns of
 // the report follow.
-fn create_targets_array(targets: &[mezura_core::Target]) -> String {
+fn create_targets_array(targets: &[mezura_core::Target], hide_modules: bool) -> String {
     create_array(targets.iter().map(|target| {
-        let module = target.module.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escape(x)));
+        let module = target.module.as_ref().filter(|_| !hide_modules)
+                .map_or("null".to_owned(), |x| format!("\"{}\"", escape(x)));
         format!("{{\"module\":{module},\"path\":\"{}\"}}", escape(&target.path))
     }))
 }
@@ -1047,6 +1048,8 @@ mod tests {
                      "HTML".to_owned() => stats_of(1, 900, 30, 24, 0, HashMap::new())],
             stats_of(2, 1800, 60, 48, 0, HashMap::new()), Vec::new(),
             FilesPresent {total_files: 2, relevant_files: 2, excluded_files: 0});
+        result.targets = vec![mezura_core::Target::named("backend", "D:/x/api"),
+                mezura_core::Target::of("D:/x/web")];
         result.modules = vec![module_of(Some("backend"), "Rust", "D:/x/api/a.rs"),
                 module_of(None, "HTML", "D:/x/web/i.html")];
 
@@ -1054,10 +1057,13 @@ mod tests {
         let modules_at = written.find("\"modules\"").unwrap();
         assert_eq!(2, written.matches("\"by_file\"").count(), "{written}");
         assert!(!written[..modules_at].contains("\"by_file\""), "{written}");
+        assert!(written.contains("{\"module\":\"backend\",\"path\":\"D:/x/api\"}"), "{written}");
 
         config.view.hidden.modules = true;
         let flattened = create_document(&result, &Local::now(), &config);
         assert!(!flattened.contains("\"modules\""), "{flattened}");
+        assert!(!flattened.contains("\"module\":\"backend\""), "{flattened}");
+        assert!(flattened.contains("{\"module\":null,\"path\":\"D:/x/api\"}"), "{flattened}");
         assert_eq!(2, flattened.matches("\"by_file\"").count(), "{flattened}");
         assert!(flattened.contains("\"path\":\"D:/x/api/a.rs\"") && flattened.contains("\"path\":\"D:/x/web/i.html\""),
                 "{flattened}");

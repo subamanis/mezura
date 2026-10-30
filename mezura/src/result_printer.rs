@@ -414,6 +414,7 @@ pub(crate) type FileRowsOfModule<'a> = HashMap<&'a str, FileRows<'a>>;
 pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configuration, without_tests: bool)
 -> Vec<FileRowsOfModule<'a>>
 {
+    let has_modules = result.has_modules() && !config.view.hidden.modules;
     let flatten_modules = config.view.hidden.modules && result.has_modules();
     let Some(by_file) = config.view.by_file else {
         return (0..if flatten_modules {1} else {result.modules.len()}).map(|_| HashMap::new()).collect();
@@ -446,9 +447,10 @@ pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configurati
         }).collect::<Vec<_>>()
     }).collect::<Vec<_>>();
 
-    // Without module headings to say which folder a file came from, stripping each module's own
+    // Without module headings to say which folder a file came from, stripping each target's own
     // path leaves two 'src/main.rs' or 'Cargo.toml' rows looking identical in the flat list
-    let relative_targets = if flatten_modules && !common_directory.is_empty() {&[][..]} else {&result.targets};
+    let relative_targets = if !has_modules && result.targets.len() > 1 && !common_directory.is_empty()
+            {&[][..]} else {&result.targets};
     let budget = selected.iter().flat_map(|module| module.iter())
             .flat_map(|(_, files, _)| files.iter())
             .map(|file| calculate_path_floor(find_relative_path(&file.path, relative_targets, common_directory)))
@@ -2867,12 +2869,15 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
     // the project. The same tree counted from two checkouts of it is one measurement, and only
     // spelling it absolutely would make the two look different.
     let project = config.view.find_project_of_the_log();
+    let compare_modules = !config.view.hidden.modules && targets.iter().any(|target| target.module.is_some());
     let as_recorded = |targets: &[mezura_core::Target]| {
-        let mut sorted = match &project {
-            Some(project) => targets.iter().map(|target| mezura_core::Target { module: target.module.clone(),
-                    path: config_manager::format_path_inside(&project.project_dir, &target.path) }).collect(),
-            None => targets.to_vec()
-        };
+        let mut sorted = targets.iter().map(|target| mezura_core::Target {
+            module: target.module.clone().filter(|_| compare_modules),
+            path: match &project {
+                Some(project) => config_manager::format_path_inside(&project.project_dir, &target.path),
+                None => target.path.clone()
+            }
+        }).collect::<Vec<_>>();
         sorted.sort();
         sorted
     };
@@ -4579,6 +4584,19 @@ mod tests {
         assert_eq!(2, count_hidden_files(&flat));
         let shown_paths = flat[0].files["Rust"].shown.iter().map(|(path, _)| path.as_ref()).collect::<Vec<_>>();
         assert_eq!(vec!["core/big.rs", "cli/mid.rs"], shown_paths);
+
+        let entry = crate::log::LogEntry {
+            name: None,
+            datetime: Local::now(),
+            scope: crate::diff::scope_of(&config.engine, config.view.counting),
+            targets: vec![mezura_core::Target::of("D:/proj/core"), mezura_core::Target::of("D:/proj/cli")],
+            total: stats(4, 200, 200),
+            tests: None,
+            modules: Vec::new()
+        };
+        assert!(find_settings_changed_since(&entry, &config, &result.targets).is_empty());
+        config.view.hidden.modules = false;
+        assert_eq!(vec!["targets"], find_settings_changed_since(&entry, &config, &result.targets));
     }
 
     #[test]
