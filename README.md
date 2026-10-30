@@ -67,8 +67,9 @@ Things it does that most counters do not:
   counted as the distinct languages they hold.
 - **Modules.** Give a name to parts of a project and the report is grouped by these parts as well as by
   language. This way you can split your project into e.g. Frontend and Backend and see distinct reports for each module in the same table in the same run. See [Modules](#modules).
+- **Local revisions and remote repositories.** Count or diff any local git revision (`@v1.0`, `./src@main`) or any remote repository directly by its URL (`https://github.com/owner/repo`, `git@github.com:owner/repo@v2.0`) without cloning it yourself first.
 - **Track the history of your codebase.** Log runs and compare against earlier ones, or diff against a git revision.   See [Tracking growth](#tracking-growth).
-- **Diff view of git revisions or json files.** You can see the diff between the current state and a git revision, or between two revisions, or between an earlier run that was saved in a json file. See [Diffs](#diffs).
+- **Diff view of git revisions, remote repositories or json files.** You can see the diff between the current state and a git revision, between two local or remote revisions, or against an earlier run that was saved in a json file. See [Diffs](#diffs).
 - **Two counting models to pick from.** By default a line counts by what it says: a blank line inside a comment
   is blank, a lone `}` is neither code nor comment.  
   `--counting region` switches to the model most other counters use, so the behavior more closely matches theirs.  
@@ -446,10 +447,10 @@ It looks for it next to itself first, then on the path. If it lives somewhere el
 }
 ```
 
-Three tools are offered. `count_lines_of_code` counts a directory or a file and answers with the
-report, which is what to ask for when a person is going to read the answer. `count_lines_of_code_as_json`
+Three tools are offered. `count_lines_of_code` counts a directory, a file, a local git revision (`@v1.0`, `src@main`) or a remote repository URL, or compares what changed with `diff`, and answers with the
+report (splitting each language with tests into `production` and `tests` rows), which is what to ask for when a person is going to read the answer. `count_lines_of_code_as_json`
 answers with the JSON document instead, for when the numbers are going to be compared or added up.
-`explain_file` goes through one file line by line and says why each line was counted the way it was,
+`explain_file` goes through one file line by line (on disk or at `<file>@<revision>`) and says why each line was counted the way it was,
 which is what to reach for when a number looks wrong; it takes a range of lines, so a long file can
 be asked about without the whole of it coming back.
 
@@ -495,7 +496,9 @@ file and will be compared and printed to the screen. For example for N = 2, it w
 <img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/compare.png" width="1000">
 
 Both `--log` and `--compare` need a log to belong to, which means either a configuration loaded by
-name or a project with a `.mezura` folder to be inside.
+name or a project with a `.mezura` folder to be inside. A checked-out revision or remote repository
+that carries a committed `.mezura/log.jsonl` also shows its logged history and obeys `--compare`,
+while `--log` only writes to a local working tree or named configuration.
 
 ### Diffs
 

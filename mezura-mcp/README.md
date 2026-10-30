@@ -44,15 +44,19 @@ With the binary somewhere else:
 
 ## The tools
 
-- `count_lines_of_code` counts a directory or a file and answers with the report, which is what to
-  ask for when a person is going to read the answer. The test code of each language is a row of its
-  own, and a project's own convention for it (`test_*.py`, `*.spec.ts`, `spec/`) is declared with
-  `tests`, the same patterns `--tests` takes, a preset by name (`@pytest`) among them.
-- `count_lines_of_code_as_json` answers with the JSON document, for when the numbers are going to
-  be compared or added up.
-- `explain_file` goes through one file line by line and says why each line was counted the way it
-  was, which is what to reach for when a number looks wrong. It takes a range of lines, so a long
-  file can be asked about without the whole of it coming back.
+- `count_lines_of_code` counts a directory, a file, a local git revision (`@v1.0`, `src@main`) or a
+  remote repository URL (`https://github.com/owner/repo`, `git@github.com:owner/repo@v1.0`), or
+  compares what changed against another revision with `diff`, and answers with the report, which is
+  what to ask for when a person is going to read the answer. Each language with test code is split
+  into `production` and `tests` rows, and a project's own convention for tests (`test_*.py`,
+  `*.spec.ts`, `spec/`) is declared with `tests`, the same patterns `--tests` takes, a preset by
+  name (`@pytest`) among them.
+- `count_lines_of_code_as_json` answers with the JSON document for a run or a `diff` comparison, for
+  when the numbers are going to be compared or added up.
+- `explain_file` goes through one file line by line (on disk or at a local revision like
+  `src/main.rs@v1.0`) and says why each line was counted the way it was, which is what to reach for
+  when a number looks wrong. It takes a range of lines, so a long file can be asked about without
+  the whole of it coming back.
 
 Every call starts mezura afresh, so nothing of one answer can leak into the next, and a project's
 own `.mezura` settings apply exactly as they do on the command line. An answer too long to be read

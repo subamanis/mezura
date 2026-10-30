@@ -2,15 +2,17 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-pub const BY_FILE   : &str = "--by-file";
-pub const COUNTING  : &str = "--counting";
-pub const EXCLUDE   : &str = "--exclude";
-pub const EXPLAIN   : &str = "--explain";
-pub const HIDE      : &str = "--hide";
-pub const LANGUAGES : &str = "--languages";
-pub const OUTPUT    : &str = "--output";
-pub const TESTS     : &str = "--tests";
-pub const TOP       : &str = "--top";
+pub const BY_FILE         : &str = "--by-file";
+pub const COUNTING        : &str = "--counting";
+pub const DIFF            : &str = "--diff";
+pub const EXCLUDE         : &str = "--exclude";
+pub const EXPLAIN         : &str = "--explain";
+pub const HIDE            : &str = "--hide";
+pub const LANGUAGES       : &str = "--languages";
+pub const OUTPUT          : &str = "--output";
+pub const TESTS           : &str = "--tests";
+pub const TESTS_BREAKDOWN : &str = "--tests-breakdown";
+pub const TOP             : &str = "--top";
 
 pub const BINARY_PATH_VARIABLE : &str = "MEZURA_BIN";
 

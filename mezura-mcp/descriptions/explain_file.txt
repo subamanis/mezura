@@ -1,4 +1,5 @@
-Show one file line by line, with the reason each line was counted the way it was.
+Show one file line by line, either on disk or at a local git revision ('src/main.rs@v1.0'), with
+the reason each line was counted the way it was.
 
 Every line is printed with the bucket it landed in, 'code', 'comments' or 'extra', and the class
 that put it there, 'words_in_code' or 'punctuation_in_comment', which is the raw count both counting

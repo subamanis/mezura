@@ -78,9 +78,16 @@ impl ServerHandler for MezuraServer {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CountArguments {
-    #[schemars(description = "The directory or file to count. An absolute path is safest; a \
-            relative one is taken from the directory this server was started in.")]
+    #[schemars(description = "The directory, file, local git revision ('@v1.0', 'src@main'), or \
+            remote repository URL ('https://github.com/owner/repo', 'git@github.com:owner/repo@v1.0') \
+            to count. An absolute path is safest for local files; a relative one is taken from the \
+            directory this server was started in.")]
     pub path: String,
+    #[schemars(description = "Compare what changed against an earlier reading instead of counting \
+            a single state: a git revision ('HEAD', 'main', 'v1.0..v2.0'), a path at a revision \
+            ('src@v1.0'), a remote repository URL ('https://github.com/owner/repo@v1.0'), or a \
+            JSON file written by an earlier run.")]
+    pub diff: Option<String>,
     #[schemars(description = "Paths to leave out, as glob patterns. A pattern starting with './' \
             or an absolute one names one place and everything under it; any other pattern is a \
             name matched at any depth under the directory that holds the path being counted, so \
@@ -117,6 +124,8 @@ pub struct CountArguments {
 impl CountArguments {
     fn to_report_command_line(&self) -> Result<Vec<String>, String> {
         let mut arguments = self.to_command_line()?;
+        arguments.push(mezura_cli::TESTS_BREAKDOWN.to_owned());
+        arguments.push("split".to_owned());
         arguments.push(mezura_cli::HIDE.to_owned());
         arguments.push(REPORT_HIDES.to_owned());
 
@@ -134,6 +143,10 @@ impl CountArguments {
     fn to_command_line(&self) -> Result<Vec<String>, String> {
         let mut arguments = vec![as_a_path(&self.path)?];
 
+        if let Some(diff) = &self.diff {
+            arguments.push(mezura_cli::DIFF.to_owned());
+            arguments.push(as_a_path(diff)?);
+        }
         if let Some(exclude) = self.exclude.as_ref().filter(|x| !x.is_empty()) {
             arguments.push(mezura_cli::EXCLUDE.to_owned());
             arguments.push(as_a_list_of_paths(exclude)?);
@@ -175,8 +188,9 @@ impl CountArguments {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExplainArguments {
-    #[schemars(description = "The one file to go through, line by line. An absolute path is \
-            safest; a relative one is taken from the directory this server was started in.")]
+    #[schemars(description = "The one file to go through, line by line, either on disk or at a \
+            local git revision ('src/main.rs@v1.0'). An absolute path is safest; a relative one is \
+            taken from the directory this server was started in.")]
     pub path: String,
     #[schemars(description = "The first line to print. The whole file is still read, so a comment \
             or a string that opened above this line is named on every line that carries it. Leave \
@@ -338,12 +352,16 @@ mod tests {
 
     #[test]
     fn every_option_reaches_the_command_line_in_the_form_mezura_reads() {
-        let arguments = every_option_set().to_command_line().unwrap();
+        let with_diff = CountArguments {diff: Some("HEAD~1".to_owned()), ..every_option_set()};
+        let arguments = with_diff.to_report_command_line().unwrap();
 
-        assert_eq!(vec!["src".to_owned(), "--exclude".to_owned(), "*.txt,vendor".to_owned(),
+        assert_eq!(vec!["src".to_owned(), "--diff".to_owned(), "HEAD~1".to_owned(),
+                "--exclude".to_owned(), "*.txt,vendor".to_owned(),
                 "--tests".to_owned(), "test_*.py,!tests/fixtures/".to_owned(),
                 "--languages".to_owned(), "rust,visual basic".to_owned(), "--top".to_owned(), "5".to_owned(),
-                "--by-file".to_owned(), "3".to_owned(), "--counting".to_owned(), "region".to_owned()], arguments);
+                "--by-file".to_owned(), "3".to_owned(), "--counting".to_owned(), "region".to_owned(),
+                "--tests-breakdown".to_owned(), "split".to_owned(),
+                "--hide".to_owned(), "version,timing,parsing-info,history".to_owned()], arguments);
     }
 
     // A comma inside one of them would be handed over as two paths, and the run would count
@@ -380,6 +398,9 @@ mod tests {
         let language = CountArguments {languages: Some(vec!["rust --restore".to_owned()]), ..every_option_set()};
         assert!(language.to_command_line().unwrap_err().contains("holds '--'"));
 
+        let diff = CountArguments {diff: Some("HEAD --restore".to_owned()), ..every_option_set()};
+        assert!(diff.to_command_line().unwrap_err().contains("holds '--'"));
+
         // A path is allowed to have two dashes inside a name, since only a '--' opening a word is
         // a command, and refusing more than mezura does would be refusing real directories
         let ordinary = CountArguments {path: "./my--dir".to_owned(), ..every_option_set()};
@@ -406,6 +427,8 @@ mod tests {
 
         let report = run("every-option", &arguments.to_report_command_line().unwrap()).await;
         assert!(report.contains("Rust"), "the report does not name the language of the files in it:\n{report}");
+        assert!(report.contains("production") && report.contains("tests"),
+                "the report did not split production and test code:\n{report}");
         assert!(report.contains("server.rs"), "'--by-file' gave no file rows:\n{report}");
     }
 
@@ -418,6 +441,15 @@ mod tests {
         let parsed = rmcp::serde_json::from_str::<rmcp::serde_json::Value>(&document)
                 .unwrap_or_else(|error| panic!("the document does not parse: {error}\n{document}"));
         assert_eq!("run", parsed["kind"]);
+
+        let baseline = std::env::temp_dir().join("mezura-mcp-test-baseline.json");
+        std::fs::write(&baseline, &document).unwrap();
+        arguments.diff = Some(baseline.to_string_lossy().into_owned());
+        let diff_doc = run("json-diff", &arguments.to_document_command_line().unwrap()).await;
+        let _ = std::fs::remove_file(&baseline);
+        let parsed_diff = rmcp::serde_json::from_str::<rmcp::serde_json::Value>(&diff_doc)
+                .unwrap_or_else(|error| panic!("the comparison document does not parse: {error}\n{diff_doc}"));
+        assert_eq!("comparison", parsed_diff["kind"]);
     }
 
     #[tokio::test]
@@ -456,8 +488,8 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join("only.rs"), "fn main() {}\n").unwrap();
 
-        let arguments = CountArguments {path: directory.to_string_lossy().into_owned(), exclude: None, tests: None,
-                languages: None, top: None, by_file: None, counting: None};
+        let arguments = CountArguments {path: directory.to_string_lossy().into_owned(), diff: None,
+                exclude: None, tests: None, languages: None, top: None, by_file: None, counting: None};
         let report = run("spaced", &arguments.to_report_command_line().unwrap()).await;
         let _ = std::fs::remove_dir_all(&directory);
 
@@ -467,6 +499,7 @@ mod tests {
     fn every_option_set() -> CountArguments {
         CountArguments {
             path: "src".to_owned(),
+            diff: None,
             exclude: Some(vec!["*.txt".to_owned(), "vendor".to_owned()]),
             tests: Some(vec!["test_*.py".to_owned(), "!tests/fixtures/".to_owned()]),
             languages: Some(vec!["rust".to_owned(), "visual basic".to_owned()]),

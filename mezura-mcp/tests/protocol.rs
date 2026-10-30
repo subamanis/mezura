@@ -38,6 +38,8 @@ fn a_tool_called_over_the_protocol_answers_with_the_report() {
     assert_eq!(Some(false), result["isError"].as_bool(), "the call came back as a failure: {result}");
     let text = result["content"][0]["text"].as_str().expect("the answer carries no text");
     assert!(text.contains("Rust"), "the report does not name the language of the files in it:\n{text}");
+    assert!(text.contains("production") && text.contains("tests"),
+            "the report does not split production and test lines under the language:\n{text}");
 }
 
 #[test]
