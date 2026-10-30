@@ -522,6 +522,8 @@ pub const HIDE_HELP  :  &str =
     A '--diff' comparison obeys them too, taking each change away with its figure, and it has no
     'extra' column to hide.
 
+    Typed on the command line, '--hide' adds to what a loaded configuration already hides.
+
     Errors and warnings are never hidden, and a hidden parsing info still reports the files that
     failed to parse, since the numbers would otherwise be wrong with nothing saying so.
 
@@ -1097,7 +1099,7 @@ pub const LOAD_HELP  :  &str =
     One argument as the file name (whitespace allowed, without an extension, case-insensitive)
 
     Reads a file '--save' wrote in the 'data/config/' directory and applies its flags. Anything you
-    also type on the command line wins over what the file says.
+    also type on the command line wins over what the file says ('--hide' and '--style' add to it).
 
     Give '--load' and '--save' the same name to edit a configuration: it is loaded, your changes
     are applied on top, and the result is written back.

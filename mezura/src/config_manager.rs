@@ -320,6 +320,46 @@ impl Hidden {
         Ok(hidden)
     }
 
+    pub fn merge(self, other: Self) -> Self {
+        let Self {
+            version, directory_info, parsing_info, progress_bar, animations, keywords,
+            modules, nested_languages, tests, files, comments, extra, blanks, size,
+            percentages, files_percentages, lines_percentages, code_percentages,
+            comments_percentages, change_percentages, overview, bar, history, timing
+        } = self;
+
+        Self {
+            version: version || other.version,
+            directory_info: directory_info || other.directory_info,
+            parsing_info: parsing_info || other.parsing_info,
+            progress_bar: progress_bar || other.progress_bar,
+            animations: animations || other.animations,
+            keywords: keywords || other.keywords,
+            modules: modules || other.modules,
+            nested_languages: nested_languages || other.nested_languages,
+            tests: tests || other.tests,
+            files: files || other.files,
+            comments: comments || other.comments,
+            extra: extra || other.extra,
+            blanks: blanks || other.blanks,
+            size: size || other.size,
+            percentages: percentages || other.percentages,
+            files_percentages: files_percentages || other.files_percentages,
+            lines_percentages: lines_percentages || other.lines_percentages,
+            code_percentages: code_percentages || other.code_percentages,
+            comments_percentages: comments_percentages || other.comments_percentages,
+            change_percentages: change_percentages || other.change_percentages,
+            overview: overview || other.overview,
+            bar: bar || other.bar,
+            history: history || other.history,
+            timing: timing || other.timing
+        }
+    }
+
+    pub fn hides_everything(self) -> bool {
+        self.get_pairs().iter().all(|(_, is_hidden)| *is_hidden)
+    }
+
     pub fn to_list_string(self) -> String {
         self.get_pairs().iter().filter(|(_,is_hidden)| *is_hidden).map(|(name,_)| *name).collect::<Vec<_>>().join(",")
     }
@@ -858,7 +898,10 @@ impl ConfigurationBuilder {
         if self.count_not_code.is_none() {self.count_not_code = config.count_not_code};
         if self.should_show_faulty_files.is_none() {self.should_show_faulty_files = config.should_show_faulty_files};
         if self.should_show_skipped_files.is_none() {self.should_show_skipped_files = config.should_show_skipped_files};
-        if self.hidden.is_none() {self.hidden = config.hidden};
+        self.hidden = match (self.hidden, config.hidden) {
+            (Some(one), Some(other)) => Some(one.merge(other)),
+            (one, other) => one.or(other)
+        };
         if self.no_gitignore.is_none() {self.no_gitignore = config.no_gitignore};
         if self.no_ignore_files.is_none() {self.no_ignore_files = config.no_ignore_files};
         if self.no_heuristics.is_none() {self.no_heuristics = config.no_heuristics};
@@ -928,7 +971,7 @@ impl ConfigurationBuilder {
         self.threads.is_none() || self.counting.is_none() || self.should_search_in_dotted.is_none() ||
         self.count_minified.is_none() || self.count_generated.is_none() ||
         self.count_not_code.is_none() || self.should_show_faulty_files.is_none() ||
-        self.should_show_skipped_files.is_none() || self.hidden.is_none() || self.no_gitignore.is_none() ||
+        self.should_show_skipped_files.is_none() || !self.hidden.is_some_and(Hidden::hides_everything) || self.no_gitignore.is_none() ||
         self.no_ignore_files.is_none() || self.no_heuristics.is_none() || self.no_shebang.is_none() ||
         self.theme_name.is_none() || self.compare_level.is_none() ||
         self.config_styles.is_none() || self.bar_thickness.is_none() || self.progress_bar.is_none() ||
@@ -965,7 +1008,7 @@ impl ConfigurationBuilder {
         };
         hidden.extra = mine;
         hidden.blanks = false;
-        if of_the_other_model {
+        if of_the_other_model && !mine {
             Self::report_a_word_of_the_other_model(HIDE, counting, "nothing was hidden");
         }
         if sort_by == SortCriterion::Extra && counting == CountingModel::Region
@@ -2002,6 +2045,32 @@ mod tests {
         assert!(!create_config_from_args("./ --hide keywords").unwrap().typed_explicitly.hide_tests);
     }
 
+    #[test]
+    fn hiding_on_the_command_line_adds_to_what_a_configuration_already_hides() {
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let named = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/zz-hide-merge.txt");
+        let _ = std::fs::remove_file(&named);
+        std::fs::write(&named, "===> hide\nkeywords,overview\n").unwrap();
+
+        let loaded = create_config_from_args("./ --load zz-hide-merge --hide modules,timing").unwrap();
+        assert_eq!(Hidden { keywords: true, modules: true, overview: true, timing: true, ..Default::default() },
+                loaded.view.hidden);
+        assert!(!loaded.engine.count_keywords);
+        assert!(!loaded.typed_explicitly.hide_keywords,
+                "keywords came from the configuration, not from the command line");
+
+        // Editing the configuration keeps its existing hidden entries and adds the new ones
+        create_config_from_args("./ --load zz-hide-merge --hide timing --save zz-hide-merge").unwrap();
+        assert_eq!(Some(Hidden { keywords: true, overview: true, timing: true, ..Default::default() }),
+                crate::config_files::parse_config_file(Some("zz-hide-merge"), None).unwrap().0.hidden);
+        std::fs::remove_file(&named).unwrap();
+
+        let project = build_test_project("hide-merge", "===> hide\nkeywords\n");
+        let in_project = create_config_from_args(&format!("{project}/src --hide bar")).unwrap();
+        assert_eq!(Hidden { keywords: true, bar: true, ..Default::default() }, in_project.view.hidden);
+        std::fs::remove_dir_all(&project).unwrap();
+    }
+
     // A JSON document carries every figure whatever is hidden, so there the order stands as asked
     #[test]
     fn sorting_by_a_hidden_column_falls_back_to_lines() {
@@ -2027,6 +2096,14 @@ mod tests {
         assert!(view("./ --counting region --hide blanks").hidden.extra);
         assert!(view("./ --hide extra").hidden.extra);
         assert!(!view("./ --hide blanks").hidden.extra);
+
+        let count_nothing_hidden = || crate::warning_collector::get_collected_warnings().into_iter()
+                .filter(|x| x.message.contains("nothing was hidden")).count();
+        let before = count_nothing_hidden();
+        assert!(view("./ --counting region --hide extra,blanks").hidden.extra);
+        assert!(view("./ --hide extra,blanks").hidden.extra);
+        assert_eq!(before, count_nothing_hidden(),
+                "warned that nothing was hidden while the third column was hidden");
     }
 
     #[test]
@@ -2465,13 +2542,14 @@ mod tests {
     fn a_field_a_configuration_can_fill_is_a_field_the_builder_asks_about() {
         let donor = || {
             let mut donor = ConfigurationBuilder::default();
-            donor.add_missing_fields(create_config_builder_from_args(
+            let every_hide = Hidden::get_names().join(",");
+            donor.add_missing_fields(create_config_builder_from_args(&format!(
                     "./ --exclude a --tests spec --languages rust --exclude-languages java --force-language m=matlab \
                     --threads 1 1 --counting region --search-in-dotted --count-minified --count-generated \
-                    --count-not-code --show-faulty-files --show-skipped --hide bar,tests,keywords --no-gitignore --no-ignore-files --no-heuristics --no-shebang \
+                    --count-not-code --show-faulty-files --show-skipped --hide {every_hide} --no-gitignore --no-ignore-files --no-heuristics --no-shebang \
                     --compare 3 --bar-thickness fat \
                     --progress-bar hash --number-separator dot --decimal-separator comma --layout table \
-                    --sort name --top 3 --by-file 8 --tests-breakdown split").unwrap());
+                    --sort name --top 3 --by-file 8 --tests-breakdown split")).unwrap());
             // Neither can come off a command line here: a theme is looked up in the data directory,
             // and a style block only ever arrives from inside a configuration file
             donor.theme_name = Some("Mezura".to_owned());
@@ -2487,7 +2565,8 @@ mod tests {
 
         for (name, clear) in [("excluded_languages", (|x: &mut ConfigurationBuilder| x.excluded_languages = None) as fn(&mut ConfigurationBuilder)),
                 ("targets", |x| x.targets = None), ("top_n", |x| x.top_n = None), ("by_file", |x| x.by_file = None),
-                ("tests_breakdown", |x| x.tests_breakdown = None), ("test_patterns", |x| x.test_patterns = None)] {
+                ("tests_breakdown", |x| x.tests_breakdown = None), ("test_patterns", |x| x.test_patterns = None),
+                ("hidden", |x| x.hidden.as_mut().unwrap().timing = false)] {
             let mut one_short = donor();
             clear(&mut one_short);
             assert!(one_short.has_missing_fields(),

@@ -11,6 +11,8 @@ Change in commands:
       without a target path creates a reusable settings bundle instead of pinning to the current
       working directory.
   -> '--hide modules' prints a configuration or run with named modules as a single flat report.
+  -> '--hide' on the command line now adds to the sections hidden by a loaded configuration instead
+      of replacing them.
 
 Other:
   -> MATLAB now also counts GNU Octave's '#' line comments and '#{' / '#}' block comments, and

@@ -35,8 +35,8 @@ impl std::fmt::Display for PatternError {
         match self {
             Self::InvalidGlob(x) => write!(f, "'{x}' is not a valid glob pattern."),
             Self::Empty(x) => write!(f, "'{x}' names nothing once its '!' and its trailing '/' are read."),
-            Self::TakesBack(x) => write!(f, "'{x}' starts with '!', which takes an earlier pattern back, but what an \
-                    exclude pattern leaves out cannot be taken back, since a directory left out is never entered."),
+            Self::TakesBack(x) => write!(f, "'{x}' starts with '!': a directory left out is not entered, so nothing \
+                    inside it can be taken back."),
             Self::UnknownPreset(x) => write!(f, "'{x}' names no shipped test preset.")
         }
     }
