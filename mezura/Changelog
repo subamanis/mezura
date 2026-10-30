@@ -26,6 +26,8 @@ Change in commands:
       of replacing them.
 
 Other:
+  -> The first column header of the Details table now shows the number of counted languages or
+      modules ('Language (N)' / 'Module (N)') when more than one is present.
   -> MATLAB now also counts GNU Octave's '#' line comments and '#{' / '#}' block comments, and
       recognises '##' headers when settling '.m' files.
   -> The default thread count now obeys process CPU affinity on Windows and cgroups v2 CPU quotas on

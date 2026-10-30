@@ -1036,19 +1036,19 @@ fn split_off_the_branch(cell: &str) -> (&str, &str) {
 // comes back painted and its style is replaced with one that adds nothing: a style laid over the
 // whole of it would put the header's italics on the marker, which is a glyph and not a word.
 fn mark_sorted_column<'a>(theme: &'a Theme, columns: &mut [Column<'a>], sort_by: SortCriterion) {
-    let names_the_order = |header: &str| match sort_by {
-        SortCriterion::Files => header == "Files",
-        SortCriterion::Lines => header == "Lines",
-        SortCriterion::Code => header == "Code",
-        SortCriterion::Comments => header == "Comments",
-        SortCriterion::Extra | SortCriterion::Blanks => header == "Extra" || header == "Blanks",
-        SortCriterion::Size => header == "Size",
-        SortCriterion::Name => header == "Language" || header == "Module",
+    let names_the_order = |kind: ColumnKind| match sort_by {
+        SortCriterion::Files => kind == ColumnKind::Files,
+        SortCriterion::Lines => kind == ColumnKind::Lines,
+        SortCriterion::Code => kind == ColumnKind::Code,
+        SortCriterion::Comments => kind == ColumnKind::Comments,
+        SortCriterion::Extra | SortCriterion::Blanks => kind == ColumnKind::Extra,
+        SortCriterion::Size => kind == ColumnKind::Size,
+        SortCriterion::Name => kind == ColumnKind::Name,
         // 'SortCriterion' is non_exhaustive, so a criterion added later leaves the header unmarked
         // rather than failing to compile in a released version
         _ => false
     };
-    let Some(column) = columns.iter_mut().find(|column| names_the_order(&column.header)) else { return };
+    let Some(column) = columns.iter_mut().find(|column| names_the_order(column.kind)) else { return };
 
     let marker = if sort_by == SortCriterion::Name {SORTED_ASCENDING} else {SORTED_DESCENDING};
     column.header = format!("{} {}", theme.sort_marker.paint(&marker.to_string()),
@@ -1061,8 +1061,17 @@ static UNPAINTED : std::sync::LazyLock<Style> =
 
 // Without the change of heading, the reader of an uncolored paste is told that 'backend' is a
 // language.
-fn determine_name_header(groups: &[Group]) -> &'static str {
-    if is_grouped(groups) {"Module"} else {"Language"}
+fn determine_name_header(groups: &[Group]) -> String {
+    if is_grouped(groups) {
+        let count = groups.len();
+        if count > 1 { format!("Module ({})", format_with_separators(count)) } else { "Module".to_owned() }
+    } else {
+        format_language_header(groups.first().map_or(0, |group| group.per_language.len()))
+    }
+}
+
+fn format_language_header(count: usize) -> String {
+    if count > 1 { format!("Language ({})", format_with_separators(count)) } else { "Language".to_owned() }
 }
 
 // The third column is what is left after code and comments: content leaves the lines that say
@@ -1134,8 +1143,9 @@ fn build_table_cells<'a>(theme: &'a Theme, groups: &[Group], total: &Stats, prin
     // The two columns that compare languages ('Files' and 'Lines') take a share of the total, the
     // two that describe one ('Code' and 'Comments') a share of that language's own lines.
     let percent = |kind| Column::of("%", kind, &theme.percent, &theme.percent);
+    let name_header = determine_name_header(groups);
     let columns = vec![
-        Column::of(determine_name_header(groups), ColumnKind::Name,
+        Column::of(&name_header, ColumnKind::Name,
                 &theme.details_language_header, &theme.details_language_name),
         Column::of("Files", ColumnKind::Files, &theme.files_label, &theme.files_number),
         percent(ColumnKind::Percent),
@@ -1972,7 +1982,9 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
         (cells, metric)
     }).collect::<Vec<_>>();
 
-    let headers = [String::from("Language"), String::new()].into_iter()
+    let language_count = groups.iter().flat_map(|group| group.per_language.keys())
+            .collect::<HashSet<_>>().len();
+    let headers = [format_language_header(language_count), String::new()].into_iter()
             .chain(groups.iter().map(|group| group.get_displayed_name().to_owned()))
             .chain(std::iter::once(TOTAL_HEADER.to_owned())).collect::<Vec<_>>();
     let widths = (0..headers.len()).map(|i| rows.iter().chain(totals.iter())
@@ -2066,8 +2078,9 @@ fn format_boxed_lines(theme: &Theme, groups: &[Group], total: &Stats, print_tota
         notes: &[String], view: ViewSettings) -> Vec<String>
 {
     let ViewSettings { sort_by, hidden, model } = view;
+    let name_header = determine_name_header(groups);
     let columns = vec![
-        Column::of(determine_name_header(groups), ColumnKind::Name,
+        Column::of(&name_header, ColumnKind::Name,
                 &theme.details_language_header, &theme.details_language_name),
         Column::of("Files", ColumnKind::Files, &theme.files_label, &theme.files_number),
         Column::of("Lines", ColumnKind::Lines, &theme.lines_label, &theme.lines_number),
@@ -4344,28 +4357,64 @@ mod tests {
                     .split_whitespace().map(str::to_owned).collect::<Vec<_>>()
         };
 
-        assert_eq!(vec!["Language", "Files", "%", "↓", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
+        assert_eq!(vec!["Language", "(5)", "Files", "%", "↓", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
                 header_hiding(""));
-        assert_eq!(vec!["Language", "Files", "↓", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
+        assert_eq!(vec!["Language", "(5)", "Files", "↓", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
                 header_hiding("files-percentages"));
-        assert_eq!(vec!["Language", "Files", "%", "↓", "Lines", "Code", "%", "Comments", "%", "Extra", "Size"],
+        assert_eq!(vec!["Language", "(5)", "Files", "%", "↓", "Lines", "Code", "%", "Comments", "%", "Extra", "Size"],
                 header_hiding("lines-percentages"));
-        assert_eq!(vec!["Language", "Files", "%", "↓", "Lines", "%", "Code", "Comments", "%", "Extra", "Size"],
+        assert_eq!(vec!["Language", "(5)", "Files", "%", "↓", "Lines", "%", "Code", "Comments", "%", "Extra", "Size"],
                 header_hiding("code-percentages"));
-        assert_eq!(vec!["Language", "Files", "%", "↓", "Lines", "%", "Code", "%", "Comments", "Extra", "Size"],
+        assert_eq!(vec!["Language", "(5)", "Files", "%", "↓", "Lines", "%", "Code", "%", "Comments", "Extra", "Size"],
                 header_hiding("comments-percentages"));
 
-        assert_eq!(vec!["Language", "Files", "↓", "Lines", "Code", "Comments", "Extra", "Size"],
+        assert_eq!(vec!["Language", "(5)", "Files", "↓", "Lines", "Code", "Comments", "Extra", "Size"],
                 header_hiding("percentages"));
-        assert_eq!(vec!["Language", "Files", "↓", "Lines", "%", "Code", "%", "Comments", "Extra", "Size"],
+        assert_eq!(vec!["Language", "(5)", "Files", "↓", "Lines", "%", "Code", "%", "Comments", "Extra", "Size"],
                 header_hiding("files-percentages,comments-percentages"));
 
         // A hidden column takes its own share out with it, and a comparison's name reaches nothing here
-        assert_eq!(vec!["Language", "Files", "%", "↓", "Lines", "%", "Code", "%", "Extra", "Size"],
+        assert_eq!(vec!["Language", "(5)", "Files", "%", "↓", "Lines", "%", "Code", "%", "Extra", "Size"],
                 header_hiding("comments"));
-        assert_eq!(vec!["Language", "Files", "%", "↓", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
+        assert_eq!(vec!["Language", "(5)", "Files", "%", "↓", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
                 header_hiding("change-percentages"));
     }
+
+    #[test]
+    fn the_name_header_carries_the_count_of_languages_or_modules_only_above_one() {
+        colored::control::set_override(false);
+        let (sorted, content_info, total) = sample_data();
+        let theme = &Theme::default();
+        let one_language = hashmap!("Rust".to_owned() => content_info["Rust"].clone());
+        let one_total = Stats::calculate_total_of(&one_language);
+
+        let group_of = |name, languages, hidden, per_language, total| {
+            Group { name, languages, hidden, per_language: Cow::Borrowed(per_language),
+                    nested: &NO_NESTED, tests: &NO_TESTS, tests_breakdown: TestsBreakdown::Share,
+                    files: HashMap::new(), total: Cow::Borrowed(total), baseline: None }
+        };
+        let single_lang = vec![group_of(None, vec!["Rust".to_owned()], 0, &one_language, &one_total)];
+        let cut_by_top = vec![group_of(None, vec!["Rust".to_owned()], 4, &content_info, &total)];
+        let one_module = vec![group_of(Some("core"), sorted.clone(), 0, &content_info, &total)];
+        let two_modules = vec![
+            group_of(Some("core"), vec!["Rust".to_owned()], 0, &one_language, &one_total),
+            group_of(Some("cli"), sorted.clone(), 0, &content_info, &total)
+        ];
+
+        assert_eq!("Language", determine_name_header(&single_lang));
+        assert_eq!("Language (5)", determine_name_header(&cut_by_top));
+        assert_eq!("Module", determine_name_header(&one_module));
+        assert_eq!("Module (2)", determine_name_header(&two_modules));
+
+        let by_name = ViewSettings { sort_by: SortCriterion::Name, hidden: crate::config_manager::Hidden::default(), model: CountingModel::Content };
+        assert_eq!(vec!["↑", "Language", "(5)", "Files", "%", "Lines", "%", "Code", "%", "Comments", "%", "Extra", "Size"],
+                format_table_lines(theme, &cut_by_top, &total, true, &[], by_name)[0]
+                        .split_whitespace().map(str::to_owned).collect::<Vec<_>>());
+        assert_eq!(vec!["Language", "(5)", "core", "cli", "Total"],
+                format_matrix_lines(theme, &two_modules, &sorted, &total, true, &[], CountingModel::Content)[0]
+                        .split_whitespace().map(str::to_owned).collect::<Vec<_>>());
+    }
+
     // The arithmetic is 'render::percentages' and is asserted there; what is left is which field
     // lands in which slot. Each language is given three figures that would rank it differently, so
     // a function reading the wrong field, or filling by the map's own order, cannot pass.
