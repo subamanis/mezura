@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use mezura_core::{EngineConfig, FileEntry, ForcedLanguages, Language, LanguageNames, Languages,
+use mezura_core::{FileEntry, ForcedLanguages, Language, LanguageNames, Languages,
         ModuleResult, PathPatterns, RunResult, Stats, UNNAMED_MODULE_NAME, is_a_path_pattern, is_on_disk, render};
 use mezura_core::language_file::ConflictRules;
 
@@ -30,7 +30,7 @@ pub enum Source {
     Document { path: String },
     // Both halves, because neither derives from the other: the hash is what was really measured,
     // 'asked_for' is what makes it readable six months later, 'v2.0.1' over '030e6e72a1'.
-    GitRevision { commit: String, asked_for: String, repository: String }
+    GitRevision { commit: String, asked_for: String, repository: String, display_repository: String }
 }
 
 pub struct Reading {
@@ -55,10 +55,10 @@ pub struct Reading {
 }
 
 impl Reading {
-    pub fn of_git_revision(asked_for: &str, commit: String, repository: String, taken: String, result: RunResult,
-            config: &Configuration) -> Self {
-        Reading::of_a_counted_run(Source::GitRevision { commit, asked_for: asked_for.to_owned(), repository },
-                taken, result, config)
+    pub fn of_git_revision(asked_for: &str, commit: String, repository: String, display_repository: String,
+            taken: String, result: RunResult, config: &Configuration) -> Self {
+        Reading::of_a_counted_run(Source::GitRevision { commit, asked_for: asked_for.to_owned(),
+                repository, display_repository }, taken, result, config)
     }
 
     // A copy, because the result is still being presented around the comparison
@@ -79,16 +79,25 @@ impl Reading {
             Source::Run => THIS_RUN_NAME.to_owned(),
             Source::Document { path } => std::path::Path::new(path).file_name()
                     .map_or_else(|| path.clone(), |x| x.to_string_lossy().into_owned()),
-            Source::GitRevision { asked_for, .. } => asked_for.clone()
+            Source::GitRevision { asked_for, .. } => super::git::format_revision_label(asked_for)
         }
     }
 
     fn of_a_counted_run(source: Source, taken: String, result: RunResult, config: &Configuration) -> Self {
+        let mut scope = scope_of(&config.engine, config.view.counting);
+        if !config.view.target_checkouts.is_empty() {
+            scope.exclude = scope.exclude.iter()
+                    .map(|pattern| super::sources::format_pattern_outside_checkouts(pattern, &config.view.target_checkouts))
+                    .collect();
+            scope.tests = scope.tests.iter()
+                    .map(|pattern| super::sources::format_pattern_outside_checkouts(pattern, &config.view.target_checkouts))
+                    .collect();
+        }
         Reading {
             source,
             taken,
             version: super::config_manager::VERSION_ID.trim_start_matches('v').to_owned(),
-            scope: scope_of(&config.engine, config.view.counting),
+            scope,
             warnings: Vec::new(),
             faulty_files_count: result.faulty_files.len(),
             skipped_counts: super::json_reader::SkippedCounts::of(&result.skipped_files),
@@ -199,7 +208,7 @@ impl BothSidesNamed {
         let (_, reported) = Languages::resolve(&config.engine, self.languages.clone(), conflicts);
         super::warning_collector::report_language_resolution_warnings(reported);
 
-        let [baseline, subject] = prepare_sides([self.baseline, self.subject], &config.engine)?;
+        let [baseline, subject] = prepare_sides([self.baseline, self.subject], config)?;
 
         let (baseline, notes) = baseline.into_reading(config, self.languages.clone(), conflicts)?;
         let mut notes_so_far = self.notes_so_far;
@@ -221,7 +230,7 @@ impl BaselineOnly {
     pub fn count_baseline(self, config: &Configuration,
             conflicts: &ConflictRules) -> Result<CountedBaseline, String>
     {
-        let [baseline] = prepare_sides([self.baseline], &config.engine)?;
+        let [baseline] = prepare_sides([self.baseline], config)?;
         let (baseline, notes) = baseline.into_reading(config, self.languages, conflicts)?;
         let mut notes_so_far = self.notes_so_far;
         notes_so_far.extend(notes);
@@ -464,6 +473,12 @@ pub fn determine_file_bases(baseline: &RunResult, subject: &RunResult) -> (Strin
         let outer = if is_inside(&fold_ascii_case(of_subject), &fold_ascii_case(of_baseline))
                 {of_baseline} else {of_subject};
         (outer.to_owned(), outer.to_owned())
+    } else if baseline.targets.len() < subject.targets.len()
+            && let Some(aligned) = align_subset_base(&baseline.targets, &subject.targets, of_subject) {
+        (aligned, of_subject.to_owned())
+    } else if subject.targets.len() < baseline.targets.len()
+            && let Some(aligned) = align_subset_base(&subject.targets, &baseline.targets, of_baseline) {
+        (of_baseline.to_owned(), aligned)
     } else {
         (of_baseline.to_owned(), of_subject.to_owned())
     }
@@ -548,15 +563,24 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
 // so that the two readings measure the same thing
 pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Configuration) -> Vec<&'static str> {
     let different = |a: &[String], b: &[String]| !hold_the_same_values(a, b);
+    let checkouts = &config.view.target_checkouts;
+    let current_exclude = config.engine.exclude_patterns.patterns.iter()
+            .map(|p| super::sources::format_pattern_outside_checkouts(p, checkouts))
+            .collect::<Vec<_>>();
+    let current_tests = config.engine.test_patterns.patterns.iter()
+            .map(|p| super::sources::format_pattern_outside_checkouts(p, checkouts))
+            .collect::<Vec<_>>();
 
     let typed = config.typed_explicitly;
     let mut adopted = Vec::new();
-    if !typed.exclude && different(&document.exclude, &config.engine.exclude_patterns.patterns) {
-        config.engine.exclude_patterns = PathPatterns::of(&document.exclude);
+    if !typed.exclude && different(&document.exclude, &current_exclude) {
+        config.engine.exclude_patterns = PathPatterns::of(document.exclude.iter()
+                .map(|p| super::sources::format_pattern_inside_checkouts(p, checkouts)));
         adopted.push(EXCLUDE);
     }
-    if !typed.tests && document.tests != config.engine.test_patterns.patterns {
-        config.engine.test_patterns = PathPatterns::of(&document.tests);
+    if !typed.tests && document.tests != current_tests {
+        config.engine.test_patterns = PathPatterns::of(document.tests.iter()
+                .map(|p| super::sources::format_pattern_inside_checkouts(p, checkouts)));
         adopted.push(TESTS);
     }
     if !typed.languages && different(&document.languages, &config.engine.languages_of_interest.to_written_form()) {
@@ -675,12 +699,12 @@ impl PreparedSide {
     }
 }
 
-fn prepare_sides<const N: usize>(sides: [DiffSide; N], engine: &EngineConfig)
+fn prepare_sides<const N: usize>(sides: [DiffSide; N], config: &Configuration)
 -> Result<[PreparedSide; N], String>
 {
     let names = sides.iter().filter_map(DiffSide::find_revision_name).collect::<Vec<_>>();
-    let resolved = super::sources::prepare_revisions(&names, engine).map_err(|x| x.to_string())?;
-    let mut acquiring = super::sources::start_acquiring_revisions(resolved).into_iter();
+    let prepared = super::sources::prepare_revisions_for_config(&names, config).map_err(|x| x.to_string())?;
+    let mut acquiring = super::sources::start_acquiring_prepared_revisions(prepared).into_iter();
 
     Ok(sides.map(|side| match side {
         DiffSide::Document(reading) => PreparedSide::Document(reading),
@@ -712,14 +736,17 @@ fn adopt_settings_from(document: &Reading, config: &mut Configuration) -> Vec<No
         _ => [].iter()
     });
     let naming_nothing = adopted_patterns.filter(|pattern| is_a_path_pattern(pattern) && !is_on_disk(pattern))
-            .cloned().collect();
+            .map(|pattern| super::sources::format_pattern_outside_checkouts(pattern, &config.view.target_checkouts))
+            .collect();
     let typed_patterns_unused = settings.contains(&HIDE_TESTS) && config.typed_explicitly.tests
             && !config.engine.test_patterns.is_empty();
 
     let mut notes = vec![Note::SettingsAdopted { from: document.determine_display_name(), settings, naming_nothing }];
     if typed_patterns_unused {
-        notes.push(Note::TestPatternsUnused { patterns: config.engine.test_patterns.patterns.clone(),
-                from: document.determine_display_name() });
+        let patterns = config.engine.test_patterns.patterns.iter()
+                .map(|pattern| super::sources::format_pattern_outside_checkouts(pattern, &config.view.target_checkouts))
+                .collect();
+        notes.push(Note::TestPatternsUnused { patterns, from: document.determine_display_name() });
     }
     notes
 }
@@ -767,7 +794,7 @@ fn determine_comparison_notes(baseline: &Reading, subject: &Reading, config: &Co
                 baseline_version: baseline.version.clone(), subject: subject.determine_display_name(),
                 subject_version: subject.version.clone() });
     }
-    notes.extend(find_presets_on_one_side(baseline, subject));
+    notes.extend(find_presets_on_one_side(baseline, subject, &config.view.target_checkouts));
     // How each side's own scan went. Nothing else says it for a document or a revision, and a side
     // that failed to parse half its files reads as code that shrank.
     for reading in [baseline, subject] {
@@ -820,7 +847,9 @@ fn determine_comparison_notes(baseline: &Reading, subject: &Reading, config: &Co
 
 // A preset that decided files on one side is one-sided where the other side never turned it on,
 // whether or not it found a file there, and held files there at all
-fn find_presets_on_one_side(baseline: &Reading, subject: &Reading) -> Vec<Note> {
+fn find_presets_on_one_side(baseline: &Reading, subject: &Reading,
+        checkouts: &[super::config_manager::TargetCheckout]) -> Vec<Note>
+{
     let (base_before, base_now) = determine_file_bases(&baseline.result, &subject.result);
     let sides = [(baseline, base_before.as_str(), subject, base_now.as_str()), (subject, base_now.as_str(), baseline, base_before.as_str())];
 
@@ -833,7 +862,7 @@ fn find_presets_on_one_side(baseline: &Reading, subject: &Reading) -> Vec<Note> 
             let one_sided = directories.iter()
                     .filter(|directory| !others.iter().any(|other| is_held_by(directory, own_base, other, other_base)))
                     .filter(|directory| holds_files_under(not_in, &move_to_other_side(directory, own_base, other_base),
-                            &folders_of_not_in))
+                            checkouts, &folders_of_not_in))
                     .map(|directory| (*directory).to_owned()).collect::<Vec<_>>();
             if !one_sided.is_empty() {
                 notes.push(Note::PresetOnOneSide { name: name.to_owned(), directories: one_sided,
@@ -889,10 +918,15 @@ fn move_to_other_side(directory: &str, own_base: &str, other_base: &str) -> Stri
 }
 
 // A side that cannot tell, a document short of rows or a folder outside the repository, keeps the note
-fn holds_files_under(reading: &Reading, directory: &str, folders: &OnceCell<Option<HashSet<String>>>) -> bool {
+fn holds_files_under(reading: &Reading, directory: &str,
+        checkouts: &[super::config_manager::TargetCheckout],
+        folders: &OnceCell<Option<HashSet<String>>>) -> bool
+{
     match &reading.source {
-        Source::Run => std::path::Path::new(directory).exists(),
-        Source::GitRevision { commit, repository, .. } => match find_path_below(directory, repository) {
+        Source::Run => std::path::Path::new(
+                &super::sources::format_path_inside_checkouts(directory, checkouts)).exists(),
+        Source::GitRevision { commit, repository, display_repository, .. } =>
+                match find_path_below(directory, display_repository) {
             Some(inside) if !inside.is_empty() => folders.get_or_init(|| super::git::collect_folders_at(repository, commit))
                     .as_ref().is_none_or(|known| known.contains(fold_ascii_case(inside).as_ref())),
             _ => true
@@ -903,6 +937,33 @@ fn holds_files_under(reading: &Reading, directory: &str, folders: &OnceCell<Opti
                     || rows.any(|row| is_inside(&fold_ascii_case(&row.path), &fold_ascii_case(directory)))
         }
     }
+}
+
+fn align_subset_base(narrower: &[mezura_core::Target], wider: &[mezura_core::Target],
+        of_wider: &str) -> Option<String>
+{
+    if narrower.is_empty() || wider.is_empty() || of_wider.is_empty() {
+        return None;
+    }
+    let folded_wider_base = fold_ascii_case(of_wider);
+    let suffixes = wider.iter().map(|target| {
+        let folded = fold_ascii_case(&target.path);
+        folded.strip_prefix(folded_wider_base.as_ref()).filter(|rest| rest.starts_with('/'))
+                .map(|_| &target.path[of_wider.len()..])
+    }).collect::<Option<Vec<_>>>()?;
+
+    let first = &narrower[0].path;
+    let folded_first = fold_ascii_case(first);
+    let candidate_base = suffixes.iter().find_map(|suffix| {
+        let folded_suffix = fold_ascii_case(suffix);
+        folded_first.strip_suffix(folded_suffix.as_ref()).map(|_| &first[..first.len() - suffix.len()])
+    })?;
+    let folded_candidate = fold_ascii_case(candidate_base);
+    let expected = suffixes.iter()
+            .map(|suffix| format!("{folded_candidate}{}", fold_ascii_case(suffix)))
+            .collect::<HashSet<_>>();
+    narrower.iter().all(|target| expected.contains(fold_ascii_case(&target.path).as_ref()))
+            .then(|| candidate_base.to_owned())
 }
 
 // A path the base does not hold keeps its absolute form, which pairs with nothing and is honest
@@ -1139,17 +1200,17 @@ mod tests {
 
         let old = reading(Source::Document { path: "old.json".to_owned() }, "D:/p", &["D:/p/web/a.ts"], Vec::new());
         let new = reading(Source::Document { path: "new.json".to_owned() }, "D:/p", &[], vec![jest("D:/p/web"), jest("D:/p/new")]);
-        assert_eq!(vec!["D:/p/web".to_owned()], said_under(find_presets_on_one_side(&old, &new)),
+        assert_eq!(vec!["D:/p/web".to_owned()], said_under(find_presets_on_one_side(&old, &new, &[])),
                 "a package the older document never held was said to have its preset on one side");
         let mut capped = reading(Source::Document { path: "old.json".to_owned() }, "D:/p", &["D:/p/web/a.ts"], Vec::new());
         capped.files_hidden = 3;
-        assert_eq!(vec!["D:/p/web".to_owned(), "D:/p/new".to_owned()], said_under(find_presets_on_one_side(&capped, &new)),
+        assert_eq!(vec!["D:/p/web".to_owned(), "D:/p/new".to_owned()], said_under(find_presets_on_one_side(&capped, &new, &[])),
                 "a document missing rows was taken to answer for a folder");
 
         let before = reading(Source::Document { path: "old.json".to_owned() }, &root_str, &[],
                 vec![jest(&format!("{root_str}/kept")), jest(&format!("{root_str}/gone"))]);
         let now = reading(Source::Run, &root_str, &[], Vec::new());
-        let said = said_under(find_presets_on_one_side(&before, &now));
+        let said = said_under(find_presets_on_one_side(&before, &now, &[]));
         std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(vec![format!("{root_str}/kept")], said, "a folder deleted from the working tree was said to have lost its preset");
     }

@@ -116,6 +116,8 @@ mezura                                   # count the current directory
 mezura ./src                             # count one directory
 mezura ./src, ./tests                    # count two; commas separate targets
 mezura frontend=./web, backend=./api     # group the report by part (modules)
+mezura @v3.2.0                           # count a local git tag, branch, or commit
+mezura https://github.com/owner/repo     # count a remote git repository (or ...@v1.0)
 mezura ./src --diff main                 # what changed since main
 mezura --by-file                         # show results for every file separately
 mezura src/main.rs --explain             # why each line was counted the way it was
@@ -503,11 +505,14 @@ name or a project with a `.mezura` folder to be inside.
 mezura ./src --output json > baseline.json
 mezura ./src --diff baseline.json
 mezura ./src --diff main
+mezura ./src --diff ./other-repo@v2.0.0
 mezura ./src --diff v2.0.1..v3.0.0
+mezura https://github.com/owner/repo --diff v1.0..v2.0
 ```
 
-A reading is either a JSON document an earlier run wrote, or a git revision, which is checked out
-to a temporary directory and counted on the spot with this run's settings and targets.
+A reading is a JSON document an earlier run wrote, a git revision of the target's repository, a
+local path at a revision (`<path>@<revision>`), or a remote repository URL (optionally ending in
+`@<revision>`), checked out to a temporary directory and counted on the spot.
 
 <img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/diff.png" width="1000">
 

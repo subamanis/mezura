@@ -493,8 +493,8 @@ pub(crate) fn find_common_directory_of(targets: &[mezura_core::Target]) -> &str 
     for target in &targets[1..] {
         while !is_inside(&target.path, common) {
             match common.rsplit_once('/') {
-                Some((shorter, _)) => common = shorter,
-                None => return ""
+                Some((shorter, _)) if !shorter.ends_with(":/") && !shorter.ends_with(':') => common = shorter,
+                _ => return ""
             }
         }
     }
@@ -2874,7 +2874,15 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
         let mut sorted = targets.iter().map(|target| mezura_core::Target {
             module: target.module.clone().filter(|_| compare_modules),
             path: match &project {
-                Some(project) => config_manager::format_path_inside(&project.project_dir, &target.path),
+                Some(project) => {
+                    let root = project.display_dir.as_deref().unwrap_or(&project.project_dir);
+                    let formatted = config_manager::format_path_inside(root, &target.path);
+                    if formatted == target.path {
+                        config_manager::format_path_inside(&project.project_dir, &target.path)
+                    } else {
+                        formatted
+                    }
+                },
                 None => target.path.clone()
             }
         }).collect::<Vec<_>>();

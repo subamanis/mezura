@@ -144,8 +144,8 @@ pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -
 // The transient line of a '--diff' side that is a git revision: its name with the files discovered
 // while the checkout is scanned, then the parsing frame once the scan ends. It erases itself
 // completely, so the printed comparison carries no trace of it.
-pub fn start_revision_display(config: &Configuration, git_revision: &str, progress: Arc<ScanProgress>,
-        already_written: bool) -> AnimatedDisplay {
+pub fn start_revision_display(config: &Configuration, git_revision: &str, writing_verb: &str,
+        progress: Arc<ScanProgress>, already_written: bool) -> AnimatedDisplay {
     if animations_are_hidden() {
         return AnimatedDisplay::default();
     }
@@ -153,7 +153,7 @@ pub fn start_revision_display(config: &Configuration, git_revision: &str, progre
     // A write that finished before this display opened gets no writing label at all.
     let shown_name = cap_revision_name(git_revision);
     let writing = (!already_written).then(||
-            format!("{} '{shown_name}'", crate::theme::get_active().heading.paint("Writing out")));
+            format!("{} '{shown_name}'", crate::theme::get_active().heading.paint(writing_verb)));
     let counting = format!("{} '{shown_name}'", crate::theme::get_active().heading.paint("Counting"));
     let show_bar_and_rates = !config.view.hidden.progress_bar;
     let charset = config.view.progress_bar.get_charset();
@@ -164,6 +164,28 @@ pub fn start_revision_display(config: &Configuration, git_revision: &str, progre
         thread::Builder::new().name("animated-display".to_owned())
                 .spawn(move || animate_revision_line(&progress, &stop, &opened, writing.as_deref(),
                         &counting, show_bar_and_rates, charset)).ok()
+    };
+
+    AnimatedDisplay {
+        should_stop: stop,
+        animator: Mutex::new(animator),
+        parting: Parting::Retreat,
+        opened_own_line: opened
+    }
+}
+
+pub fn start_checkout_display(verb: &str, name: &str, hidden: bool) -> AnimatedDisplay {
+    if hidden || animations_are_hidden() {
+        return AnimatedDisplay::default();
+    }
+
+    let label = format!("{} '{}'", crate::theme::get_active().heading.paint(verb), cap_revision_name(name));
+    let stop = Arc::new(AtomicBool::new(false));
+    let opened = Arc::new(AtomicBool::new(false));
+    let animator = {
+        let (stop, opened) = (stop.clone(), opened.clone());
+        thread::Builder::new().name("animated-display".to_owned())
+                .spawn(move || animate_checkout_line(&stop, &opened, &label)).ok()
     };
 
     AnimatedDisplay {
@@ -437,6 +459,24 @@ fn animate_removals_line() {
     }
     if row.drew_first_frame {
         write_parting(&Parting::Retreat);
+    }
+}
+
+fn animate_checkout_line(stop: &AtomicBool, opened: &AtomicBool, label: &str) {
+    let started = Instant::now();
+    let mut row = TransientRow::new();
+    while !stop.load(Ordering::Relaxed) {
+        thread::park_timeout(TICK);
+        let elapsed = started.elapsed().as_millis();
+        if elapsed < MOTION_APPEARS_AFTER_MS {
+            continue;
+        }
+        let budget = read_budget();
+        let frame = format_walk_frame(label, elapsed, 0, budget);
+        row.draw(&frame, budget, || {
+            open_line_below();
+            opened.store(true, Ordering::Relaxed);
+        });
     }
 }
 

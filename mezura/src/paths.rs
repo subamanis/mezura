@@ -21,8 +21,7 @@ pub const LOCAL_DIR_NAME : &str = ".mezura";
 pub const LOCAL_CONFIG_FILE_NAME : &str = "config.txt";
 pub const LOCAL_LOG_FILE_NAME : &str = "log.jsonl";
 pub const DATA_DIR_VARIABLE : &str = "MEZURA_DATA_DIR";
-
-const GLOB_METACHARACTERS : [char; 4] = ['*', '?', '[', '{'];
+pub const GLOB_METACHARACTERS : [char; 4] = ['*', '?', '[', '{'];
 
 pub static PERSISTENT_APP_PATHS : LazyLock<PersistentAppPaths> = LazyLock::new(PersistentAppPaths::get);
 
@@ -76,6 +75,8 @@ pub struct LocalDir {
     // project's configuration is joined to this and not to the working directory, so the settings
     // mean the same thing from wherever inside the project the command was typed.
     pub project_dir: String,
+    pub display_dir: Option<String>,
+    pub in_checkout: bool,
     // A folder may hold a log and no settings at all, and then there is nothing to announce
     pub configuration_applied: bool,
     pub declares_test_patterns: bool,
@@ -85,8 +86,9 @@ pub struct LocalDir {
 
 impl LocalDir {
     pub fn of(project_dir: &str) -> Self {
-        LocalDir { project_dir: project_dir.trim_end_matches('/').to_owned(), configuration_applied: false,
-                declares_test_patterns: false, counts_the_project: true }
+        LocalDir { project_dir: project_dir.trim_end_matches('/').to_owned(), display_dir: None,
+                in_checkout: false, configuration_applied: false, declares_test_patterns: false,
+                counts_the_project: true }
     }
 
     // With the trailing separator that the configuration reader joins a file name to
@@ -95,7 +97,8 @@ impl LocalDir {
     }
 
     pub fn get_config_path(&self) -> String {
-        format!("{}/{LOCAL_DIR_NAME}/{LOCAL_CONFIG_FILE_NAME}", self.project_dir)
+        format!("{}/{LOCAL_DIR_NAME}/{LOCAL_CONFIG_FILE_NAME}",
+                self.display_dir.as_deref().unwrap_or(&self.project_dir))
     }
 
     pub fn get_log_path(&self) -> String {
@@ -107,8 +110,12 @@ impl LocalDir {
 // holding every target and climbs towards the root, so the nearest folder wins and a project inside
 // another one shadows it. An empty list is a run that named no targets and starts at the working
 // directory.
-pub fn find_local_dir(target_paths: &[String]) -> Option<LocalDir> {
-    search_upwards_from(&find_common_ancestor(target_paths)?)
+pub fn find_local_dir_stopped_at(target_paths: &[String], stop_at: Option<&Path>) -> Option<LocalDir> {
+    search_upwards_from(&find_common_ancestor(target_paths)?, stop_at)
+}
+
+pub fn is_unquoted_glob_pattern(path: &str) -> bool {
+    path.contains(GLOB_METACHARACTERS) && !Path::new(path).exists()
 }
 
 // Where a folder is created when one was asked for and the search above found none
@@ -171,10 +178,16 @@ fn build_data_dir_path(given: &str) -> Option<String> {
     Some(if named.ends_with('/') {named} else {named + "/"})
 }
 
-fn search_upwards_from(start: &Path) -> Option<LocalDir> {
+fn search_upwards_from(start: &Path, stop_at: Option<&Path>) -> Option<LocalDir> {
+    let stop = stop_at.map(|path| fold_for_comparison(
+            normalise_separators(&path.to_string_lossy()).trim_end_matches('/')).into_owned());
     let mut directory = start;
     loop {
         if !may_be_searched(directory) {
+            return None;
+        }
+        if let Some(stop) = &stop && !is_inside(&fold_for_comparison(
+                normalise_separators(&directory.to_string_lossy()).trim_end_matches('/')), stop) {
             return None;
         }
         if directory.join(LOCAL_DIR_NAME).is_dir() {
@@ -260,6 +273,10 @@ pub mod test_paths {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn find_local_dir(target_paths: &[String]) -> Option<LocalDir> {
+        find_local_dir_stopped_at(target_paths, None)
+    }
 
     // One tree per test, cleared on the way in: a run that died before its cleanup would otherwise
     // leave a folder behind that decides the next run's answer.

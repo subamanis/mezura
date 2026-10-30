@@ -78,7 +78,10 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     super::result_printer::format_and_print_results(result, &existing_log_contents, &datetime_now, config);
     print_test_preset_notes(result, config);
 
-    if config.view.log.should_log && let Some(path) = log_file_path
+    let can_write_log = config.view.target_checkouts.is_empty()
+            || config.view.config_name_to_save.is_some()
+            || config.view.config_name_to_load.is_some();
+    if config.view.log.should_log && can_write_log && let Some(path) = log_file_path
         && let Err(reason) = super::log::log_stats(&path, existing_log_contents.as_deref(), result, &datetime_now, config) {
         eprintln!("\n{}",super::theme::get_active().warning.paint(&format!("Error while trying to save the log: {reason}")));
     }
@@ -197,7 +200,13 @@ fn collect_test_preset_notes(result: &RunResult, config: &Configuration) -> Vec<
     }
     let mut lines = format_applied_presets(result, crate::paths::find_working_directory().as_deref());
     if !config.typed_explicitly.tests {
-        lines.extend(find_names_of_presets_to_suggest(result).iter().map(|names| format_preset_suggestion(names)));
+        let target_roots = if config.view.target_checkouts.is_empty() {
+            &result.targets
+        } else {
+            &config.engine.targets
+        };
+        lines.extend(find_names_of_presets_to_suggest(result, target_roots).iter()
+                .map(|names| format_preset_suggestion(names)));
     }
 
     lines
@@ -419,7 +428,7 @@ mod tests {
         result.targets = vec![Target::of(crate::paths::normalise_separators(&root.to_string_lossy()))];
         result.per_language.insert("TypeScript".to_owned(), result.total.clone());
 
-        let suggested = find_names_of_presets_to_suggest(&result).iter().map(|names| format_preset_suggestion(names)).collect::<Vec<_>>();
+        let suggested = find_names_of_presets_to_suggest(&result, &[]).iter().map(|names| format_preset_suggestion(names)).collect::<Vec<_>>();
         assert_eq!(vec![format!("jest or vitest tests are declared with {} or {}.", format_tests_command("@jest"),
                 quote_for_the_shell("@vitest"))], suggested);
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
@@ -428,11 +437,11 @@ mod tests {
         assert!(collect_test_preset_notes(&result, &config).is_empty(), "a run that typed '--tests' was told about presets");
         result.applied_presets = vec![AppliedPreset { name: "vitest".to_owned(), directory: "D:/".to_owned(),
                 trigger_file: "vitest.config.ts".to_owned(), matched: true }];
-        assert!(find_names_of_presets_to_suggest(&result).is_empty(), "a preset that found the tests was suggested again");
+        assert!(find_names_of_presets_to_suggest(&result, &[]).is_empty(), "a preset that found the tests was suggested again");
 
         result.applied_presets = Vec::new();
         std::fs::write(root.join("package.json"), r#"{"devDependencies": {"eslint": "^9", "prettier": "^3"}}"#).unwrap();
-        assert!(find_names_of_presets_to_suggest(&result).is_empty(), "a package.json kept for tooling named a test tool");
+        assert!(find_names_of_presets_to_suggest(&result, &[]).is_empty(), "a package.json kept for tooling named a test tool");
 
         std::fs::remove_dir_all(&root).unwrap();
     }

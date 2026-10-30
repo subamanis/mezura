@@ -17,10 +17,11 @@ pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
                 targets. Give the file by itself: mezura src/main.rs --explain",
                 config.engine.targets.len()));
     };
+    let display_path = crate::sources::format_path_outside_checkouts(&target.path, &config.view.target_checkouts);
     let path = Path::new(&target.path);
     if !path.is_file() {
-        return refuse(&format!("'--explain' answers for one file, and '{}' is not one. Give the \
-                file itself: mezura src/main.rs --explain", target.path));
+        return refuse(&format!("'--explain' answers for one file, and '{display_path}' is not one. Give the \
+                file itself: mezura src/main.rs --explain"));
     }
 
     // Refused, so that asking for one format never quietly hands back another
@@ -39,12 +40,14 @@ pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
                 the other.");
     }
 
-    match mezura_core::explain_file(path, &read_names_as_a_run_from_here_would(&config.engine), languages) {
-        Ok(explanation) => {
+    match mezura_core::explain_file(path,
+            &read_names_as_a_run_from_here_would(&config.engine, &config.view.target_checkouts), languages) {
+        Ok(mut explanation) => {
+            move_explanation_paths_out_of_checkouts(&mut explanation, &config.view.target_checkouts);
             if config.view.prints_text() {
-                print_text(&target.path, &explanation, config.view.counting, asked_for);
+                print_text(&display_path, &explanation, config.view.counting, asked_for);
             } else {
-                outln!("{}", build_json_document(&target.path, &explanation, config.view.counting));
+                outln!("{}", build_json_document(&display_path, &explanation, config.view.counting));
             }
             ExitCode::SUCCESS
         },
@@ -54,20 +57,45 @@ pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
                 false => " This run was given '--no-shebang', so a file with no extension is \
                         claimed by nothing."
             };
-            refuse(&format!("No language of this run claims '{}', \
+            refuse(&format!("No language of this run claims '{display_path}', \
                     so there is nothing to explain. If its language was narrowed away, drop \
                     '--languages' or '--exclude-languages'; if the extension is unknown, \
-                    '--force-language' hands it to a language.{read_no_first_line}",
-                    target.path))
+                    '--force-language' hands it to a language.{read_no_first_line}"))
         },
-        Err(ExplainError::UnreadableFile(reason)) => refuse(&format!("'{}' could not be read: \
-                {reason}", target.path)),
+        Err(ExplainError::UnreadableFile(reason)) => refuse(&format!("'{display_path}' could not be read: \
+                {reason}")),
         Err(ExplainError::LanguagesFromAnotherConfig) => refuse("The languages of this run were \
                 resolved against different settings, so the answer would be for the wrong \
                 selection."),
         // 'ExplainError' is non_exhaustive, so a reason added later stops here rather than in the
         // middle of a run
-        Err(other) => refuse(&format!("'{}' could not be explained: {other}", target.path))
+        Err(other) => refuse(&format!("'{display_path}' could not be explained: {other}"))
+    }
+}
+
+fn move_explanation_paths_out_of_checkouts(explanation: &mut FileExplanation,
+        checkouts: &[crate::config_manager::TargetCheckout])
+{
+    if checkouts.is_empty() {
+        return;
+    }
+    let out = |path: &mut String| *path = crate::sources::format_path_outside_checkouts(path, checkouts);
+    match &mut explanation.test_file_rule {
+        Some(TestFileRule::TestDirectory { directory, build_files }) => {
+            out(directory);
+            build_files.iter_mut().for_each(out);
+        },
+        Some(TestFileRule::Preset { presets, matched_folder }) => {
+            presets.iter_mut().for_each(|p| out(&mut p.directory));
+            matched_folder.iter_mut().for_each(out);
+        },
+        Some(TestFileRule::Declared { pattern, matched_folder }
+                | TestFileRule::DeclaredNotTests { pattern, matched_folder }) => {
+            *pattern = crate::sources::format_pattern_outside_checkouts(pattern, checkouts);
+            matched_folder.iter_mut().for_each(out);
+        },
+        Some(TestFileRule::DeclaredModule { declared_by }) => declared_by.iter_mut().for_each(out),
+        _ => ()
     }
 }
 
@@ -77,11 +105,24 @@ fn refuse(message: &str) -> ExitCode {
 }
 
 // The core applies the directory only to a file inside it, so nothing is checked here.
-fn read_names_as_a_run_from_here_would(engine: &EngineConfig) -> EngineConfig {
+fn read_names_as_a_run_from_here_would(engine: &EngineConfig,
+        checkouts: &[crate::config_manager::TargetCheckout]) -> EngineConfig
+{
     let mut engine = engine.clone();
     if engine.test_patterns.read_from.is_none() {
-        engine.test_patterns.read_from = std::env::current_dir().ok()
+        let working_dir = std::env::current_dir().ok()
                 .map(|dir| crate::paths::normalise_separators(&dir.to_string_lossy()).into_owned());
+        engine.test_patterns.read_from = match (working_dir, checkouts.first()) {
+            (Some(dir), Some(tc)) => {
+                let mapped = crate::sources::format_path_inside_checkouts(&dir, checkouts);
+                if mapped != dir {
+                    Some(mapped)
+                } else {
+                    Some(tc.checkout_root.clone())
+                }
+            },
+            (dir, _) => dir
+        };
     }
 
     engine
@@ -393,13 +434,13 @@ mod tests {
     fn a_name_typed_beside_explain_sees_what_a_run_from_the_working_dir_would_see() {
         let mut engine = EngineConfig::new(["src/main.rs"]);
         engine.test_patterns = PathPatterns::of(["mezura/src/"]);
-        let anchored = read_names_as_a_run_from_here_would(&engine);
+        let anchored = read_names_as_a_run_from_here_would(&engine, &[]);
         let working_dir = crate::paths::normalise_separators(&std::env::current_dir().unwrap().to_string_lossy()).into_owned();
         assert_eq!(Some(working_dir), anchored.test_patterns.read_from);
 
         let of_a_project = EngineConfig { test_patterns: PathPatterns { patterns: vec!["spec/".to_owned()],
                 read_from: Some("D:/proj".to_owned()), ..Default::default() }, ..engine.clone() };
-        assert_eq!(of_a_project, read_names_as_a_run_from_here_would(&of_a_project));
+        assert_eq!(of_a_project, read_names_as_a_run_from_here_would(&of_a_project, &[]));
 
         let parsed = mezura_core::language_file::parse_languages_in_dir(crate::paths::test_paths::CORE_LANGUAGES_DIR)
                 .unwrap().0;
@@ -409,6 +450,83 @@ mod tests {
         };
         assert!(explain(&anchored).lines.iter().all(|line| line.in_test), "the pattern did not reach the file");
         assert!(explain(&engine).lines.iter().any(|line| !line.in_test), "the name saw a folder above the file's own");
+    }
+
+    #[test]
+    fn the_paths_of_a_test_file_rule_are_moved_out_of_its_checkouts() {
+        let _guard = crate::git::GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join("mezura-explain-checkout-paths");
+        let _ = crate::git::remove_directory_tree(&root);
+        std::fs::create_dir_all(root.join("pkg/src")).unwrap();
+        std::fs::write(root.join("pkg/src/lib.rs"), "pub fn a() {}\n").unwrap();
+        let git = |arguments: &[&str]| {
+            let outcome = std::process::Command::new("git").arg("-C").arg(&root).args(arguments).output().unwrap();
+            assert!(outcome.status.success(), "git {arguments:?}: {}", String::from_utf8_lossy(&outcome.stderr));
+        };
+        git(&["init", "-q"]);
+        git(&["add", "."]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--no-verify", "-q", "-m", "c1"]);
+
+        let root_str = crate::paths::normalise_separators(&root.to_string_lossy()).into_owned();
+        let resolved = crate::git::resolve_revision(&root_str, "HEAD").unwrap();
+        let checkout = std::sync::Arc::new(crate::git::checkout(&resolved).unwrap());
+        let chk = checkout.path.clone();
+        let display = format!("{root_str}@HEAD");
+        let checkouts = [crate::config_manager::TargetCheckout {
+            checkout,
+            checkout_root: chk.clone(),
+            display_root: display.clone(),
+            repository: root_str.clone(),
+            remote_url: None,
+            commit: resolved.commit,
+            revision: "HEAD".to_owned()
+        }];
+
+        let mut engine = EngineConfig::new([format!("{chk}/pkg/src/lib.rs")]);
+        engine.test_patterns = PathPatterns::of(["pkg/"]);
+        let anchored = read_names_as_a_run_from_here_would(&engine, &checkouts);
+        assert_eq!(Some(chk.clone()), anchored.test_patterns.read_from);
+
+        let rewrite = |rule: TestFileRule| {
+            let mut explanation = FileExplanation { language: "Rust".to_owned(), identified_by: None,
+                    left_out_of_a_scan: None, test_file_rule: Some(rule),
+                    contents: String::new(), lines: Vec::new(), classes: LineClasses::default() };
+            move_explanation_paths_out_of_checkouts(&mut explanation, &checkouts);
+            explanation.test_file_rule.unwrap()
+        };
+
+        assert_eq!(TestFileRule::TestDirectory {
+            directory: format!("{display}/tests"),
+            build_files: vec![format!("{display}/Cargo.toml")]
+        }, rewrite(TestFileRule::TestDirectory {
+            directory: format!("{chk}/tests"),
+            build_files: vec![format!("{chk}/Cargo.toml")]
+        }));
+        assert_eq!(TestFileRule::Preset {
+            presets: vec![MatchedPreset { name: "pytest".to_owned(), directory: format!("{display}/pkg"),
+                    trigger_file: "pytest.ini".to_owned(), pattern: "test_*.py".to_owned(), configured_by: None }],
+            matched_folder: Some(format!("{display}/pkg/src"))
+        }, rewrite(TestFileRule::Preset {
+            presets: vec![MatchedPreset { name: "pytest".to_owned(), directory: format!("{chk}/pkg"),
+                    trigger_file: "pytest.ini".to_owned(), pattern: "test_*.py".to_owned(), configured_by: None }],
+            matched_folder: Some(format!("{chk}/pkg/src"))
+        }));
+        assert_eq!(TestFileRule::Declared {
+            pattern: format!("!{root_str}/pkg/"),
+            matched_folder: Some(format!("{display}/pkg"))
+        }, rewrite(TestFileRule::Declared {
+            pattern: format!("!{chk}/pkg/"),
+            matched_folder: Some(format!("{chk}/pkg"))
+        }));
+        assert_eq!(TestFileRule::DeclaredModule {
+            declared_by: vec![format!("{display}/pkg/src/lib.rs")]
+        }, rewrite(TestFileRule::DeclaredModule {
+            declared_by: vec![format!("{chk}/pkg/src/lib.rs")]
+        }));
+
+        drop(checkouts);
+        crate::git::await_checkout_removals();
+        crate::git::remove_directory_tree(&root).unwrap();
     }
 
     // Color is turned off because the manual comparison protocol exports CLICOLOR_FORCE and a test

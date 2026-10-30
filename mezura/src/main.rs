@@ -262,8 +262,9 @@ fn main() -> ExitCode {
     live.finish();
     record(Step::Run, at);
     match outcome {
-        Ok(result) => {
+        Ok(mut result) => {
             let at = stamp();
+            crate::sources::move_result_paths_out_of_checkouts(&mut result, &config.view.target_checkouts);
             // Beside a revision this run is one side of two, so a pattern reaching nothing says which
             let against_a_revision = counted_baseline.as_ref().is_some_and(crate::diff::CountedBaseline::is_a_revision);
             for warning in collect_warnings_to_emit(&result.warnings, &config.view.test_patterns_from_presets, against_a_revision) {
@@ -305,7 +306,8 @@ fn main() -> ExitCode {
         // wording is this crate's own, so that a configuration file which supplied the targets is
         // named as the culprit the reader cannot see failing.
         Err(mezura_core::RunError::InvalidTargets(inner)) => {
-            eprintln!("{}", crate::config_manager::attribute_targets_error(inner, &config.view.targets_source).format());
+            eprintln!("{}", crate::config_manager::attribute_targets_error_outside_checkouts(
+                    inner, &config.view.targets_source, &config.view.target_checkouts).format());
             ExitCode::FAILURE
         },
         Err(x) => {

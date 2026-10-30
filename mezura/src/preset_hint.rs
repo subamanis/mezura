@@ -20,7 +20,8 @@ const GENERIC_PROJECT_FILES : [GenericProjectFile; 4] = [
 const WORKSPACE_GLOBSTAR_DEPTH : usize = 3;
 
 // The file is read last, so a run that would print no hint reads nothing
-pub fn find_names_of_presets_to_suggest(result: &RunResult) -> Vec<Vec<&'static str>> {
+pub fn find_names_of_presets_to_suggest(result: &RunResult, on_disk_targets: &[mezura_core::Target]) -> Vec<Vec<&'static str>> {
+    let targets = if on_disk_targets.is_empty() { &result.targets } else { on_disk_targets };
     GENERIC_PROJECT_FILES.iter().filter_map(|generic| {
         let counted = generic.names_of_languages.iter()
                 .any(|name_of_language| result.per_language.contains_key(*name_of_language));
@@ -31,7 +32,7 @@ pub fn find_names_of_presets_to_suggest(result: &RunResult) -> Vec<Vec<&'static 
         if !counted || tests_found {
             return None;
         }
-        let contents = result.targets.iter().flat_map(|target| read_project_files_of(Path::new(&target.path), generic))
+        let contents = targets.iter().flat_map(|target| read_project_files_of(Path::new(&target.path), generic))
                 .collect::<Vec<_>>();
         let named = generic.words_by_name_of_preset.iter()
                 .filter(|(_, words)| words.iter().any(|word| contents.iter().any(|text| contains_word(text, word))))
@@ -172,7 +173,7 @@ mod tests {
             let typescript = crate::test_support::plain_stats_of(1, 40, 4, 3, 1, HashMap::new());
             let result = crate::test_support::plain_result_of(HashMap::from([("TypeScript".to_owned(), typescript)]),
                     Vec::new(), vec![Target::of(crate::paths::normalise_separators(&root.join(folder).to_string_lossy()))]);
-            find_names_of_presets_to_suggest(&result)
+            find_names_of_presets_to_suggest(&result, &[])
         };
         write("npm/package.json", r#"{"workspaces": ["packages/*", "!packages/legacy"], "devDependencies": {"prettier": "^3"}}"#);
         write("npm/packages/web/package.json", r#"{"devDependencies": {"jest": "^29"}}"#);

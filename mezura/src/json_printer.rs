@@ -480,12 +480,18 @@ fn create_keyword_triads(before: &HashMap<String, usize>, now: &HashMap<String, 
 // Only what can change a number: no theme, no layout, no separators. Without it, two documents that
 // differ by an '--exclude' look like a code change.
 fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target], applied_presets: &[AppliedPreset]) -> String {
+    let exclude = config.engine.exclude_patterns.patterns.iter()
+            .map(|pattern| super::sources::format_pattern_outside_checkouts(pattern, &config.view.target_checkouts))
+            .collect::<Vec<_>>();
+    let tests = config.engine.test_patterns.patterns.iter()
+            .map(|pattern| super::sources::format_pattern_outside_checkouts(pattern, &config.view.target_checkouts))
+            .collect::<Vec<_>>();
     let members = [
         // The resolved list off the result, not the declared one off the configuration: the same
         // './src' over two different trees is two different measurements
         format!("\"targets\":{}", create_targets_array(targets, config.view.hidden.modules)),
-        format!("\"exclude\":{}", create_string_array(&config.engine.exclude_patterns.patterns)),
-        format!("\"tests\":{}", create_string_array(&config.engine.test_patterns.patterns)),
+        format!("\"exclude\":{}", create_string_array(&exclude)),
+        format!("\"tests\":{}", create_string_array(&tests)),
         format!("\"languages\":{}", create_string_array(&config.engine.languages_of_interest.to_written_form())),
         format!("\"excluded_languages\":{}", create_string_array(&config.engine.excluded_languages.to_written_form())),
         // '--force-language m=matlab' decides which language a file is counted as, so it moves
@@ -1102,7 +1108,7 @@ mod tests {
         let datetime = DateTime::parse_from_rfc3339("2026-08-06T15:00:00+03:00").unwrap().with_timezone(&Local);
         let mut from = reading_of(crate::diff::Source::GitRevision {
                 commit: "030e6e72a1b4c9d8e7f6a5b4c3d2e1f0a9b8c7d6".to_owned(), asked_for: "v2.0.1".to_owned(),
-                repository: "D:/proj".to_owned() },
+                repository: "D:/proj".to_owned(), display_repository: "D:/proj".to_owned() },
                 hashmap!["Rust".to_owned() => stats_of(2, 3000, 100, 70, 10, hashmap!["structs".to_owned() => 3]),
                          "Java".to_owned() => stats_of(1, 400, 40, 30, 0, HashMap::new())]);
         from.result.targets = vec![mezura_core::Target::named("core", "D:/proj/src")];

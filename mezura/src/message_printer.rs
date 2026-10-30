@@ -35,6 +35,12 @@ pub const TARGETS_HELP  :  &str =
     exists exactly as written is taken literally, so a directory named with one of those characters
     is still a directory. A target inside another target is dropped, so nothing is counted twice.
 
+    A target can also be a local git revision ('./src@v3.1.0', or '@v3.2.0' for the current
+    directory) or a remote git repository URL ('https://github.com/owner/repo',
+    'https://github.com/owner/repo@v1.0', or 'git@github.com:owner/repo@main'), written out to a
+    temporary directory and counted with the project's own '.mezura' settings at that commit. A
+    folder or file that exists on disk with '@' in its name is taken as that path on disk.
+
     A path you write out is always counted, even if it is ignored, dotted, a link, minified,
     generated or not code. The matches of a pattern were found by mezura rather than named by you,
     so those are skipped like any other found path (see '--no-gitignore', '--search-in-dotted',
@@ -755,25 +761,30 @@ pub const DIFF_HELP  :  &str =
     what changed since an earlier run, or between two of them
 
     One argument: a reading, or two of them with '..' between, oldest first. A reading is the
-    path of a JSON document that an earlier run wrote, or a git revision: a branch, a tag, or
-    enough of a commit hash to be unique.
+    path of a JSON document that an earlier run wrote, a git revision (a branch, a tag, or enough
+    of a commit hash to be unique), a local path at a revision ('<path>@<revision>'), or a remote
+    git repository URL ('https://...', 'ssh://...', 'git://...' or 'user@host:path', optionally
+    ending in '@<revision>').
 
     The comparison takes the place of the report rather than sitting under it.
 
       mezura ./src --output json > baseline.json
       mezura ./src --diff baseline.json
       mezura ./src --diff main
+      mezura ./src --diff ./other-branch@main
       mezura ./src --diff v2.0.1..v3.0.0
+      mezura https://github.com/owner/repo --diff v1.0..v2.0
       mezura --diff january.json..june.json
 
-    A name that is a file on disk is read as a document, anything else is asked of git, which
-    resolves 'origin/main' as readily as a tag. Only one '..' is allowed and it is always the
-    separator, so '--diff ../old.json' works while a path climbing twice is refused.
+    A name that is a file on disk is read as a document, a remote URL is fetched into a temporary
+    repository, and anything else is asked of git in the target's repository, which resolves
+    'origin/main' as readily as a tag. Only one '..' is allowed and it is always the separator, so
+    '--diff ../old.json' works while a path climbing twice is refused.
 
     A revision is counted on the spot with this run's settings and targets, so 'mezura ./src
-    --diff main' counts what './src' held on 'main'. It must already be fetched, and every target
-    must be in one git repository. A directory the revision does not have counts as zero, so all
-    of it reads as new.
+    --diff main' counts what './src' held on 'main'. For a local revision, every target must be in
+    one git repository. A directory the revision does not have counts as zero, so all of it reads
+    as new.
 
     Counting a revision is slower, since the commit is written out to a temporary directory
     first. Size can move there while no line did, when git gives the checkout different line
