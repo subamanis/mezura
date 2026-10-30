@@ -61,13 +61,13 @@ Things it does that most counters do not:
   by the test marks inside the code, by what the toolchain names as a test, by what a build tool compiles for tests, and by the
   default test names of a tool whose own file is in the project. It also gives you manual control for marking or unmarking code
   as test code, with the `--tests` command. See [Test code](#test-code).
+- **Local revisions and remote repositories.** Count or diff any local git revision (`@v1.0`, `./src@main`) or any remote repository directly by its URL (`https://github.com/owner/repo`, `git@github.com:owner/repo@v2.0`) without cloning it yourself first.
 - **Keyword counting.** Occurrences of words you pick per language, classes, structs, traits,
   anything, counted only where they appear as code.
 - **Nested languages.** The `<script>` and `<style>` blocks of HTML, Vue, Svelte and Astro files are
   counted as the distinct languages they hold.
 - **Modules.** Give a name to parts of a project and the report is grouped by these parts as well as by
   language. This way you can split your project into e.g. Frontend and Backend and see distinct reports for each module in the same table in the same run. See [Modules](#modules).
-- **Local revisions and remote repositories.** Count or diff any local git revision (`@v1.0`, `./src@main`) or any remote repository directly by its URL (`https://github.com/owner/repo`, `git@github.com:owner/repo@v2.0`) without cloning it yourself first.
 - **Track the history of your codebase.** Log runs and compare against earlier ones, or diff against a git revision.   See [Tracking growth](#tracking-growth).
 - **Diff view of git revisions, remote repositories or json files.** You can see the diff between the current state and a git revision, between two local or remote revisions, or against an earlier run that was saved in a json file. See [Diffs](#diffs).
 - **Two counting models to pick from.** By default a line counts by what it says: a blank line inside a comment
