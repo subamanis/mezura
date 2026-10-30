@@ -1385,7 +1385,8 @@ pl      Perl, Prolog
         let ruby = shipped("Ruby.txt");
         assert_eq!((vec![pair("=begin", "=end")], 0), (ruby.line_start_comments, ruby.multiline_comments.len()));
         let matlab = shipped("MATLAB.txt");
-        assert_eq!((vec![pair("%{", "%}")], 0), (matlab.whole_line_comments, matlab.nesting_comments.len()));
+        assert_eq!((vec![pair("%{", "%}"), pair("#{", "#}")], 0),
+                (matlab.whole_line_comments, matlab.nesting_comments.len()));
     }
 
     #[test]

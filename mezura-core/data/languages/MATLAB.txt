@@ -5,7 +5,7 @@ Extensions
 m
 
 Identifying line starts
-function, classdef, %%
+function, classdef, %%, ##
 
 String symbols
 " '
@@ -14,11 +14,11 @@ Escape character
 none
 
 Comment symbols
-%
+% #
 Whole-line comment start
-%{
+%{ #{
 Whole-line comment end
-%}
+%} #}
 
 Keyword
 NAME

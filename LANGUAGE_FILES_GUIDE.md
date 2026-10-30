@@ -219,10 +219,10 @@ down to the closing one is comment, both of those whole, and the opening line ne
 how Perl reads a `=cut` met in code. An indented symbol is code outside the block and text inside
 it. Inside the block nothing is read, so an apostrophe in the documentation opens no string.
 
-MATLAB's `%{` and `%}` count only as the whole of a line, spaces and tabs around them aside, and are
-declared under `Whole-line comment start` and `Whole-line comment end`, after the line-start ones. A
-`%{ a note` is an ordinary `%` line comment, a `%} not yet` inside a block is text, and the blocks
-nest, a closer ending only the innermost one.
+MATLAB's `%{` and `%}` (and Octave's `#{` and `#}`) count only as the whole of a line, spaces and
+tabs around them aside, and are declared under `Whole-line comment start` and `Whole-line comment
+end`, after the line-start ones. A `%{ a note` is an ordinary `%` line comment, a `%} not yet`
+inside a block is text, and the blocks nest, a closer ending only the innermost one.
 
 ## When a symbol is part of something longer
 

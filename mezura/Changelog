@@ -12,6 +12,10 @@ Change in commands:
       working directory.
   -> '--hide modules' prints a configuration or run with named modules as a single flat report.
 
+Other:
+  -> MATLAB now also counts GNU Octave's '#' line comments and '#{' / '#}' block comments, and
+      recognises '##' headers when settling '.m' files.
+
 -----------------------------------------------------------------------------------------------------------
 
 v3.3.0 - 2026-10-29
