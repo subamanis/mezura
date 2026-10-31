@@ -183,11 +183,11 @@ fn print_test_preset_notes(result: &RunResult, config: &Configuration) {
         return;
     }
     let lines = collect_test_preset_notes(result, config);
+    for line in &lines {
+        eprintln!("{}", super::theme::get_active().note.paint(line));
+    }
     if !lines.is_empty() {
         eprintln!();
-    }
-    for line in lines {
-        eprintln!("{}", super::theme::get_active().note.paint(&line));
     }
 }
 

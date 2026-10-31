@@ -174,6 +174,8 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
         if !config.view.hidden.overview && theme.has_colored_language_slots() {
             print_visual_overview(&global_names, &shown.per_language, &shown.total, config);
         }
+    } else if !is_table {
+        outln!();
     }
 
     // A log of nothing but whitespace has nothing to compare against, and the section would be a

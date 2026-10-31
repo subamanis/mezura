@@ -30,3 +30,6 @@ temp/
 target-pgo/
 pgo-data/
 pgo.profdata
+screenshots/.capture-config.json
+screenshots/__pycache__/
+screenshots/new/

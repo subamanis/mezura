@@ -208,7 +208,7 @@ fn main() -> ExitCode {
                     // The exec time alone, without the parsing figures: those describe one scan, and
                     // a comparison had up to two
                     if config.view.prints_text() && !config.view.hidden.timing {
-                        outln!("\n{}", crate::theme::get_active().footer.paint(&format_exec_time(&instant)));
+                        outln!("{}", crate::theme::get_active().footer.paint(&format_exec_time(&instant)));
                     }
                     ExitCode::SUCCESS
                 },
@@ -297,7 +297,7 @@ fn main() -> ExitCode {
                 } else {
                     String::new()
                 };
-                outln!("\n{}",crate::theme::get_active().footer.paint(&(perf + &metrics)));
+                outln!("{}",crate::theme::get_active().footer.paint(&(perf + &metrics)));
             }
             record(Step::Printing, at);
             ExitCode::SUCCESS
