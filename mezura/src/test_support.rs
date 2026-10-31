@@ -1,6 +1,16 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use mezura_core::{FilesPresent, LineClasses, ModuleResult, Performance, RunResult, Stats, Target, Threads};
+
+pub struct LocalSshGuard(PathBuf);
+
+impl Drop for LocalSshGuard {
+    fn drop(&mut self) {
+        *crate::git::TEST_GIT_SSH.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
 
 // The lines are the classes added up and are never passed in: a hand written pair that disagreed
 // would print a third column holding a number no class accounts for.
@@ -33,4 +43,28 @@ pub fn plain_result_of(per_language: HashMap<String, Stats>, modules: Vec<Module
         applied_presets: Vec::new(), files_present: FilesPresent { total_files: 2, relevant_files: 2, excluded_files: 0 },
         performance: Performance { duration_millis: 0, threads: Threads::new(1, 1) }
     }
+}
+
+pub fn install_local_ssh_helper() -> LocalSshGuard {
+    let path = if cfg!(windows) {
+        let path = std::env::temp_dir().join("mezura-test-git-ssh.bat");
+        std::fs::write(&path,
+                "@echo off\r\n\
+                 if \"%1\"==\"-G\" exit /b 1\r\n\
+                 for /f \"tokens=2 delims='\" %%p in (%2) do set \"p=%%p\"\r\n\
+                 if \"%p:~0,1%\"==\"/\" if \"%p:~2,1%\"==\":\" set \"p=%p:~1%\"\r\n\
+                 git upload-pack \"%p%\"\r\n").unwrap();
+        path
+    } else {
+        let path = std::env::temp_dir().join("mezura-test-git-ssh.sh");
+        std::fs::write(&path, "#!/bin/sh\n[ \"$1\" = \"-G\" ] && exit 1\neval \"exec $2\"\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        path
+    };
+    *crate::git::TEST_GIT_SSH.lock().unwrap_or_else(|e| e.into_inner()) = Some(path.to_string_lossy().into_owned());
+    LocalSshGuard(path)
 }

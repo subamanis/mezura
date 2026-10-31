@@ -2884,7 +2884,7 @@ fn find_settings_changed_since(entry: &super::log::LogEntry, config: &Configurat
     // the project. The same tree counted from two checkouts of it is one measurement, and only
     // spelling it absolutely would make the two look different.
     let project = config.view.find_project_of_the_log();
-    let compare_modules = !config.view.hidden.modules && targets.iter().any(|target| target.module.is_some());
+    let compare_modules = !config.view.hidden.modules;
     let as_recorded = |targets: &[mezura_core::Target]| {
         let mut sorted = targets.iter().map(|target| mezura_core::Target {
             module: target.module.clone().filter(|_| compare_modules),
@@ -4656,6 +4656,9 @@ mod tests {
         assert!(find_settings_changed_since(&entry, &config, &result.targets).is_empty());
         config.view.hidden.modules = false;
         assert_eq!(vec!["targets"], find_settings_changed_since(&entry, &config, &result.targets));
+        let entry_with_modules = crate::log::LogEntry { targets: result.targets.clone(), ..entry };
+        let unnamed_targets = [mezura_core::Target::of("D:/proj/core"), mezura_core::Target::of("D:/proj/cli")];
+        assert_eq!(vec!["targets"], find_settings_changed_since(&entry_with_modules, &config, &unnamed_targets));
     }
 
     #[test]

@@ -1,5 +1,25 @@
 # Changelog
 
+## 2.1.0, unreleased
+
+New:
+
+- `validate_target`, which checks whether a single `Target` names a place that `run` will visit under
+  an `EngineConfig`, stopping at the first surviving match of a glob pattern.
+- `StringRules::with_line_strings` and `Language::get_line_strings` for line string prefixes (such as
+  Zig's `\\`) that make the rest of their line a string literal, parsed from the `Line string
+  symbols:` block of a language file.
+- `Threads::default` obeys process CPU affinity on Windows and cgroups v2 CPU quotas on Linux.
+- MATLAB counts GNU Octave's `#` line comments and `#{` / `#}` block comments, and recognises `##`
+  headers when settling `.m` files.
+
+Fixes:
+
+- Glob target patterns skip files inside dotted directories matched by their wildcards unless
+  `EngineConfig::should_search_in_dotted` is set, and always skip `.git`.
+- Blank and comment lines between the closing brace of a test-marked `if` arm and its `else` stay in
+  the test extent when code follows the `else` arm on its closing line.
+
 ## 2.0.0, 2026-10-29
 
 New:

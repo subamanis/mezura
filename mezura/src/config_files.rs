@@ -275,8 +275,10 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         None => false
     };
 
+    let working_dir = (!saved_targets && relative_to.is_none()).then(crate::paths::find_working_directory).flatten();
+    let pattern_base = relative_to.or(working_dir.as_deref());
     let format_patterns = |patterns: &mezura_core::PathPatterns|
-            config_manager::format_patterns_inside(relative_to, &patterns.patterns).join(",");
+            config_manager::format_patterns_inside(pattern_base, &patterns.patterns).join(",");
     if let Some(exclude_patterns) = &config_builder.exclude_patterns {
         write_block(&mut writer, config_manager::EXCLUDE, &format_patterns(exclude_patterns))?;
     }
@@ -525,7 +527,7 @@ mod tests {
                 --count-not-code --no-heuristics --no-shebang --tests-breakdown split \
                 --tests spec, !spec/fixtures, ./gen, @xt \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
-        let config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
+        let mut config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
 
         std::fs::create_dir_all(SCRATCH_CONFIG_DIR)?;
         let test_config_dir = Some(SCRATCH_CONFIG_DIR.to_owned());
@@ -566,6 +568,17 @@ mod tests {
         assert_eq!(Some(vec!["json".to_owned(), "web/xml".to_owned()]), options.excluded_languages);
         assert_eq!(config_builder.styles, options.config_styles);
         assert_eq!(3, options.config_styles.as_ref().unwrap().len());
+
+        // A settings bundle with no targets writes its path patterns relative to the working
+        // directory, so that loading it from another directory does not point back at this one
+        config_builder.targets = None;
+        super::super::config_files::save_existing_commands_from_config_builder_to_file(
+                Some(SCRATCH_CONFIG_DIR.to_owned()), "untargeted-bundle", None, &config_builder)?;
+        let (bundle_options, _) = super::super::config_files::parse_config_file(
+                Some("untargeted-bundle"), Some(SCRATCH_CONFIG_DIR.to_owned())).unwrap();
+        let _ = std::fs::remove_file(SCRATCH_CONFIG_DIR.to_owned() + "untargeted-bundle.txt");
+        assert_eq!(Some(mezura_core::PathPatterns::of(["spec", "!spec/fixtures", "./gen", "xt/"])),
+                bundle_options.test_patterns);
 
         Ok(())
     }

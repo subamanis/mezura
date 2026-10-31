@@ -41,7 +41,7 @@ static PENDING_REMOVALS : Mutex<Vec<(String, JoinHandle<()>)>> = Mutex::new(Vec:
 static REMOTE_HOLDERS : Mutex<Vec<String>> = Mutex::new(Vec::new());
 static NEXT_CHECKOUT_ID : AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
-static TEST_GIT_SSH : Mutex<Option<String>> = Mutex::new(None);
+pub(crate) static TEST_GIT_SSH : Mutex<Option<String>> = Mutex::new(None);
 #[cfg(test)]
 pub(crate) static GIT_TEST_LOCK : Mutex<()> = Mutex::new(());
 
@@ -126,7 +126,7 @@ pub fn parse_target_spec(raw: &str) -> Result<TargetSpec, GitError> {
         return Ok(TargetSpec::Remote(remote));
     }
     if let Some((before_at, after_at)) = trimmed.rsplit_once('@') {
-        if after_at.is_empty() {
+        if after_at.is_empty() && !before_at.is_empty() {
             return Err(GitError::EmptyRevision { target: trimmed.to_owned() });
         }
         // A pattern over filenames containing '@' (such as 'src/*@*.rs' or 'src/@types/*.ts') is a
@@ -138,9 +138,14 @@ pub fn parse_target_spec(raw: &str) -> Result<TargetSpec, GitError> {
             return Err(GitError::PatternTarget { pattern: trimmed.to_owned() });
         }
         let path = if before_at.is_empty() { ".".to_owned() } else { before_at.to_owned() };
+        let revision = if after_at.is_empty() || after_at.starts_with(['~', '^']) {
+            format!("HEAD{after_at}")
+        } else {
+            after_at.to_owned()
+        };
         let absolute = mezura_core::convert_to_absolute(&path);
-        let display = format!("{absolute}@{after_at}");
-        return Ok(TargetSpec::LocalRevision { path, revision: after_at.to_owned(), display });
+        let display = format!("{absolute}@{revision}");
+        return Ok(TargetSpec::LocalRevision { path, revision, display });
     }
 
     Ok(TargetSpec::LocalPath(trimmed.to_owned()))
@@ -189,6 +194,21 @@ pub fn format_revision_label(asked_for: &str) -> String {
 pub fn strip_dot_git(text: &str) -> &str {
     let trimmed = text.trim_end_matches('/');
     trimmed.strip_suffix(".git").unwrap_or(trimmed)
+}
+
+pub fn strip_url_credentials(url: &str) -> String {
+    let Some((scheme, after_scheme)) = url.split_once("://") else {
+        return url.to_owned();
+    };
+    let slash_at = after_scheme.find('/').unwrap_or(after_scheme.len());
+    let (authority, rest) = (&after_scheme[..slash_at], &after_scheme[slash_at..]);
+    if let Some((userinfo, host)) = authority.rsplit_once('@')
+            && !host.is_empty()
+            && (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+                    || userinfo.contains(':')) {
+        return format!("{scheme}://{host}{rest}");
+    }
+    url.to_owned()
 }
 
 // The repository a path belongs to, and where the path sits inside it. Both come from git: the
@@ -425,8 +445,10 @@ fn clear_readonly_recursively(path: &Path) {
 }
 
 fn remove_leftover_remotes() {
+    let temp = std::env::temp_dir();
     let ours = format!("-{}", std::process::id());
-    remove_leftover_holders(&std::env::temp_dir(), REMOTE_PREFIX, &ours);
+    remove_leftover_holders(&temp, REMOTE_PREFIX, &ours);
+    remove_leftover_holders(&temp, CHECKOUT_PREFIX, &ours);
 }
 
 fn remove_leftover_holders(temp: &Path, prefix: &str, ours: &str) {
@@ -441,7 +463,7 @@ fn remove_leftover_holders(temp: &Path, prefix: &str, ours: &str) {
 }
 
 fn ensure_remote_repository(url: &str, repo_name: &str) -> Result<String, GitError> {
-    let hash = hash_to_twelve_hex(strip_dot_git(url));
+    let hash = hash_to_twelve_hex(strip_dot_git(&strip_url_credentials(url)));
     let holder = normalise_separators(&std::env::temp_dir().join(format!("{REMOTE_PREFIX}{hash}-{}",
             std::process::id())).to_string_lossy()).into_owned();
     let repo_dir = format!("{holder}/{repo_name}");
@@ -473,9 +495,13 @@ fn ensure_remote_repository(url: &str, repo_name: &str) -> Result<String, GitErr
 
 fn fetch_revision_into_remote(repo_dir: &str, url: &str, revision: Option<&str>) -> Result<ResolvedRevision, GitError> {
     let asked = revision.unwrap_or("HEAD");
+    let display_repo = strip_dot_git(&strip_url_credentials(url)).to_owned();
     let primary = run_remote_git(repo_dir, &["fetch", "--depth", "1", "--quiet", "--no-tags", "origin", asked])?;
     if primary.status.success()
             && let Some(resolved) = pin_fetched_commit(repo_dir, "FETCH_HEAD^{commit}", asked)? {
+        if asked == "HEAD" {
+            let _ = Command::new("git").args(["-C", repo_dir, "update-ref", "--no-deref", "HEAD", &resolved.commit]).output();
+        }
         return Ok(resolved);
     }
 
@@ -488,6 +514,7 @@ fn fetch_revision_into_remote(repo_dir: &str, url: &str, revision: Option<&str>)
         }
         fetch_args.extend(["--tags", "--quiet", "origin", "+refs/heads/*:refs/heads/*", "+HEAD:refs/mezura/head"]);
         if run_remote_git(repo_dir, &fetch_args)?.status.success() {
+            let _ = Command::new("git").args(["-C", repo_dir, "update-ref", "--no-deref", "HEAD", "refs/mezura/head"]).output();
             let candidate = asked.strip_prefix("HEAD")
                     .map_or_else(|| asked.to_owned(), |rest| format!("refs/mezura/head{rest}"));
             if let Some(resolved) = pin_fetched_commit(repo_dir, &format!("{candidate}^{{commit}}"), asked)?
@@ -495,14 +522,14 @@ fn fetch_revision_into_remote(repo_dir: &str, url: &str, revision: Option<&str>)
                 return Ok(resolved);
             }
             return Err(GitError::NoSuchRemoteRevision { revision: asked.to_owned(),
-                    repository: strip_dot_git(url).to_owned() });
+                    repository: display_repo });
         }
     }
 
-    let message = String::from_utf8_lossy(&primary.stderr).trim().to_owned();
+    let message = strip_url_credentials(String::from_utf8_lossy(&primary.stderr).trim());
     if revision.is_some() && is_missing_remote_ref_error(&message) {
         return Err(GitError::NoSuchRemoteRevision { revision: asked.to_owned(),
-                repository: strip_dot_git(url).to_owned() });
+                repository: display_repo });
     }
 
     Err(GitError::Refused { doing: "fetching the remote repository", message })
@@ -533,7 +560,8 @@ fn pin_fetched_commit(repo_dir: &str, object: &str, revision: &str) -> Result<Op
 fn build_remote_spec(prefix: &str, separator: &str, path_part: &str, full_raw: &str) -> Result<RemoteSpec, GitError> {
     let (repo_path, revision) = split_revision_suffix(path_part, full_raw)?;
     let url = format!("{prefix}{separator}{repo_path}");
-    let display_base = strip_dot_git(&url);
+    let clean_url = strip_url_credentials(&url);
+    let display_base = strip_dot_git(&clean_url);
     let display = match &revision {
         Some(rev) => format!("{display_base}@{rev}"),
         None => display_base.to_owned()
@@ -578,8 +606,10 @@ fn is_missing_remote_ref_error(stderr: &str) -> bool {
 fn split_revision_suffix<'a>(path_part: &'a str, full_raw: &str) -> Result<(&'a str, Option<String>), GitError> {
     match path_part.rsplit_once('@') {
         Some((_, "")) => Err(GitError::EmptyRevision { target: full_raw.to_owned() }),
-        Some((before, rev)) if !before.trim_matches('/').is_empty() =>
-                Ok((before.trim_end_matches('/'), Some(rev.to_owned()))),
+        Some((before, rev)) if !before.trim_matches('/').is_empty() => {
+            let revision = if rev.starts_with(['~', '^']) { format!("HEAD{rev}") } else { rev.to_owned() };
+            Ok((before.trim_end_matches('/'), Some(revision)))
+        },
         _ => Ok((path_part.trim_end_matches('/'), None))
     }
 }
@@ -758,6 +788,14 @@ mod tests {
                 "a folder that exists on disk with '@' in its name was split as a revision");
         std::fs::remove_dir_all(&on_disk).unwrap();
 
+        assert!(matches!(parse_target_spec("@").unwrap(),
+                TargetSpec::LocalRevision { ref path, ref revision, .. } if path == "." && revision == "HEAD"));
+        assert!(matches!(parse_target_spec("@~1").unwrap(),
+                TargetSpec::LocalRevision { ref path, ref revision, .. } if path == "." && revision == "HEAD~1"));
+        assert!(matches!(parse_target_spec("@^").unwrap(),
+                TargetSpec::LocalRevision { ref path, ref revision, .. } if path == "." && revision == "HEAD^"));
+        assert!(matches!(parse_target_spec("./src@~1").unwrap(),
+                TargetSpec::LocalRevision { ref path, ref revision, .. } if path == "./src" && revision == "HEAD~1"));
         assert!(matches!(parse_target_spec("@v3.2.0").unwrap(),
                 TargetSpec::LocalRevision { ref path, ref revision, .. } if path == "." && revision == "v3.2.0"));
         assert!(matches!(parse_target_spec("./mezura-core@v3.1.0").unwrap(),
@@ -766,10 +804,17 @@ mod tests {
                 TargetSpec::Remote(RemoteSpec { ref url, ref repo_name, ref revision, ref display })
                 if url == "https://github.com/owner/repo.git" && repo_name == "repo"
                         && revision.as_deref() == Some("v1.0") && display == "https://github.com/owner/repo@v1.0"));
+        assert!(matches!(parse_target_spec("https://github.com/owner/repo@~1").unwrap(),
+                TargetSpec::Remote(RemoteSpec { ref revision, ref display, .. })
+                if revision.as_deref() == Some("HEAD~1") && display == "https://github.com/owner/repo@HEAD~1"));
         assert!(matches!(parse_target_spec("https://token@github.com/owner/repo").unwrap(),
                 TargetSpec::Remote(RemoteSpec { ref url, ref repo_name, ref revision, ref display })
                 if url == "https://token@github.com/owner/repo" && repo_name == "repo"
-                        && revision.is_none() && display == "https://token@github.com/owner/repo"));
+                        && revision.is_none() && display == "https://github.com/owner/repo"));
+        assert!(matches!(parse_target_spec("https://x-access-token:secret@github.com/owner/repo.git@v1.0").unwrap(),
+                TargetSpec::Remote(RemoteSpec { ref url, ref repo_name, ref revision, ref display })
+                if url == "https://x-access-token:secret@github.com/owner/repo.git" && repo_name == "repo"
+                        && revision.as_deref() == Some("v1.0") && display == "https://github.com/owner/repo@v1.0"));
         assert!(matches!(parse_target_spec("git@github.com:owner/repo.git@main").unwrap(),
                 TargetSpec::Remote(RemoteSpec { ref url, ref repo_name, ref revision, ref display })
                 if url == "git@github.com:owner/repo.git" && repo_name == "repo"
@@ -789,11 +834,15 @@ mod tests {
         let head = resolve_revision(&root, "HEAD").unwrap();
         assert_ne!(initial_commit.commit, first_tag.commit);
         assert_ne!(first_tag.commit, head.commit);
-        let _ssh_guard = install_local_ssh_helper();
+        let _ssh_guard = crate::test_support::install_local_ssh_helper();
+
+        let killed_checkout = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + "0123456789ab-1");
+        std::fs::create_dir_all(&killed_checkout).unwrap();
 
         let base_url = format!("ssh://local/{root}");
         let by_head = parse_remote_spec(&base_url).unwrap().unwrap();
         assert_eq!(head.commit, fetch_remote_revision(&by_head).unwrap().commit);
+        assert!(!killed_checkout.exists(), "a leftover checkout from an interrupted remote run was not swept");
 
         // Fetching an untagged older commit by short hash after a shallow HEAD fetch must unshallow
         // the commit graph on the existing bare repository
@@ -804,6 +853,8 @@ mod tests {
 
         let by_relative = parse_remote_spec(&format!("{base_url}@HEAD~1")).unwrap().unwrap();
         assert_eq!(first_tag.commit, fetch_remote_revision(&by_relative).unwrap().commit);
+        assert_eq!(head.commit, resolve_revision(&resolved.repository, "HEAD").unwrap().commit,
+                "HEAD in the bare repository resolved to a stale default branch instead of the remote's HEAD");
 
         let by_tag = parse_remote_spec(&format!("{base_url}@v1.0")).unwrap().unwrap();
         assert_eq!(first_tag.commit, fetch_remote_revision(&by_tag).unwrap().commit);
@@ -813,8 +864,15 @@ mod tests {
         let repo_dir = resolved.repository.clone();
         drop(checkout);
         await_checkout_removals();
+
+        let blobless_first = ensure_remote_repository(&by_head.url, "blobless-first").unwrap();
+        assert_eq!(first_tag.commit, fetch_revision_into_remote(&blobless_first, &by_head.url, Some("HEAD~1")).unwrap().commit);
+        assert_eq!(head.commit, resolve_revision(&blobless_first, "HEAD").unwrap().commit);
+        await_checkout_removals();
+
         remove_directory_tree(&repo).unwrap();
         assert!(!Path::new(&repo_dir).exists(), "the temporary remote repository outlived the run");
+        assert!(!Path::new(&blobless_first).exists(), "the fallback remote repository outlived the run");
     }
 
     fn create_test_repository(name: &str) -> std::path::PathBuf {
@@ -833,6 +891,9 @@ mod tests {
         git(&["config", "uploadpack.allowAnySHA1InWant", "true"]);
         git(&["add", "."]);
         git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--no-verify", "-q", "-m", "c0"]);
+        git(&["checkout", "-q", "-b", "develop"]);
+        git(&["branch", "-f", "master", "HEAD"]);
+        git(&["branch", "-f", "main", "HEAD"]);
         std::fs::write(root.join("mezura/src/main.rs"), "fn main() {\n    let _ = 0;\n}\n").unwrap();
         git(&["add", "."]);
         git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--no-verify", "-q", "-m", "c1"]);
@@ -841,38 +902,5 @@ mod tests {
         git(&["add", "."]);
         git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--no-verify", "-q", "-m", "c2"]);
         root
-    }
-
-    struct LocalSshGuard(std::path::PathBuf);
-
-    impl Drop for LocalSshGuard {
-        fn drop(&mut self) {
-            *TEST_GIT_SSH.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
-
-    fn install_local_ssh_helper() -> LocalSshGuard {
-        let path = if cfg!(windows) {
-            let path = std::env::temp_dir().join("mezura-test-git-ssh.bat");
-            std::fs::write(&path,
-                    "@echo off\r\n\
-                     if \"%1\"==\"-G\" exit /b 1\r\n\
-                     for /f \"tokens=2 delims='\" %%p in (%2) do set \"p=%%p\"\r\n\
-                     if \"%p:~0,1%\"==\"/\" if \"%p:~2,1%\"==\":\" set \"p=%p:~1%\"\r\n\
-                     git upload-pack \"%p%\"\r\n").unwrap();
-            path
-        } else {
-            let path = std::env::temp_dir().join("mezura-test-git-ssh.sh");
-            std::fs::write(&path, "#!/bin/sh\n[ \"$1\" = \"-G\" ] && exit 1\neval \"exec $2\"\n").unwrap();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-            }
-            path
-        };
-        *TEST_GIT_SSH.lock().unwrap_or_else(|e| e.into_inner()) = Some(path.to_string_lossy().into_owned());
-        LocalSshGuard(path)
     }
 }

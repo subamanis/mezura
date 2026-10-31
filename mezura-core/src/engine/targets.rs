@@ -153,6 +153,38 @@ pub fn validate_and_absolutize(declared: &[Target]) -> Result<Vec<Target>, Targe
     Ok(prepared)
 }
 
+/// Checks whether a single target names a place that [`crate::run`] will visit under `config`,
+/// expanding a pattern only far enough to find its first surviving match.
+///
+/// A literal path needs only to exist on disk; a pattern must parse and have at least one match
+/// left after the ignore files, dotted entries and links `config` skips have been taken out.
+pub fn validate_target(target: &Target, config: &crate::EngineConfig) -> Result<(), TargetError> {
+    let trimmed = target.path.trim();
+    if is_valid_path(trimmed) {
+        return Ok(());
+    }
+    if !has_glob_metacharacters(trimmed) {
+        return Err(TargetError::InvalidPath(trimmed.to_owned()));
+    }
+    let pattern = absolutize_pattern(trimmed);
+    let Ok(paths) = glob::glob(&pattern) else {
+        return Err(TargetError::InvalidGlob(pattern));
+    };
+    let base_depth = pattern_base_depth(&pattern);
+    let obeyed = crate::ObeyedIgnoreFiles::of(config);
+    let mut matched_any = false;
+    for path in paths.flatten().filter(|x| x.is_dir() || x.is_file()) {
+        matched_any = true;
+        if is_relevant_glob_match(&path, base_depth, obeyed, config.should_search_in_dotted) {
+            return Ok(());
+        }
+    }
+    match matched_any {
+        true => Err(TargetError::AllGlobMatchesIgnored(pattern)),
+        false => Err(TargetError::NoGlobMatches(pattern))
+    }
+}
+
 // Two names over one path is not something a rule can settle: there is no more specific one of the
 // two, and whichever won would take the other's files away without a word.
 fn find_contested_target(targets: &[Target]) -> Result<(), TargetError> {
@@ -278,10 +310,6 @@ fn expand_patterns(targets: Vec<Target>, obeyed: crate::ObeyedIgnoreFiles, searc
         names_roots: &mut HashMap<String, usize>)
 -> Result<Vec<Target>, TargetError>
 {
-    fn is_dotted(path: &Path) -> bool {
-        path.file_name().and_then(|x| x.to_str()).is_some_and(|x| x.starts_with('.'))
-    }
-
     let mut resolved = Vec::with_capacity(targets.len());
     for target in targets {
         // Existence decides here too: prepared targets come back through this on the second
@@ -295,14 +323,10 @@ fn expand_patterns(targets: Vec<Target>, obeyed: crate::ObeyedIgnoreFiles, searc
                 return Err(TargetError::NoGlobMatches(target.path));
             }
 
+            let base_depth = pattern_base_depth(&target.path);
             let names_root = find_names_root_of_pattern(&target.path);
             let relevant = matches.iter()
-                    .filter(|x| search_in_dotted || !is_dotted(x))
-                    .filter(|x| !GitignoreStack::is_path_ignored(x, obeyed))
-                    // A pattern is not a name: what it matched was found by the program, and a link
-                    // the walk finds is skipped, since it counts whatever it points at a second
-                    // time. Named on its own it is still followed, as any target is.
-                    .filter(|x| !x.is_symlink())
+                    .filter(|x| is_relevant_glob_match(x, base_depth, obeyed, search_in_dotted))
                     .filter_map(|x| x.to_str().map(convert_to_absolute))
                     .map(|path| Target { module: target.module.clone(), path }).collect::<Vec<_>>();
             if relevant.is_empty() {
@@ -322,6 +346,34 @@ fn expand_patterns(targets: Vec<Target>, obeyed: crate::ObeyedIgnoreFiles, searc
     find_contested_target(&resolved)?;
 
     Ok(remove_overlapping_targets(resolved))
+}
+
+fn pattern_base_depth(pattern: &str) -> usize {
+    let wildcard = pattern.find(WILDCARDS).unwrap_or(pattern.len());
+    match pattern[..wildcard].rfind('/') {
+        Some(slash) => Path::new(&pattern[..=slash]).components()
+                .filter(|c| !matches!(c, Component::CurDir)).count(),
+        None => 0
+    }
+}
+
+fn is_dotted_below_base(path: &Path, base_depth: usize, search_in_dotted: bool) -> bool {
+    path.components().filter(|c| !matches!(c, Component::CurDir)).skip(base_depth).any(|component| {
+        let name = component.as_os_str().to_string_lossy();
+        name == ".git" || (!search_in_dotted && name.starts_with('.'))
+    })
+}
+
+// A pattern is not a name: what it matched was found by the program, and a link the walk finds is
+// skipped, since it counts whatever it points at a second time. Named on its own it is still
+// followed, as any target is.
+fn is_relevant_glob_match(path: &Path, base_depth: usize, obeyed: crate::ObeyedIgnoreFiles,
+        search_in_dotted: bool) -> bool
+{
+    !is_dotted_below_base(path, base_depth, search_in_dotted)
+            && !path.is_symlink()
+            && !GitignoreStack::is_path_ignored(path, obeyed)
+            && path.to_str().is_some()
 }
 
 fn name_or_rest(module: &Option<String>) -> String {
@@ -592,7 +644,46 @@ mod target_path_tests {
         assert!(matches!(resolved_paths(vec![Target::of(format!("{root_str}/build/*"))], true),
                 Err(TargetError::AllGlobMatchesIgnored(_))));
 
+        let config = crate::EngineConfig::default();
+        assert_eq!(Ok(()), validate_target(&Target::of(format!("{root_str}/kept")), &config));
+        assert_eq!(Ok(()), validate_target(&Target::of(format!("{root_str}/*")), &config));
+        assert!(matches!(validate_target(&Target::of(format!("{root_str}/nope")), &config),
+                Err(TargetError::InvalidPath(_))));
+        assert!(matches!(validate_target(&Target::of(format!("{root_str}/a[")), &config),
+                Err(TargetError::InvalidGlob(_))));
+        assert!(matches!(validate_target(&Target::of(format!("{root_str}/*.go")), &config),
+                Err(TargetError::NoGlobMatches(_))));
+        assert!(matches!(validate_target(&Target::of(format!("{root_str}/build/*")), &config),
+                Err(TargetError::AllGlobMatchesIgnored(_))));
+
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_pattern_skips_dotted_folders_matched_by_its_wildcards_and_always_skips_git() {
+        let root = std::env::temp_dir().join("mezura-dotted-holder").join(".workspace").join("proj");
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("mezura-dotted-holder"));
+        std::fs::create_dir_all(root.join("src").join(".hidden")).unwrap();
+        std::fs::create_dir_all(root.join("src").join("open")).unwrap();
+        std::fs::create_dir_all(root.join(".git").join("hooks")).unwrap();
+        std::fs::write(root.join("src").join(".hidden").join("x.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(root.join("src").join("open").join("x.rs"), "fn b() {}\n").unwrap();
+        std::fs::write(root.join(".git").join("hooks").join("x.rs"), "fn c() {}\n").unwrap();
+        let root_str = root.to_str().unwrap().replace('\\', "/");
+        let abs = |x: &str| convert_to_absolute(&format!("{root_str}/{x}"));
+
+        let kept = resolve(&[Target::of(format!("{root_str}/src/*/x.rs"))], obey_every_ignore_file(), false).unwrap();
+        assert_eq!(vec![abs("src/open/x.rs")], kept.iter().map(|t| t.path.clone()).collect::<Vec<_>>());
+
+        let with_dotted = resolve(&[Target::of(format!("{root_str}/**/*.rs"))], obey_every_ignore_file(), true).unwrap();
+        assert_eq!(vec![abs("src/.hidden/x.rs"), abs("src/open/x.rs")],
+                with_dotted.iter().map(|t| t.path.clone()).collect::<Vec<_>>(),
+                "'.git' was matched by a pattern under '--search-in-dotted'");
+
+        let explicit_dotted = resolve(&[Target::of(format!("{root_str}/src/.hidden/*.rs"))], obey_every_ignore_file(), false).unwrap();
+        assert_eq!(vec![abs("src/.hidden/x.rs")], explicit_dotted.iter().map(|t| t.path.clone()).collect::<Vec<_>>());
+
+        std::fs::remove_dir_all(std::env::temp_dir().join("mezura-dotted-holder")).unwrap();
     }
 
     // The log compares these strings to decide whether two runs measured the same tree, so 'D:/x/'

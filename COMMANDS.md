@@ -1023,7 +1023,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
       mezura ./src --output json > baseline.json
       mezura ./src --diff baseline.json
       mezura ./src --diff main
-      mezura ./src --diff ./other-branch@main
+      mezura ./src --diff ./other-branch/src@main
       mezura ./src --diff v2.0.1..v3.0.0
       mezura https://github.com/owner/repo --diff v1.0..v2.0
       mezura --diff january.json..june.json
@@ -1034,9 +1034,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     '--diff ../old.json' works while a path climbing twice is refused.
 
     A revision is counted on the spot with this run's settings and targets, so 'mezura ./src
-    --diff main' counts what './src' held on 'main'. For a local revision, every target must be in
-    one git repository. A directory the revision does not have counts as zero, so all of it reads
-    as new.
+    --diff main' counts what './src' held on 'main'; a '<path>@<revision>' or remote URL counts
+    what it names. For a local revision, every target must be in one git repository. A directory
+    the revision does not have counts as zero, so all of it reads as new.
 
     Counting a revision is slower, since the commit is written out to a temporary directory
     first. Size can move there while no line did, when git gives the checkout different line
@@ -1104,7 +1104,8 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     are applied on top, and the result is written back.
 
     Naming a configuration is asking for that one and no other, so a project's own settings are left
-    out of a run that names one, and its log stays where every named configuration's log is.
+    out of a run that names one (unless '--save-local' is updating them), and its log stays where
+    every named configuration's log is.
 ```
 
 ### <a id="cmd-no-default-config" name="cmd-no-default-config"></a>--no-default-config

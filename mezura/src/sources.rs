@@ -70,10 +70,12 @@ pub fn prepare_revisions_for_config(names: &[&str], config: &Configuration)
                         "Fetching", &remote.format_short_label(), hidden);
                 let mut resolved = super::git::fetch_remote_revision(&remote)?;
                 live.finish();
-                resolved.revision = name.to_owned();
+                resolved.revision = super::git::strip_url_credentials(name);
                 let same_repo_root = config.view.single_unnamed_checkout_root
                         && config.view.target_checkouts.first()
-                                .and_then(|tc| tc.remote_url.as_deref()) == Some(remote.url.as_str());
+                                .and_then(|tc| tc.remote_url.as_deref())
+                                .is_some_and(|url| super::git::strip_url_credentials(url)
+                                        == super::git::strip_url_credentials(&remote.url));
                 let target_override = (!same_repo_root).then(|| RevisionTargetOverride {
                     prefix: String::new(),
                     declared_target: remote.display.clone(),
@@ -186,8 +188,12 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
     let mut targets = Vec::with_capacity(config.engine.targets.len());
     let mut counted_declared = Vec::with_capacity(config.engine.targets.len());
     let mut missing = Vec::new();
+    let find_in_checkout = |prefix: &str| {
+        find_target_in_checkout(&checkout, prefix, &config.engine)
+                .map_err(|error| GitError::CountingRevision { revision: git_revision.to_owned(), error })
+    };
     let display_repository = if let Some(override_target) = &side.target_override {
-        match checkout.find_target_of(&override_target.prefix) {
+        match find_in_checkout(&override_target.prefix)? {
             Some(path) => {
                 targets.push(mezura_core::Target { module: None, path });
                 counted_declared.push(mezura_core::Target::of(&override_target.declared_target));
@@ -210,7 +216,7 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
                     (prefix, target.path.clone())
                 }
             };
-            match checkout.find_target_of(&prefix) {
+            match find_in_checkout(&prefix)? {
                 Some(path) => {
                     targets.push(mezura_core::Target { module: target.module.clone(), path });
                     counted_declared.push(mezura_core::Target { module: target.module.clone(), path: declared_path });
@@ -222,7 +228,7 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
     } else {
         for target in &config.engine.targets {
             let (_, prefix) = super::git::find_repository_of(&target.path)?;
-            match checkout.find_target_of(&prefix) {
+            match find_in_checkout(&prefix)? {
                 Some(path) => {
                     targets.push(mezura_core::Target { module: target.module.clone(), path });
                     counted_declared.push(target.clone());
@@ -262,9 +268,9 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
         let resolved_langs = mezura_core::Languages::resolve(&of_git_revision, languages, conflicts).0;
         let mut result = mezura_core::run_watched(&of_git_revision, resolved_langs, Some(&progress), |_| {})
                 .map_err(|error| GitError::CountingRevision { revision: git_revision.to_owned(), error })?;
-        move_file_paths_out_of_checkout(&mut result, &of_git_revision.targets, &counted_declared);
+        move_file_paths_out_of_checkout(&mut result, &of_git_revision.targets, &counted_declared,
+                &checkout.path, &display_repository);
         move_preset_directories_out_of_checkout(&mut result, &checkout.path, &display_repository);
-        result.targets = counted_declared;
         result
     };
 
@@ -335,9 +341,6 @@ fn find_common_repository_for_config(config: &Configuration) -> Result<String, G
         return Ok(super::git::find_repository_of(".")?.0);
     }
     let paths : Vec<String> = config.engine.targets.iter().map(|target| {
-        if is_unquoted_glob_pattern(&target.path) {
-            return format_path_outside_checkouts(&target.path, &config.view.target_checkouts);
-        }
         match config.view.target_checkouts.iter()
                 .find(|tc| replace_root_prefix(&target.path, &tc.checkout_root, "").is_some()) {
             Some(tc) => tc.repository.clone(),
@@ -347,26 +350,52 @@ fn find_common_repository_for_config(config: &Configuration) -> Result<String, G
     super::git::find_common_repository_of(&paths)
 }
 
+fn find_target_in_checkout(checkout: &Checkout, prefix: &str, config: &EngineConfig)
+-> Result<Option<String>, mezura_core::RunError>
+{
+    if let Some(found) = checkout.find_target_of(prefix) {
+        return Ok(Some(found));
+    }
+    let prefix = super::paths::normalise_separators(prefix);
+    let prefix = prefix.trim_matches('/');
+    if !is_unquoted_glob_pattern(prefix) {
+        return Ok(None);
+    }
+    let pattern = format!("{}/{prefix}", checkout.path.trim_end_matches('/'));
+    match mezura_core::validate_target(&mezura_core::Target::of(&pattern), config) {
+        Ok(()) => Ok(Some(pattern)),
+        Err(mezura_core::TargetError::NoGlobMatches(_)
+                | mezura_core::TargetError::AllGlobMatchesIgnored(_)) => Ok(None),
+        Err(error) => Err(mezura_core::RunError::InvalidTargets(error))
+    }
+}
+
 // The file rows still name the temporary checkout, which is a different directory on every run, so
 // each is given back the declared form of the target it was found under. The two lists correspond
 // by position, having been built together above; the longest match decides, since one declared
 // target may sit inside another's checkout path.
 fn move_file_paths_out_of_checkout(result: &mut mezura_core::RunResult,
-        checkout_targets: &[mezura_core::Target], declared: &[mezura_core::Target])
+        checkout_targets: &[mezura_core::Target], declared: &[mezura_core::Target],
+        checkout_root: &str, display_repository: &str)
 {
     let mut pairs = checkout_targets.iter().zip(declared)
+            .filter(|(counted, _)| !is_unquoted_glob_pattern(&counted.path))
             .map(|(counted, declared)| (counted.path.as_str(), declared.path.as_str()))
             .collect::<Vec<_>>();
     pairs.sort_by_key(|(counted, _)| std::cmp::Reverse(counted.len()));
 
-    for files in result.modules.iter_mut().flat_map(|module| module.files.values_mut()) {
-        for file in files {
-            if let Some((counted, declared)) = pairs.iter().find(|(counted, _)|
-                    super::paths::is_inside(&file.path, counted)) {
-                file.path = declared.to_string() + &file.path[counted.len()..];
-            }
+    let move_out = |path: &mut String| {
+        if let Some((counted, declared)) = pairs.iter().find(|(counted, _)|
+                super::paths::is_inside(path, counted)) {
+            *path = declared.to_string() + &path[counted.len()..];
+        } else if let Some(moved) = replace_root_prefix(path, checkout_root, display_repository) {
+            *path = moved;
         }
+    };
+    for files in result.modules.iter_mut().flat_map(|module| module.files.values_mut()) {
+        files.iter_mut().for_each(|file| move_out(&mut file.path));
     }
+    result.targets.iter_mut().for_each(|target| move_out(&mut target.path));
 }
 
 // A tool's file inside the checkout stands for the same file in the repository, and the checkout is a
@@ -557,11 +586,76 @@ mod tests {
                 mezura_core::Target::of("C:/t/chk")];
         let declared = [mezura_core::Target::of("D:/r/api-v2"), mezura_core::Target::of("D:/r/main.rs"),
                 mezura_core::Target::of("D:/r")];
-        move_file_paths_out_of_checkout(&mut result, &checkout, &declared);
+        move_file_paths_out_of_checkout(&mut result, &checkout, &declared, "C:/t/chk", "D:/r");
 
         // The longest checkout prefix decides, whole components only, and a path outside them stays
         assert_eq!(vec!["D:/r/api-v2/a.rs", "D:/r/apix/b.rs", "D:/r/main.rs", "D:/elsewhere/c.rs"],
                 result.modules[0].files["Rust"].iter().map(|x| x.path.as_str()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_glob_target_is_expanded_in_a_revision_and_pairs_its_files_across_revisions() {
+        let _guard = crate::git::GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root = std::env::temp_dir().join("mezura-revision-glob");
+        let _ = crate::git::remove_directory_tree(&root);
+        std::fs::create_dir_all(root.join("src").join("gen")).unwrap();
+        std::fs::write(root.join(".gitignore"), "src/gen/\n").unwrap();
+        std::fs::write(root.join("src/a.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(root.join("src/b.py"), "x = 1\n").unwrap();
+        std::fs::write(root.join("src/gen/x.rs"), "fn g() {}\n").unwrap();
+        let git = |arguments: &[&str]| {
+            let outcome = std::process::Command::new("git").arg("-C").arg(&root).args(arguments).output().unwrap();
+            assert!(outcome.status.success(), "git {arguments:?}: {}", String::from_utf8_lossy(&outcome.stderr));
+        };
+        git(&["init", "-q"]);
+        git(&["add", "-f", "."]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--no-verify", "-q", "-m", "c1"]);
+        git(&["tag", "v1"]);
+        std::fs::write(root.join(".gitignore"), "").unwrap();
+        std::fs::write(root.join("src/a.rs"), "fn a() {}\nfn a2() {}\n").unwrap();
+        std::fs::write(root.join("src/c.rs"), "fn c() {}\n").unwrap();
+        commit_everything_in(&root);
+
+        let (repository, _) = crate::git::find_repository_of(&root.to_string_lossy()).unwrap();
+        let parsed = mezura_core::language_file::parse_languages_in_dir(CORE_LANGUAGES_DIR).unwrap().0;
+        let mut config = Configuration::new(vec![format!("{repository}/src/*.rs")]);
+        config.engine.collect_files = true;
+        config.view.by_file = Some(crate::config_manager::ByFile::All);
+
+        let prepared = prepare_revisions_for_config(&["v1"], &config).unwrap();
+        let side = start_acquiring_prepared_revisions(prepared).into_iter().next().unwrap();
+        let (v1, notes) = count_git_revision(side, &config, parsed.clone(), &Default::default()).unwrap();
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(1, v1.result.total.files);
+        assert_eq!(vec![mezura_core::Target::of(format!("{repository}/src/a.rs"))], v1.result.targets);
+
+        let tree_result = mezura_core::run(&config.engine,
+                mezura_core::Languages::resolve(&config.engine, parsed.clone(), &Default::default()).0).unwrap();
+        assert_eq!((format!("{repository}/src"), format!("{repository}/src")),
+                crate::diff::determine_file_bases(&v1.result, &tree_result));
+
+        let missing_glob = Configuration::new(vec![format!("{repository}/src/*.go")]);
+        let prepared_missing = prepare_revisions_for_config(&["v1"], &missing_glob).unwrap();
+        let side_missing = start_acquiring_prepared_revisions(prepared_missing).into_iter().next().unwrap();
+        let (empty, missing_notes) = count_git_revision(side_missing, &missing_glob, parsed.clone(), &Default::default()).unwrap();
+        assert_eq!(0, empty.result.total.files);
+        assert_eq!(vec![Note::MissingInRevision {
+            git_revision: "v1".to_owned(),
+            targets: vec![format!("{repository}/src/*.go")]
+        }], missing_notes);
+
+        let ignored_in_v1 = Configuration::new(vec![format!("{repository}/src/gen/*.rs")]);
+        let prepared_ignored = prepare_revisions_for_config(&["v1"], &ignored_in_v1).unwrap();
+        let side_ignored = start_acquiring_prepared_revisions(prepared_ignored).into_iter().next().unwrap();
+        let (ignored_reading, ignored_notes) = count_git_revision(side_ignored, &ignored_in_v1, parsed, &Default::default()).unwrap();
+        assert_eq!(0, ignored_reading.result.total.files);
+        assert_eq!(vec![Note::MissingInRevision {
+            git_revision: "v1".to_owned(),
+            targets: vec![format!("{repository}/src/gen/*.rs")]
+        }], ignored_notes);
+
+        crate::git::await_checkout_removals();
+        crate::git::remove_directory_tree(&root).unwrap();
     }
 
     #[test]

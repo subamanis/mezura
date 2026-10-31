@@ -1184,7 +1184,7 @@ mod tests {
         let plain = create_comparison_document(&crate::diff::Comparison::of(
                 reading_of(crate::diff::Source::Run, HashMap::new()),
                 reading_of(crate::diff::Source::Run, HashMap::new()), &config, Vec::new()), &datetime, &config);
-        assert!(!plain.contains("modules"), "{plain}");
+        assert!(!plain.contains("\"modules\""), "{plain}");
     }
 
     #[test]

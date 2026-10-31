@@ -60,7 +60,8 @@ pub use engine::config::{EngineConfig, ForcedLanguages, LanguageNames, PathPatte
 pub use engine::identity::{Claim, ClaimKind, SettledBy};
 pub use engine::path_patterns::{PatternError, absolutize_path_pattern, is_a_path_pattern, is_on_disk, split_negation,
         validate_exclude_patterns, validate_test_patterns};
-pub use engine::targets::{TargetError, convert_to_absolute, normalise_separators, validate_and_absolutize};
+pub use engine::targets::{TargetError, convert_to_absolute, normalise_separators, validate_and_absolutize,
+        validate_target};
 pub use engine::test_detection::TestPreset;
 pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, MatchedPreset, TestFileRule, explain_file};
 pub use languages::{LanguageClaims, Languages};

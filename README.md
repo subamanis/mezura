@@ -480,10 +480,10 @@ layouts, the colors and the themes live in the command line program and are not 
 ### Logs and history
 
 Inside the 'data/logs' folder, the program will save log files that correspond to saved
-configurations every time `--log` is given. A log is a .jsonl file: one JSON entry per line, the
-newest first, so it is read by any JSON tool one line at a time. Each entry records the settings the run was counted with
-(the target directories, the counting model, and so on, so you can see if at some point the
-configuration got modified).
+configurations with target paths when `--log` is given on a run that counts those targets. A log is
+a .jsonl file: one JSON entry per line, the newest first, so it is read by any JSON tool one line at
+a time. Each entry records the settings the run was counted with (the target directories, the
+counting model, and so on, so you can see if at some point the configuration got modified).
 
 A run that names its targets records its modules in the entry, and the history section then carries
 one narrow line per module: which of them grew, and by how much. A module that was not there last
@@ -495,10 +495,11 @@ file and will be compared and printed to the screen. For example for N = 2, it w
 
 <img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/compare.png" width="1000">
 
-Both `--log` and `--compare` need a log to belong to, which means either a configuration loaded by
-name or a project with a `.mezura` folder to be inside. A checked-out revision or remote repository
-that carries a committed `.mezura/log.jsonl` also shows its logged history and obeys `--compare`,
-while `--log` only writes to a local working tree or named configuration.
+Both `--log` and `--compare` need a log to belong to, which means either a configuration with
+target paths loaded or saved by name or a project with a `.mezura` folder, and a run that counts
+those same targets. A checked-out revision or remote repository that carries a committed
+`.mezura/log.jsonl` also shows its logged history and obeys `--compare`, while `--log` only
+writes to a local working tree or named configuration.
 
 ### Diffs
 
@@ -508,7 +509,7 @@ while `--log` only writes to a local working tree or named configuration.
 mezura ./src --output json > baseline.json
 mezura ./src --diff baseline.json
 mezura ./src --diff main
-mezura ./src --diff ./other-repo@v2.0.0
+mezura ./src --diff ./other-repo/src@v2.0.0
 mezura ./src --diff v2.0.1..v3.0.0
 mezura https://github.com/owner/repo --diff v1.0..v2.0
 ```
@@ -541,9 +542,10 @@ specify many flags in a *configuration file*, and have the program just load tha
 Configurations can be created automatically by specifying all the flags once, along with the
 command `--save`, and a name for the configuration. Then the program, along with its normal
 execution, will automatically create a config file with the name you specified, and dump all the
-flags in there. Target paths are saved only when you specify them on the command line (and never in
-`default`), so saving without a target path creates a settings bundle you can load in any directory;
-saving with explicit target paths (`mezura ./ --save <config_name>`) remembers those paths too:
+flags in there. Target paths are saved only when you specify them on the command line (or they
+were already in a configuration `--load` brought in on the same run), and never in `default`, so
+saving without a target path creates a settings bundle you can load in any directory; saving with
+explicit target paths (`mezura ./ --save <config_name>`) remembers those paths too:
 `mezura --load <config_name>`
 
 By default, there is a configuration file named "default" already present in the "config" folder of

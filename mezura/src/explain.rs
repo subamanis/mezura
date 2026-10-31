@@ -476,6 +476,7 @@ mod tests {
             checkout,
             checkout_root: chk.clone(),
             display_root: display.clone(),
+            base_root: root_str.clone(),
             repository: root_str.clone(),
             remote_url: None,
             commit: resolved.commit,
