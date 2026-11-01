@@ -259,8 +259,7 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
 
     writer.write_all(b"Auto-generated config file.")?;
 
-    let is_default = relative_to.is_none()
-            && config_name.trim().eq_ignore_ascii_case(DEFAULT_CONFIG_NAME.trim_end_matches(".txt"));
+    let is_default = relative_to.is_none() && config_manager::is_default_config_name(config_name);
     let saved_targets = match config_builder.targets.as_ref().filter(|_| !is_default) {
         Some(targets) => {
             // One target per line, which is what the block reader expects: a module name only reaches the
@@ -275,15 +274,18 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         None => false
     };
 
+    // Without targets, only a pattern typed on this run's command line goes back relative to the
+    // working directory. One read from a file is already in the form a file holds.
     let working_dir = (!saved_targets && relative_to.is_none()).then(crate::paths::find_working_directory).flatten();
-    let pattern_base = relative_to.or(working_dir.as_deref());
-    let format_patterns = |patterns: &mezura_core::PathPatterns|
-            config_manager::format_patterns_inside(pattern_base, &patterns.patterns).join(",");
+    let format_patterns = |patterns: &mezura_core::PathPatterns, typed: bool| config_manager::format_patterns_inside(
+            relative_to.or(working_dir.as_deref().filter(|_| typed)), &patterns.patterns).join(",");
     if let Some(exclude_patterns) = &config_builder.exclude_patterns {
-        write_block(&mut writer, config_manager::EXCLUDE, &format_patterns(exclude_patterns))?;
+        write_block(&mut writer, config_manager::EXCLUDE,
+                &format_patterns(exclude_patterns, config_builder.typed_explicitly.exclude))?;
     }
     if let Some(test_patterns) = &config_builder.test_patterns && !test_patterns.patterns.is_empty() {
-        write_block(&mut writer, config_manager::TESTS, &format_patterns(test_patterns))?;
+        write_block(&mut writer, config_manager::TESTS,
+                &format_patterns(test_patterns, config_builder.typed_explicitly.tests))?;
     }
     if let Some(languages_of_interest) = &config_builder.languages_of_interest {
         write_block(&mut writer, config_manager::LANGUAGES, &languages_of_interest.join(","))?;
@@ -363,11 +365,16 @@ pub fn save_existing_commands_from_config_builder_to_file(config_path: Option<St
         write_block(&mut writer, config_manager::LAYOUT, layout.as_str())?;
     }
 
-    // The two style layers collapse into one block, in the order they were applied, so that
-    // reloading the file reproduces what the run looked like. When '--save-theme' is writing a theme
-    // in the same run they are already inside it and would only be said twice.
-    let styles = if config_builder.theme_name_to_save.is_some() {Vec::new()}
-            else {config_builder.config_styles.iter().chain(config_builder.styles.iter()).flatten().collect::<Vec<_>>()};
+    // The two style layers collapse into one block, one line per token holding the value applied
+    // last, so that reloading the file reproduces what the run looked like. When '--save-theme' is
+    // writing a theme in the same run they are already inside it and would only be said twice.
+    let mut styles: Vec<&(String, String)> = Vec::new();
+    if config_builder.theme_name_to_save.is_none() {
+        for style in config_builder.config_styles.iter().chain(config_builder.styles.iter()).flatten() {
+            styles.retain(|(token, _)| *token != style.0);
+            styles.push(style);
+        }
+    }
     if !styles.is_empty() {
         write_block(&mut writer, config_manager::STYLE, &styles.iter()
                 .map(|(token, style)| format!("{token} = {style}")).collect::<Vec<_>>().join("\n"))?;
@@ -738,6 +745,21 @@ mod tests {
         assert_eq!(Some(declared), options.targets);
 
         std::fs::remove_file(&path)
+    }
+
+    #[test]
+    fn a_style_given_twice_is_written_once_with_its_last_value() -> std::io::Result<()> {
+        let dir = SCRATCH_CONFIG_DIR.to_owned();
+        std::fs::create_dir_all(&dir)?;
+        let pair = |token: &str, style: &str| (token.to_owned(), style.to_owned());
+        let builder = ConfigurationBuilder { config_styles: Some(vec![pair("heading", "red"), pair("footer", "blue")]),
+                styles: Some(vec![pair("heading", "green")]), ..Default::default() };
+
+        save_existing_commands_from_config_builder_to_file(Some(dir.clone()), "style-given-twice", None, &builder)?;
+        let read = parse_config_file(Some("style-given-twice"), Some(dir.clone())).unwrap().0;
+        assert_eq!(Some(vec![pair("footer", "blue"), pair("heading", "green")]), read.config_styles);
+
+        std::fs::remove_file(dir + "style-given-twice.txt")
     }
 
     #[test]

@@ -580,8 +580,10 @@ explicit target paths (`mezura ./ --save <config_name>`) remembers those paths t
 By default, there is a configuration file named "default" already present in the "config" folder of
 your [data directory](#the-data-directory), that gets loaded on every run. There, you can customize your preferences and they will
 apply to all runs, unless overridden by giving a different command on the command line, or by
-loading a specific configuration. For example, if you prefer the counting model of the other
-counters, you can put a "===> counting" block holding "region" there. ```--no-default-config``` leaves that file
+loading a specific configuration. ```mezura <flags> --save default``` adds those flags to the file and keeps the
+settings it already holds. With ```--no-default-config``` it starts the file over. Notes written by hand in
+the file are lost, and a setting is removed by editing it. For example, if you prefer the counting model of the other
+counters, you can run ```mezura --counting region --save default``` or put a "===> counting" block holding "region" there. ```--no-default-config``` leaves that file
 out of a single run, so the run answers with mezura's own defaults and counts the same on any machine.
 
 ### The settings of a project
@@ -598,7 +600,7 @@ your-project/
 
 `config.txt` is the same format a saved configuration has, and `log.jsonl` the same format a log has. Write the folder with ```mezura <flags> --save-local```, or by hand.
 
-**It is found without being asked for.** A run looks for the folder in the directory holding its targets and then in each directory above it, taking the nearest one, so it applies from anywhere inside the project and a project nested in another one shadows it. A run using one says so, naming the file it read. Ignore it for one run with ```--no-local```, and note that a run naming a configuration with ```--load``` leaves it out entirely.
+**It is found without being asked for.** A run looks for the folder in the directory holding its targets and then in each directory above it, taking the nearest one, so it applies from anywhere inside the project and a project nested in another one shadows it. A run using one says so, naming the file it read. Ignore it for one run with ```--no-local```. A run naming a configuration other than "default" with ```--load``` or ```--save``` leaves it out, unless ```--save-local``` writes it.
 
 **It is safe to commit.** Its targets are written relative to the folder, so it names the same places on somebody else's disk. And anything it does not set falls back to mezura's own defaults instead of each person's `default.txt`, for everything that decides a number, so two people get one answer. The theme, the layout and the separators still come from the personal config, since there the point is that everyone has their own.
 
@@ -606,7 +608,7 @@ your-project/
 The priorities of the specified flags are:
 1) cmd
 2) Specific config file
-3) The project's own config file (only when no config file is loaded by name)
+3) The project's own config file (left out when --load or --save names a configuration other than "default", unless --save-local writes it)
 4) Default config file
 5) Internal defaults
 

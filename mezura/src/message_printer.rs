@@ -1140,6 +1140,11 @@ pub const SAVE_HELP  :  &str =
     brought in on the same run), and never into 'default', so a '--save' with no path writes a
     group of settings that works in any directory.
 
+    '--save default' adds this run's flags to the settings the default configuration already
+    holds. Beside '--no-default-config' it starts the file over with this run's flags only.
+
+    Notes written by hand in that file are lost, and a setting is removed by editing the file.
+
 ";
 pub const LOAD_HELP  :  &str =
 "--load
@@ -1153,9 +1158,13 @@ pub const LOAD_HELP  :  &str =
     Give '--load' and '--save' the same name to edit a configuration: it is loaded, your changes
     are applied on top, and the result is written back.
 
-    Naming a configuration is asking for that one and no other, so a project's own settings are left
-    out of a run that names one (unless '--save-local' is updating them), and its log stays where
-    every named configuration's log is.
+    Naming a configuration other than 'default' leaves a project's own settings out of the run,
+    unless '--save-local' is updating them. The log of such a run stays where every named
+    configuration's log is.
+
+    '--load default' reads the default configuration where every run reads it, under the project's
+    settings. Beside '--save <name>' or '--save-local' its settings are copied into the file being
+    written.
 
 ";
 pub const SAVE_LOCAL_HELP  :  &str =

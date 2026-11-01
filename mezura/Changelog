@@ -29,6 +29,9 @@ Bugfixes:
       ignored before printing the configuration's history.
   -> '--save-local' together with '--save' or '--load' now keeps the project's existing
       settings.
+  -> Saving a configuration with '--style' no longer repeats a style line the file already holds.
+  -> The run that writes a project's settings with '--save-local' now leaves out the default
+      configuration's settings that change the numbers, as every later run in the project does.
   -> Zig's '\\' multiline string lines are now read as strings to the end of their line ('Line
       string symbols' in language files), so '//' and 'test' inside them are no longer counted as
       comments or test blocks.
@@ -43,9 +46,13 @@ Change in commands:
   -> '--help' beside '--output json' now prints the help of '--output'. The two together were
       refused before.
   -> '--save <name>' now writes target paths only when they were explicitly given (or already in a
-      configuration loaded with '--load' in the same run), and not into 'default', so saving
+      configuration loaded with '--load' in the same run), and never into 'default', so saving
       without a target path creates a reusable settings bundle instead of pinning to the current
       working directory.
+  -> '--save default' now adds to the settings the default configuration holds, and removes the
+      target paths an earlier version wrote there.
+  -> '--load default' and '--save default' inside a project now keep the project's settings, and
+      '--load default' together with '--no-default-config' is refused.
   -> '--hide modules' prints a configuration or run with named modules as a single flat report.
   -> '--hide' on the command line now adds to the sections hidden by a loaded configuration instead
       of replacing them.
