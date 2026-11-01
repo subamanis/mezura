@@ -19,9 +19,15 @@ const GENERIC_PROJECT_FILES : [GenericProjectFile; 4] = [
 ];
 const WORKSPACE_GLOBSTAR_DEPTH : usize = 3;
 
+// A project file that names test tools of which no test was found
+pub struct PresetSuggestion {
+    pub file_name: &'static str,
+    pub names: Vec<&'static str>
+}
+
 // The file is read last, so a run that would print no hint reads nothing
-pub fn find_names_of_presets_to_suggest(result: &RunResult, on_disk_targets: &[mezura_core::Target]) -> Vec<Vec<&'static str>> {
-    let targets = if on_disk_targets.is_empty() { &result.targets } else { on_disk_targets };
+pub fn find_presets_to_suggest(result: &RunResult, on_disk_targets: &[mezura_core::Target]) -> Vec<PresetSuggestion> {
+    let targets = if on_disk_targets.is_empty() {&result.targets} else {on_disk_targets};
     GENERIC_PROJECT_FILES.iter().filter_map(|generic| {
         let counted = generic.names_of_languages.iter()
                 .any(|name_of_language| result.per_language.contains_key(*name_of_language));
@@ -37,8 +43,14 @@ pub fn find_names_of_presets_to_suggest(result: &RunResult, on_disk_targets: &[m
         let named = generic.words_by_name_of_preset.iter()
                 .filter(|(_, words)| words.iter().any(|word| contents.iter().any(|text| contains_word(text, word))))
                 .map(|(name, _)| *name).collect::<Vec<_>>();
-        (!named.is_empty()).then_some(named)
+        (!named.is_empty()).then_some(PresetSuggestion { file_name: generic.file_name, names: named })
     }).collect()
+}
+
+// The project file that names a preset, and the preset's own spelling
+pub fn find_generic_project_file_naming(name_of_preset: &str) -> Option<(&'static str, &'static str)> {
+    GENERIC_PROJECT_FILES.iter().find_map(|generic| generic.words_by_name_of_preset.iter()
+            .find(|(name, _)| *name == name_of_preset).map(|(name, _)| (generic.file_name, *name)))
 }
 
 struct GenericProjectFile {
@@ -173,7 +185,7 @@ mod tests {
             let typescript = crate::test_support::plain_stats_of(1, 40, 4, 3, 1, HashMap::new());
             let result = crate::test_support::plain_result_of(HashMap::from([("TypeScript".to_owned(), typescript)]),
                     Vec::new(), vec![Target::of(crate::paths::normalise_separators(&root.join(folder).to_string_lossy()))]);
-            find_names_of_presets_to_suggest(&result, &[])
+            find_presets_to_suggest(&result, &[]).into_iter().map(|suggestion| suggestion.names).collect::<Vec<_>>()
         };
         write("npm/package.json", r#"{"workspaces": ["packages/*", "!packages/legacy"], "devDependencies": {"prettier": "^3"}}"#);
         write("npm/packages/web/package.json", r#"{"devDependencies": {"jest": "^29"}}"#);

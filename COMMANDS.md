@@ -37,6 +37,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
   - [--theme-editor](#cmd-theme-editor)
 - [Taking the result elsewhere](#taking-the-result-elsewhere)
   - [--output](#cmd-output)
+  - [--badge](#cmd-badge)
   - [--log](#cmd-log)
 - [Comparing with earlier runs](#comparing-with-earlier-runs)
   - [--compare](#cmd-compare)
@@ -935,8 +936,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     the colors and the overview bar are left out as terminal drawings. '--explain' has no
     markdown form and says so.
 
-    A warning that puts the numbers in doubt goes under the table as well as to the error output.
-    One about an ignored setting stays on the error output.
+    A warning that puts the numbers in doubt goes under the table as well as to the error output,
+    and so does the note that a test tool the project names found no tests. One about an ignored
+    setting stays on the error output.
 
     'json' replaces the whole output, status lines and overview included, with a single document,
     so another program can read the run.
@@ -957,10 +959,45 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     the warnings are in it as well under 'warnings', each with a 'code' safe to branch on, an
     'affects' of 'counts' or 'settings', a 'subject' and a readable 'message'. 'affects' is what
     says whether the numbers can be trusted: an unreadable language file means a whole language
-    went uncounted, an ignored setting touches nothing. The list is there even when empty, and a
-    run that found nothing still writes a valid document with a total of zero.
+    went uncounted, an ignored setting touches nothing. 'test-preset-unapplied' means a test tool
+    the project names found no tests, so they count as production until '--tests' declares them.
+    The list is there even when empty, and a run that found nothing still writes a valid document
+    with a total of zero.
 
     Cannot be saved in a configuration file.
+```
+
+### <a id="cmd-badge" name="cmd-badge"></a>--badge
+
+```
+--badge
+    an SVG badge of the count, for a README
+
+    Words separated by spaces or commas, in any order. Without any, a pill with the code lines.
+
+      pill       one line like the badges at the top of a README, 'mezura' on the left and a
+                 cell per figure on the right, in the order written
+      card       the box GitHub draws for a repository's languages, with the first figure beside
+                 the title, a bar of the languages, the biggest of them with their share of the
+                 lines, and the other figures underneath. With no figure named it shows code,
+                 comments, tests and languages
+
+      lines      every line counted
+      code       the lines of code
+      comments   the lines of comments
+      tests      the share of the lines that are test code. Left out at zero unless named
+      files      the files counted
+      languages  how many languages were found
+
+      mezura --badge > badge.svg
+      mezura --badge code tests languages > badge.svg
+      mezura --badge card --top 4 > card.svg
+
+    Only the SVG goes to the output, the rest to the error output. '--top', '--sort',
+    '--hide tests' and the project's '.mezura/config.txt' apply. Cannot be given with
+    '--output', '--diff' or '--explain', and cannot be saved in a configuration file.
+
+      [![mezura](badge.svg)](https://github.com/subamanis/mezura)
 ```
 
 ### <a id="cmd-log" name="cmd-log"></a>--log

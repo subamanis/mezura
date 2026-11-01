@@ -15,6 +15,7 @@ mod out;
 
 mod animated_display;
 mod args;
+mod badge;
 mod config_files;
 mod config_manager;
 mod diff;
@@ -51,7 +52,7 @@ use mezura_core::LANGUAGE_CONFLICTS_FILE_NAME;
 use mezura_core::language_file::ConflictRules;
 
 use crate::config_manager::{Configuration, OutputFormat};
-use crate::config_manager::{CHANGELOG, COUNTING, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
+use crate::config_manager::{BADGE, CHANGELOG, COUNTING, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
         SHOW_LANGUAGES, SHOW_PRESETS, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
 use crate::message_printer::Formatted;
 use crate::migration::{MigrationOutcome, migrate_data_files};
@@ -163,10 +164,15 @@ fn main() -> ExitCode {
     // Never silently. A folder in some directory above the one being counted decided what this run
     // measures, and without this line the only way to find out is to go looking for it.
     if let Some(local) = &config.view.local_dir
-        && local.configuration_applied && !config.view.hidden.directory_info && config.view.prints_text() {
-        let opening = if config.view.hidden.version {"\n"} else {""};
-        outln!("{opening}{}", crate::theme::get_active().note.paint(
-                &format!("Using the settings of this project, from '{}'.", local.get_config_path())));
+        && local.configuration_applied && !config.view.hidden.directory_info && !config.view.document_carries_the_notes() {
+        let line = crate::theme::get_active().note.paint(
+                &format!("Using the settings of this project, from '{}'.", local.get_config_path()));
+        if config.view.prints_text() {
+            let opening = if config.view.hidden.version {"\n"} else {""};
+            outln!("{opening}{line}");
+        } else {
+            eprintln!("\n{line}");
+        }
     }
 
     // The two lists of the run itself, and not those of a module: one module counting nothing is a
@@ -507,12 +513,13 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
             THEME_EDITOR, SHOW_THEMES, SHOW_PRESETS].into_iter().find(|x| is_present(x))?;
 
     // Refused rather than answered, and before the banner below, which would otherwise be the first
-    // thing written: 'mezura --output json --help > stats.json' leaves a file named for a document
-    // that holds a help text, and nothing says it is not one until something tries to parse it.
-    if asks_for_a_json_document(args_str) {
+    // thing written: 'mezura --output json --version > stats.json' leaves a file named for a document
+    // that holds a version line, and nothing says it is not one until something tries to parse it.
+    // The help is the one exception, since a command typed beside '--help' is what it is asked about.
+    if message_command != HELP && let Some(document) = find_document_asked_for(args_str) {
         eprintln!("\n{}\n", crate::theme::get_active().error.paint(&crate::message_printer::wrap_message(&format!(
-                "'--{message_command}' prints a message to read and '--output json' writes a document for a \
-                        program to read, and both of them go to the output, so only one of the two can be asked for at a time."))));
+                "'--{message_command}' prints a message to read and '{document}' writes a document, and both \
+                        of them go to the output, so only one of the two can be asked for at a time."))));
         return Some(ExitCode::FAILURE);
     }
 
@@ -636,9 +643,13 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
     }
 }
 
-fn asks_for_a_json_document(args_str: &str) -> bool {
-    crate::args::find_argument_of(args_str, OUTPUT)
-            .and_then(OutputFormat::parse) == Some(OutputFormat::Json)
+// The command that makes the output a document, when one was typed
+fn find_document_asked_for(args_str: &str) -> Option<&'static str> {
+    if crate::args::find_argument_of(args_str, OUTPUT).and_then(OutputFormat::parse) == Some(OutputFormat::Json) {
+        return Some("--output json");
+    }
+
+    crate::args::find_command(args_str, BADGE).map(|_| "--badge")
 }
 
 #[cfg(test)]
@@ -647,14 +658,16 @@ mod tests {
     use crate::report_unknown_languages;
 
     #[test]
-    fn a_message_and_a_json_document_are_never_asked_for_together() {
-        assert!(crate::asks_for_a_json_document("./src --output json"));
-        assert!(crate::asks_for_a_json_document("--output JSON --help"));
-        assert!(!crate::asks_for_a_json_document("./src --output text --help"));
-        assert!(!crate::asks_for_a_json_document("./src --help"));
-        assert!(!crate::asks_for_a_json_document("./src --output jsonn --help"));
+    fn a_document_is_asked_for_by_output_json_or_by_badge() {
+        assert_eq!(Some("--output json"), crate::find_document_asked_for("./src --output json"));
+        assert_eq!(Some("--output json"), crate::find_document_asked_for("--output JSON --version"));
+        assert_eq!(Some("--badge"), crate::find_document_asked_for("./src --badge card --version"));
+        assert_eq!(None, crate::find_document_asked_for("./src --output text --version"));
+        assert_eq!(None, crate::find_document_asked_for("./src --version"));
+        assert_eq!(None, crate::find_document_asked_for("./src --output jsonn --version"));
+        assert_eq!(None, crate::find_document_asked_for("./src --badges --version"));
         // '--output' written last of all, with nothing to read after it
-        assert!(!crate::asks_for_a_json_document("./src --output"));
+        assert_eq!(None, crate::find_document_asked_for("./src --output"));
     }
 
     fn java_and_csharp() -> Vec<Language> {

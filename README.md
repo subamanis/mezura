@@ -30,6 +30,7 @@ The whole Linux kernel, in five of the bundled themes:
 * [Taking the result elsewhere](#taking-the-result-elsewhere)
   * [Markdown output](#markdown-output)
   * [JSON output](#json-output)
+  * [A badge for the README](#a-badge-for-the-readme)
   * [Coding agents (MCP)](#coding-agents-mcp)
   * [As a library](#as-a-library)
 * [Tracking growth](#tracking-growth)
@@ -79,7 +80,7 @@ Things it does that most counters do not:
 - **Very customizable output.** You have a lot of control about how mezura counts, and also about how 
   it presents the results to you. You don't like the layout? You find it very busy with many sections? You don't want the animations? You can change everything. See [Commands](#commands).
 - **Themes.** Everything printed can be styled and colored: 98 tokens, 15 bundled themes, and an [interactive web editor](https://subamanis.github.io/mezura/theme-editor/) to experiment. See [Themes](#themes).
-- **Output for other places.** A markdown table with `--output markdown` for a pull request or a job summary, one JSON document with `--output json`, and an MCP server so a coding
+- **Output for other places.** A markdown table with `--output markdown` for a pull request or a job summary, one JSON document with `--output json`, an SVG badge or card with `--badge` for a README, and an MCP server so a coding
   assistant can run mezura itself. See [Taking the result elsewhere](#taking-the-result-elsewhere).
 - **Data driven.** All the files, languages and the settings mezura uses are extracted to your machine, where they can be inspected, changed, or extended very easily. See [The data directory](#the-data-directory).  
   
@@ -172,6 +173,7 @@ HOW THE REPORT LOOKS
 TAKING THE RESULT ELSEWHERE
 
   --output             text for a person, markdown for a page, or one JSON document for another program
+  --badge              an SVG badge of the count, for a README
   --log                append this run to the log of the loaded configuration
 
 COMPARING WITH EARLIER RUNS
@@ -324,7 +326,10 @@ Out of the box, mezura detects test code only when it is unambiguous:
 - **Test runner presets:** when a test tool's config file is present in a folder (such as
   `jest.config.ts`, `vitest.config.ts`, `conftest.py`, or `.rspec` next to a `Gemfile`), mezura
   enables that tool's default test patterns under that folder and lists the active presets below the
-  report.
+  report, unless a configuration file already declares test patterns. When a `package.json`,
+  `pyproject.toml`, `Gemfile` or `composer.json` names a test tool and no test of it was found, a
+  note with the tool and the `--tests` that declares them goes to the error output, into the JSON
+  `warnings` and onto the markdown page.
 
 For anything else, pass glob patterns or preset names (`@pytest`, `@dotnet`, `!@jest`) to `--tests`:
 
@@ -367,7 +372,7 @@ The modules, the languages under them and the changed files under those are all 
 
 It is the report and not a document of its own, so `--hide`, `--sort` and `--top` cut and order it exactly as they do the printed one, `--by-file` hangs the files under each language, `--layout matrix` crosses languages with modules, and `--compare` adds the `History` section as a list. The other `--layout` values draw the same markdown table, and the colours and the overview bar are left out as terminal drawings.
 
-A warning that puts the numbers in doubt, an unreadable language file among them, is written under the table as well as to the error output, since whoever reads the page is the one deciding on those numbers. The ones that only report an ignored setting stay on the error output, where the build log keeps them.
+A warning that puts the numbers in doubt, an unreadable language file among them, is written under the table as well as to the error output, since whoever reads the page is the one deciding on those numbers. So is the note that a test tool the project names found no tests. The ones that only report an ignored setting stay on the error output, where the build log keeps them.
 
 Counting a git revision needs the full history, so a workflow doing the above wants `fetch-depth: 0` on its checkout.
 
@@ -410,12 +415,36 @@ list of every code that exists.
 mezura ./src --output json | jq -e '[.warnings[] | select(.affects == "counts")] | length == 0'
 ```
 
+`test-preset-unapplied` means a test tool the project names found no tests, so they count as
+production until `--tests` declares them.
+
 **Exit codes.** 0 means mezura ran and told you what it found, including when it found nothing,
 because zero is an answer. 1 means the run failed: a mistake in what was asked for, a name that does
 not exist, a set of files where every one of them failed to be parsed, or a scan that found nothing
 after failing to open a directory, since that zero is not a count of anything. The failing cases
 still write the whole JSON document, faulty files and unreadable directories included, so the
 failure can be read and not only detected.
+
+### A badge for the README
+
+`--badge` writes an SVG and nothing else to the output. Without a word it is a pill with the lines
+of code, `mezura` on the left. The cells are the words typed, in their order, out of `lines`,
+`code`, `comments`, `tests`, `files` and `languages`. `card` draws the box GitHub draws for a
+repository's languages, with a bar, the biggest languages and the figures.
+
+```bash
+mezura --badge > badge.svg
+mezura --badge code tests languages > badge.svg
+mezura --badge card --top 4 > card.svg
+```
+
+The project's `.mezura/config.txt` applies, so a badge made in a build step counts with the
+project's own `--tests` and `--exclude` once `--save-local` has written them. The link to mezura
+is the markdown around the image:
+
+```markdown
+[![mezura](badge.svg)](https://github.com/subamanis/mezura)
+```
 
 ### Coding agents (MCP)
 

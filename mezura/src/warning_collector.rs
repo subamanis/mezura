@@ -16,7 +16,10 @@ pub enum ProgramCode {
     CommandIgnored,
     ConfigStyleInvalid,
     ThemeUnavailable,
-    PresetFileShadowed
+    PresetFileShadowed,
+    // A project file names a test tool and no test of that language was found, so its tests may
+    // be counted as production. Settings, since '--tests @<name>' is what fixes it.
+    TestPresetUnapplied
 }
 
 impl ProgramCode {
@@ -30,7 +33,8 @@ impl ProgramCode {
             Self::CommandIgnored => "command-ignored",
             Self::ConfigStyleInvalid => "config-style-invalid",
             Self::ThemeUnavailable => "theme-unavailable",
-            Self::PresetFileShadowed => "preset-file-shadowed"
+            Self::PresetFileShadowed => "preset-file-shadowed",
+            Self::TestPresetUnapplied => "test-preset-unapplied"
         }
     }
 
@@ -39,7 +43,7 @@ impl ProgramCode {
             Self::LanguageFileUnreadable => Affects::Counts,
             Self::ConflictLineSkipped | Self::ConfigValueIgnored | Self::ConfigSectionUnknown
             | Self::ConfigSectionRepeated | Self::CommandIgnored | Self::ConfigStyleInvalid
-            | Self::ThemeUnavailable | Self::PresetFileShadowed => Affects::Settings
+            | Self::ThemeUnavailable | Self::PresetFileShadowed | Self::TestPresetUnapplied => Affects::Settings
         }
     }
 }
@@ -63,6 +67,12 @@ impl AnyCode {
             Self::Library(code) => code.affects(),
             Self::Program(code) => code.affects()
         }
+    }
+
+    // Whether the reader of a markdown page needs it to judge the figures: every doubt about the
+    // counts, and the one setting that leaves a language's tests inside its production
+    pub fn shows_on_the_page(self) -> bool {
+        self.affects() == Affects::Counts || self == AnyCode::Program(ProgramCode::TestPresetUnapplied)
     }
 }
 
@@ -92,6 +102,10 @@ impl ProgramWarning {
 
     pub fn affects(&self) -> Affects {
         self.code.affects()
+    }
+
+    pub fn shows_on_the_page(&self) -> bool {
+        self.code.shows_on_the_page()
     }
 }
 
@@ -200,5 +214,16 @@ mod tests {
         let untouched = add_advice_to(ProgramWarning::new(ProgramCode::ConflictLineSkipped, "a line",
                 "that line was skipped.".to_owned()));
         assert_eq!("that line was skipped.", untouched.message);
+    }
+
+    #[test]
+    fn the_page_shows_every_doubt_about_the_counts_and_the_unapplied_preset_among_the_settings() {
+        assert!(AnyCode::Program(ProgramCode::LanguageFileUnreadable).shows_on_the_page());
+        assert!(AnyCode::Library(Code::CommentPairNeverCloses).shows_on_the_page());
+        assert!(AnyCode::Program(ProgramCode::TestPresetUnapplied).shows_on_the_page());
+        assert_eq!(Affects::Settings, ProgramCode::TestPresetUnapplied.affects(),
+                "a hint that '--tests' fixes was reported as a doubt about the counts");
+        assert!(!AnyCode::Program(ProgramCode::CommandIgnored).shows_on_the_page());
+        assert!(!AnyCode::Library(Code::PatternMatchedNothing).shows_on_the_page());
     }
 }

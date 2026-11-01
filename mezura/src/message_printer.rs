@@ -729,8 +729,9 @@ pub const OUTPUT_HELP  :  &str =
     the colors and the overview bar are left out as terminal drawings. '--explain' has no
     markdown form and says so.
 
-    A warning that puts the numbers in doubt goes under the table as well as to the error output.
-    One about an ignored setting stays on the error output.
+    A warning that puts the numbers in doubt goes under the table as well as to the error output,
+    and so does the note that a test tool the project names found no tests. One about an ignored
+    setting stays on the error output.
 
     'json' replaces the whole output, status lines and overview included, with a single document,
     so another program can read the run.
@@ -751,10 +752,43 @@ pub const OUTPUT_HELP  :  &str =
     the warnings are in it as well under 'warnings', each with a 'code' safe to branch on, an
     'affects' of 'counts' or 'settings', a 'subject' and a readable 'message'. 'affects' is what
     says whether the numbers can be trusted: an unreadable language file means a whole language
-    went uncounted, an ignored setting touches nothing. The list is there even when empty, and a
-    run that found nothing still writes a valid document with a total of zero.
+    went uncounted, an ignored setting touches nothing. 'test-preset-unapplied' means a test tool
+    the project names found no tests, so they count as production until '--tests' declares them.
+    The list is there even when empty, and a run that found nothing still writes a valid document
+    with a total of zero.
 
     Cannot be saved in a configuration file.
+
+";
+pub const BADGE_HELP  :  &str =
+"--badge
+    an SVG badge of the count, for a README
+
+    Words separated by spaces or commas, in any order. Without any, a pill with the code lines.
+
+      pill       one line like the badges at the top of a README, 'mezura' on the left and a
+                 cell per figure on the right, in the order written
+      card       the box GitHub draws for a repository's languages, with the first figure beside
+                 the title, a bar of the languages, the biggest of them with their share of the
+                 lines, and the other figures underneath. With no figure named it shows code,
+                 comments, tests and languages
+
+      lines      every line counted
+      code       the lines of code
+      comments   the lines of comments
+      tests      the share of the lines that are test code. Left out at zero unless named
+      files      the files counted
+      languages  how many languages were found
+
+      mezura --badge > badge.svg
+      mezura --badge code tests languages > badge.svg
+      mezura --badge card --top 4 > card.svg
+
+    Only the SVG goes to the output, the rest to the error output. '--top', '--sort',
+    '--hide tests' and the project's '.mezura/config.txt' apply. Cannot be given with
+    '--output', '--diff' or '--explain', and cannot be saved in a configuration file.
+
+      [![mezura](badge.svg)](https://github.com/subamanis/mezura)
 
 ";
 pub const DIFF_HELP  :  &str =
@@ -1291,6 +1325,7 @@ pub const COMMAND_HELP : [(&str, &[(&str, &str)]); 8] = [
     ]),
     ("Taking the result elsewhere", &[
         (OUTPUT, OUTPUT_HELP),
+        (BADGE, BADGE_HELP),
         (LOG, LOG_HELP),
     ]),
     ("Comparing with earlier runs", &[
@@ -1497,9 +1532,10 @@ fn paint_the_value_names_in(text: &str, starts_the_line: bool) -> String {
 
 // Every list the help draws puts one value at the head of a line, indented into the list and with
 // the gap to its description after it: '--style', '--hide', '--layout', '--bar-thickness',
-// '--number-separator' and '--progress-bar' are all written that way. Taking the head of the line
-// and nothing else is what keeps a description out of it, since the line explaining 'warning' says
-// only "warnings" and the one explaining 'version' says "the version line at the top".
+// '--number-separator', '--progress-bar', '--tests-breakdown' and '--badge' are all written that
+// way. Taking the head of the line and nothing else is what keeps a description out of it, since
+// the line explaining 'warning' says only "warnings" and the one explaining 'version' says "the
+// version line at the top".
 //
 // The style tokens are the one list written several to a line, so past the head of the line only a
 // name from that list is taken.
@@ -1511,7 +1547,7 @@ fn find_the_value_names_in(runs: &[&str], starts_the_line: bool) -> Vec<usize> {
 
     (0..runs.len()).filter(|at| is_a_column_edge(at.checked_sub(1).and_then(|before| runs.get(before)))
             && is_a_column_edge(runs.get(at + 1))
-            && ((is_indented_into_a_list && head_of_the_line == Some(*at))
+            && ((is_indented_into_a_list && head_of_the_line == Some(*at) && runs.get(at + 1).is_some())
                     || crate::theme::Theme::get_token_names().contains(&runs[*at]))).collect()
 }
 
@@ -2183,23 +2219,28 @@ mod tests {
         }
     }
 
-    // The other four commands that list their values have no name list to check against, so the
+    // The other commands that list their values have no name list to check against, so the
     // help's own two copies are checked against each other and both against the parser: the
     // sentence that opens 'One argument:' has to name exactly what the columns below it name, and
     // the command has to accept every one of them. A value reflowed out of its column would
-    // otherwise keep printing, plain among painted siblings, with nothing failing.
+    // otherwise keep printing, plain among painted siblings, with nothing failing. '--badge' opens
+    // with no such sentence, so its eight are spelled out.
     #[test]
     fn each_command_that_lists_its_values_paints_the_ones_it_accepts_and_no_others() {
-        fn check(command: &str, help: &str, accepts: impl Fn(&str) -> bool) {
-            let mut in_a_column = help.lines().flat_map(|line| {
+        fn collect_painted(help: &str) -> Vec<String> {
+            let mut painted = help.lines().flat_map(|line| {
                 let runs = split_into_runs(line);
                 find_the_value_names_in(&runs, true).into_iter().map(|at| runs[at].to_owned())
                         .collect::<Vec<_>>()
             }).collect::<Vec<_>>();
+            painted.sort();
+            painted
+        }
+        fn check(command: &str, help: &str, accepts: impl Fn(&str) -> bool) {
+            let in_a_column = collect_painted(help);
             let mut in_the_sentence = help.lines()
                     .find(|line| line.trim_start().starts_with("One argument:")).unwrap_or_default()
                     .split('\'').skip(1).step_by(2).map(str::to_owned).collect::<Vec<_>>();
-            in_a_column.sort();
             in_the_sentence.sort();
 
             assert_eq!(in_the_sentence, in_a_column, "the values '--{command}' names in its opening \
@@ -2216,6 +2257,12 @@ mod tests {
         check(NUMBER_SEPARATOR, NUMBER_SEPARATOR_HELP, |x| NumberSeparator::parse(x).is_some());
         check(PROGRESS_BAR, PROGRESS_BAR_HELP, |x| ProgressBarStyle::parse(x).is_some());
         check(TESTS_BREAKDOWN, TESTS_BREAKDOWN_HELP, |x| TestsBreakdown::parse(x).is_some());
+        let badge = collect_painted(BADGE_HELP);
+        assert_eq!(["card", "code", "comments", "files", "languages", "lines", "pill", "tests"].map(str::to_owned), *badge,
+                "the words '--badge' paints are not its eight values, so one was reflowed out of its column or a line \
+                of text was painted as a value");
+        assert!(badge.iter().all(|value| crate::badge::BadgeSpec::parse(value).is_ok()), "'--badge' does not accept \
+                every value its help lists: {badge:?}");
     }
 
     // '--version' reads the release date from the first line of the Changelog, so without this the

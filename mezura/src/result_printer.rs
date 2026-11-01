@@ -1141,18 +1141,22 @@ fn print_as_markdown(theme: &Theme, result: &RunResult, groups: &[Group], shown:
     print_markdown_warnings();
 }
 
-// Whoever reads the page decides on the figures, and one about a setting decides nothing there
 fn print_markdown_warnings() {
-    let doubted = super::warning_collector::get_collected_warnings().into_iter()
-            .filter(|warning| warning.affects() == mezura_core::warnings::Affects::Counts)
+    let shown = super::warning_collector::get_collected_warnings().into_iter()
+            .filter(|warning| warning.shows_on_the_page())
             .collect::<Vec<_>>();
-    if doubted.is_empty() {
+    if shown.is_empty() {
         return;
     }
 
     outln!("\n### Warnings\n");
-    for warning in doubted {
-        outln!("- {}", escape_markdown_cell(&warning.message));
+    for warning in shown {
+        let line = match warning.code {
+            super::warning_collector::AnyCode::Program(super::warning_collector::ProgramCode::TestPresetUnapplied) =>
+                    super::present::format_preset_suggestion_for_the_page(&warning.subject),
+            _ => None
+        };
+        outln!("- {}", line.unwrap_or_else(|| escape_markdown_cell(&warning.message)));
     }
 }
 
@@ -4570,18 +4574,7 @@ mod tests {
     // apportionment of the bar. Color is not, being turned off above.
     #[test]
     fn every_layout_matches_the_golden_file() {
-        let golden = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("layouts.golden");
-        let rendered = render_every_layout();
-
-        if std::env::var_os("MEZURA_UPDATE_GOLDEN").is_some() {
-            std::fs::write(&golden, rendered.as_bytes()).unwrap();
-            return;
-        }
-
-        let expected = std::fs::read_to_string(&golden).expect("run with MEZURA_UPDATE_GOLDEN=1 to create it");
-        assert_eq!(expected.replace("\r\n", "\n"), rendered,
-                "the printed layouts changed. Read the diff, and if every difference is intended, \
-                 regenerate with MEZURA_UPDATE_GOLDEN=1 cargo test");
+        crate::test_support::assert_matches_golden("layouts.golden", &render_every_layout(), "every_layout");
     }
 
     // A name wired to the wrong column would take the wrong number's share while every test that

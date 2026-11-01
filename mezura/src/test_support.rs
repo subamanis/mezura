@@ -32,6 +32,21 @@ pub fn plain_stats_of(files: usize, bytes: usize, lines: usize, code: usize, com
     stats_of(files, bytes, classes, keyword_occurrences)
 }
 
+// A golden is written with '\n' and read back through git, which may have given it '\r\n', so the
+// two are compared with the endings normalised
+pub fn assert_matches_golden(file_name: &str, rendered: &str, regenerate_with: &str) {
+    let golden = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join(file_name);
+    if std::env::var_os("MEZURA_UPDATE_GOLDEN").is_some() {
+        std::fs::write(&golden, rendered.as_bytes()).unwrap();
+        return;
+    }
+
+    let expected = std::fs::read_to_string(&golden).expect("run with MEZURA_UPDATE_GOLDEN=1 to create it");
+    assert_eq!(expected.replace("\r\n", "\n"), rendered,
+            "'{file_name}' changed. Read the diff, and if every difference is intended, \
+             regenerate with MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura {regenerate_with}");
+}
+
 // Only what a test varies is passed in; everything else is the emptiest value a run can produce.
 pub fn plain_result_of(per_language: HashMap<String, Stats>, modules: Vec<ModuleResult>,
     targets: Vec<Target>) -> RunResult

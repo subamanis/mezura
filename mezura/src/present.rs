@@ -2,14 +2,15 @@ use std::collections::BTreeMap;
 
 use mezura_core::{AppliedPreset, FaultyFileDetails, RunResult, ScanSkip, UnreadableDirDetails};
 
-use crate::config_manager::Configuration;
+use crate::config_manager::{Configuration, OutputFormat};
 use crate::config_manager::HIDE;
 use crate::message_printer::{collect_distinct, format_tests_command, join_with, quote_for_the_shell};
 use crate::message_printer::MESSAGE_WIDTH;
 use crate::paths::find_outermost_directories;
 use crate::paths::PERSISTENT_APP_PATHS;
-use crate::preset_hint::find_names_of_presets_to_suggest;
+use crate::preset_hint::{PresetSuggestion, find_generic_project_file_naming, find_presets_to_suggest};
 use crate::result_printer::{format_cut_list, format_preset_directory};
+use crate::warning_collector::{ProgramCode, ProgramWarning};
 
 pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>, config: &Configuration) {
     let datetime_now = chrono::Local::now();
@@ -22,14 +23,14 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
         print_detail_hint_if_anything_was_hidden(result, config);
         // The document is written even here, whole and zeroed: a machine consumer must not have to
         // tell "no output" apart from "no code found"
-        if config.view.prints_text() {
+        if !config.view.document_carries_the_notes() {
             let activated = get_activated_languages_as_str(config);
             let message = if activated.is_empty() {"No relevant files found in the given directory.".to_owned()}
                     else {format!("No relevant files found in the given directory. {activated}")};
             eprintln!("{}", super::theme::get_active().warning.paint(&message));
-            if comparison.is_some() {
-                outln!();
-            }
+        }
+        if comparison.is_some() && config.view.prints_text() {
+            outln!();
         }
         print_comparison_or_empty_document(result, comparison, &datetime_now, config);
         return;
@@ -40,11 +41,11 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     if result.all_relevant_files_were_faulty() {
         print_faulty_files_or_ok(&result.faulty_files, config);
         print_detail_hint_if_anything_was_hidden(result, config);
-        if config.view.prints_text() {
+        if !config.view.document_carries_the_notes() {
             eprintln!("{}", super::theme::get_active().warning.paint("None of the files could be parsed."));
-            if comparison.is_some() {
-                outln!();
-            }
+        }
+        if comparison.is_some() && config.view.prints_text() {
+            outln!();
         }
         print_comparison_or_empty_document(result, comparison, &datetime_now, config);
         return;
@@ -57,26 +58,34 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     // Every file found was left out, so no table and no log entry, for the reason the faulty branch
     // above returns.
     if result.nothing_of_interest_was_counted() {
-        if config.view.prints_text() {
+        if !config.view.document_carries_the_notes() {
             eprintln!("{}", super::theme::get_active().warning.paint("Nothing was left to count."));
-            if comparison.is_some() {
-                outln!();
-            }
+        }
+        if comparison.is_some() && config.view.prints_text() {
+            outln!();
         }
         print_comparison_or_empty_document(result, comparison, &datetime_now, config);
         return;
     }
 
-    // A comparison takes the report's place whole: no report, no history section, no log entry
-    if comparison.is_some() || !config.view.prints_a_report() {
-        print_comparison_or_empty_document(result, comparison, &datetime_now, config);
+    // A comparison takes the report's place whole: no report, no history section, no log entry,
+    // and no word about presets
+    if let Some(comparison) = comparison {
+        print_comparison_as_text_or_json(comparison, &datetime_now, config);
+        return;
+    }
+    // Kept before any document is written, so that the JSON and the markdown page carry them
+    let suggestions = keep_test_preset_suggestions(result, config);
+    if !config.view.prints_a_report() {
+        print_document(result, &datetime_now, config);
+        print_test_preset_notes(result, &suggestions, config);
         return;
     }
 
     let log_file_path = determine_log_file_path(config);
     let existing_log_contents = log_file_path.as_ref().and_then(|path| super::log::extract_file_contents(path));
     super::result_printer::format_and_print_results(result, &existing_log_contents, &datetime_now, config);
-    print_test_preset_notes(result, config);
+    print_test_preset_notes(result, &suggestions, config);
 
     let can_write_log = config.view.target_checkouts.is_empty()
             || config.view.config_name_to_save.is_some()
@@ -132,10 +141,21 @@ pub(crate) fn sort_by_path<T>(items: &[T], get_path: impl Fn(&T) -> &str) -> Vec
     sorted
 }
 
+// The page form of the suggestion a warning of that code carries, with the commands as code spans
+// so that '@jest' is never read as a mention. The subject is the tool names, joined as the keep
+// below joins them.
+pub fn format_preset_suggestion_for_the_page(subject: &str) -> Option<String> {
+    let named = subject.split(", ").filter_map(find_generic_project_file_naming).collect::<Vec<_>>();
+    let (file_name, _) = *named.first()?;
+    let names = named.iter().map(|(_, name)| *name).collect::<Vec<_>>();
+
+    Some(format_preset_suggestion(&PresetSuggestion { file_name, names }, CommandForm::Page))
+}
+
 // On the error output and never hidden, for the reason a faulty file is: the figures are lower than
 // the tree and nothing else would say why. A JSON run has it under 'scan'.
 fn print_files_left_out(result: &RunResult, config: &Configuration) {
-    if !config.view.prints_text() {
+    if config.view.document_carries_the_notes() {
         return;
     }
     let lines = format_files_left_out(result, config.view.should_show_skipped_files);
@@ -177,39 +197,69 @@ fn format_files_left_out(result: &RunResult, show_skipped: bool) -> Vec<String> 
     lines
 }
 
-// The rows keep to the width themselves, so nothing wraps them
-fn print_test_preset_notes(result: &RunResult, config: &Configuration) {
-    if !config.view.prints_text() {
-        return;
+// On the error output of every format, under the report: the rows keep to the width themselves, so
+// nothing wraps them
+fn print_test_preset_notes(result: &RunResult, suggestions: &[String], config: &Configuration) {
+    let theme = super::theme::get_active();
+    let applied = collect_applied_preset_lines(result, config);
+    for line in &applied {
+        eprintln!("{}", theme.note.paint(line));
     }
-    let lines = collect_test_preset_notes(result, config);
-    for line in &lines {
-        eprintln!("{}", super::theme::get_active().note.paint(line));
+    for line in suggestions {
+        eprintln!("{}", theme.warning.paint(&crate::message_printer::wrap_message(line)));
     }
-    if !lines.is_empty() {
+    if !applied.is_empty() || !suggestions.is_empty() {
         eprintln!();
     }
 }
 
-// Nothing once the project's own configuration declares its test patterns, and no hint for a run
-// that typed some, since whoever typed '--tests' has met the presets in its help
-fn collect_test_preset_notes(result: &RunResult, config: &Configuration) -> Vec<String> {
-    let declared_by_the_project = config.view.local_dir.as_ref().is_some_and(|x| x.declares_test_patterns);
-    if !config.engine.detect_tests || declared_by_the_project {
+// Nothing once a configuration file declares test patterns, for the noise it saves on every run of
+// that project, while a '--tests' typed for this run keeps the list
+fn collect_applied_preset_lines(result: &RunResult, config: &Configuration) -> Vec<String> {
+    let declared_in_a_file = !config.engine.test_patterns.patterns.is_empty() && !config.typed_explicitly.tests;
+    if !config.engine.detect_tests || declared_in_a_file {
         return Vec::new();
     }
-    let mut lines = format_applied_presets(result, crate::paths::find_working_directory().as_deref());
-    if !config.typed_explicitly.tests {
-        let target_roots = if config.view.target_checkouts.is_empty() {
-            &result.targets
-        } else {
-            &config.engine.targets
-        };
-        lines.extend(find_names_of_presets_to_suggest(result, target_roots).iter()
-                .map(|names| format_preset_suggestion(names)));
-    }
 
-    lines
+    format_applied_presets(result, crate::paths::find_working_directory().as_deref())
+}
+
+// Nothing once test patterns were declared anywhere, typed or in a configuration file, since whoever
+// declared them has met the presets in the help of '--tests'
+fn keep_test_preset_suggestions(result: &RunResult, config: &Configuration) -> Vec<String> {
+    if !config.engine.detect_tests || !config.engine.test_patterns.patterns.is_empty() {
+        return Vec::new();
+    }
+    let target_roots = if config.view.target_checkouts.is_empty() {
+        &result.targets
+    } else {
+        &config.engine.targets
+    };
+
+    find_presets_to_suggest(result, target_roots).iter().map(|suggestion| {
+        let sentence = format_preset_suggestion(suggestion, CommandForm::Shell);
+        super::warning_collector::keep(ProgramWarning::new(ProgramCode::TestPresetUnapplied,
+                &suggestion.names.join(", "), sentence.clone()));
+        sentence
+    }).collect()
+}
+
+// How a '--tests' command is written: for a shell, or as a code span on a markdown page
+#[derive(Clone, Copy)]
+enum CommandForm {
+    Shell,
+    Page
+}
+
+impl CommandForm {
+    fn write_tests_argument(self, first: bool, argument: &str) -> String {
+        match (self, first) {
+            (Self::Shell, true) => format_tests_command(argument),
+            (Self::Shell, false) => quote_for_the_shell(argument),
+            (Self::Page, true) => format!("`--{} \"{argument}\"`", crate::config_manager::TESTS),
+            (Self::Page, false) => format!("`\"{argument}\"`")
+        }
+    }
 }
 
 // A folder inside another one of the same preset adds nothing to where it applies, and the
@@ -253,13 +303,18 @@ fn find_most_shown_that_fit(opening: &str, count: usize, format_rest: impl Fn(us
             .unwrap_or(1)
 }
 
-fn format_preset_suggestion(names: &[&str]) -> String {
-    let declared = names.iter().enumerate().map(|(at, name)| match at {
-        0 => format_tests_command(&format!("@{name}")),
-        _ => quote_for_the_shell(&format!("@{name}"))
-    }).collect::<Vec<_>>();
+fn format_preset_suggestion(suggestion: &PresetSuggestion, form: CommandForm) -> String {
+    let names = &suggestion.names;
+    let found = match names.len() {
+        1 => format!("no {} test was found", names[0]),
+        2 => "no test of either was found".to_owned(),
+        _ => "no test of any was found".to_owned()
+    };
+    let declared = names.iter().enumerate()
+            .map(|(at, name)| form.write_tests_argument(at == 0, &format!("@{name}"))).collect::<Vec<_>>();
 
-    format!("{} tests are declared with {}.", join_with(names, "or"), join_with(&declared, "or"))
+    format!("'{}' names {}, and {found}, so if there are any they are counted as production. They are declared with {}.",
+            suggestion.file_name, join_with(names, "and"), join_with(&declared, "or"))
 }
 
 // In the error color, since everything under an unreadable directory appears in no total at all,
@@ -283,16 +338,24 @@ fn print_unreadable_dirs(unreadable_dirs: &[UnreadableDirDetails], config: &Conf
     eprintln!();
 }
 
-// A scan that found nothing still owes the comparison that was asked for, rather than a plain
-// document of zeros.
+// A scan that found nothing still owes the comparison that was asked for, or the document, whole
+// and zeroed.
 fn print_comparison_or_empty_document(result: &RunResult, comparison: Option<&super::diff::Comparison>,
         datetime_now: &chrono::DateTime<chrono::Local>, config: &Configuration)
 {
     match comparison {
         // The blank line above it is the caller's: only the caller knows what sits there
         Some(comparison) => print_comparison_as_text_or_json(comparison, datetime_now, config),
-        None if config.view.prints_a_report() => (),
-        None => super::json_printer::print_as_json(result, datetime_now, config)
+        None => print_document(result, datetime_now, config)
+    }
+}
+
+// The outputs that are a document and no report: nothing for the two that are a report
+fn print_document(result: &RunResult, datetime_now: &chrono::DateTime<chrono::Local>, config: &Configuration) {
+    match config.view.output {
+        OutputFormat::Json => super::json_printer::print_as_json(result, datetime_now, config),
+        OutputFormat::Svg => super::badge::print_badge(result, config),
+        OutputFormat::Text | OutputFormat::Markdown => ()
     }
 }
 
@@ -415,6 +478,13 @@ mod tests {
                 format_applied_presets(&result, Some("D:/proj"))[1], "the file names ran the row past the width");
         assert_eq!("  @vitest   under D:/proj/packages/a and 4 more (vitest.config.ts, vitest.workspace.ts and 3 more)",
                 format_applied_presets(&result, Some("D:/elsewhere"))[1], "a folder outside the working directory was not written whole");
+
+        let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        assert!(!collect_applied_preset_lines(&result, &config).is_empty());
+        config.engine.test_patterns.patterns.push("spec".to_owned());
+        assert!(collect_applied_preset_lines(&result, &config).is_empty(), "a configuration file with test patterns kept the list");
+        config.typed_explicitly.tests = true;
+        assert!(!collect_applied_preset_lines(&result, &config).is_empty(), "a typed '--tests' silenced the list");
     }
 
     #[test]
@@ -428,20 +498,30 @@ mod tests {
         result.targets = vec![Target::of(crate::paths::normalise_separators(&root.to_string_lossy()))];
         result.per_language.insert("TypeScript".to_owned(), result.total.clone());
 
-        let suggested = find_names_of_presets_to_suggest(&result, &[]).iter().map(|names| format_preset_suggestion(names)).collect::<Vec<_>>();
-        assert_eq!(vec![format!("jest or vitest tests are declared with {} or {}.", format_tests_command("@jest"),
+        let suggested = find_presets_to_suggest(&result, &[]).iter()
+                .map(|suggestion| format_preset_suggestion(suggestion, CommandForm::Shell)).collect::<Vec<_>>();
+        assert_eq!(vec![format!("'package.json' names jest and vitest, and no test of either was found, so if there are any \
+                they are counted as production. They are declared with {} or {}.", format_tests_command("@jest"),
                 quote_for_the_shell("@vitest"))], suggested);
         let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-        assert_eq!(suggested, collect_test_preset_notes(&result, &config));
-        config.typed_explicitly.tests = true;
-        assert!(collect_test_preset_notes(&result, &config).is_empty(), "a run that typed '--tests' was told about presets");
+        assert_eq!(suggested, keep_test_preset_suggestions(&result, &config));
+        let kept = crate::warning_collector::get_collected_warnings().into_iter()
+                .find(|x| x.subject == "jest, vitest").expect("the suggestion never reached the collector");
+        assert_eq!(crate::warning_collector::AnyCode::Program(ProgramCode::TestPresetUnapplied), kept.code);
+        assert_eq!(suggested[0], kept.message);
+        assert_eq!(Some("'package.json' names jest and vitest, and no test of either was found, so if there are any they \
+                are counted as production. They are declared with `--tests \"@jest\"` or `\"@vitest\"`.".to_owned()),
+                format_preset_suggestion_for_the_page(&kept.subject), "the page form lost a name or wrote a mention");
+        config.engine.test_patterns.patterns.push("spec".to_owned());
+        assert!(keep_test_preset_suggestions(&result, &config).is_empty(),
+                "a run with test patterns declared got the hint");
         result.applied_presets = vec![AppliedPreset { name: "vitest".to_owned(), directory: "D:/".to_owned(),
                 trigger_file: "vitest.config.ts".to_owned(), matched: true }];
-        assert!(find_names_of_presets_to_suggest(&result, &[]).is_empty(), "a preset that found the tests was suggested again");
+        assert!(find_presets_to_suggest(&result, &[]).is_empty(), "a preset that found the tests was suggested again");
 
         result.applied_presets = Vec::new();
         std::fs::write(root.join("package.json"), r#"{"devDependencies": {"eslint": "^9", "prettier": "^3"}}"#).unwrap();
-        assert!(find_names_of_presets_to_suggest(&result, &[]).is_empty(), "a package.json kept for tooling named a test tool");
+        assert!(find_presets_to_suggest(&result, &[]).is_empty(), "a package.json kept for tooling named a test tool");
 
         std::fs::remove_dir_all(&root).unwrap();
     }

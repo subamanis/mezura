@@ -8,8 +8,17 @@ Main changes:
       ('src/main.rs@v3.2.0').
   -> Glob target paths can now be compared against a git revision with '--diff', each side
       counting what the pattern matches at its own commit.
+  -> '--badge' draws an SVG badge of the count for a README: a pill of figures ('--badge',
+      '--badge code tests languages') or a card with the languages bar ('--badge card'), with
+      its own colors for a light and a dark page.
 
 Bugfixes:
+  -> The note that a test tool named in 'package.json', 'pyproject.toml', 'Gemfile' or
+      'composer.json' found no tests now prints under '--output json' and '--output markdown'
+      too, names the file that names the tool, and reaches the JSON 'warnings' (code
+      'test-preset-unapplied') and the markdown page.
+  -> '--output markdown' now prints on the error output that nothing was found, that every file
+      was left out, and which project settings applied, as a text run does.
   -> Long file paths under '--by-file' now keep their trailing folders ('.../Services/file.php')
       when the first folder does not fit, and use the full width of the column when a long file
       name has already widened it.
@@ -31,6 +40,8 @@ Bugfixes:
 Change in commands:
   -> '--output markdown' now also renders '--layout matrix', the 'Overview' percentage table, and
       the 'History' section under '--compare'.
+  -> '--help' beside '--output json' now prints the help of '--output'. The two together were
+      refused before.
   -> '--save <name>' now writes target paths only when they were explicitly given (or already in a
       configuration loaded with '--load' in the same run), and not into 'default', so saving
       without a target path creates a reusable settings bundle instead of pinning to the current
@@ -38,6 +49,9 @@ Change in commands:
   -> '--hide modules' prints a configuration or run with named modules as a single flat report.
   -> '--hide' on the command line now adds to the sections hidden by a loaded configuration instead
       of replacing them.
+  -> A configuration file that declares test patterns, the project's own, a loaded one or the
+      default, now silences both the list of applied test presets and the note about a test tool
+      whose tests were not found; a '--tests' typed on the command line silences the note only.
 
 Other:
   -> The first column header of the Details table now shows the number of counted languages or

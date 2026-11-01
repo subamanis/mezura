@@ -124,7 +124,7 @@ configuration (`pytest.toml`, `.pytest.toml`, `pytest.ini`, `.pytest.ini`, `pypr
 ### Inspecting and overriding presets
 
 When presets are auto-activated and match at least one file, they are listed at the bottom of the
-report:
+report, unless a configuration file already declares test patterns:
 
 ```text
 Test presets applied:
@@ -132,6 +132,12 @@ Test presets applied:
   @pytest    under ./tools, ./scripts and 3 more (conftest.py)
 To disable a test preset: '--tests "!@<name>"'. To disable test detection: '--hide tests'.
 ```
+
+A `package.json`, `pyproject.toml`, `Gemfile` or `composer.json` can name a test tool of which no
+test was found. Then a note with the tool and the `--tests "@<name>"` that declares its tests goes
+to the error output, into the JSON `warnings` as `test-preset-unapplied` and onto the markdown
+page. The tools it knows are jest, vitest, mocha, pytest, unittest, rspec, minitest and phpunit,
+and the packages a `package.json` names as workspace members are read too.
 
 You can also control presets explicitly through `--tests`:
 - **Enable a preset manually:** `--tests "@pytest"` or `--tests "@dotnet"` applies the preset's
@@ -302,7 +308,10 @@ file contents.
     completely.
   - `--hide tests`: disables test detection and hides all test rows.
 - **JSON output (`--output json`):** Adds `scope.tests_detected`, `scope.test_presets`,
-  `languages[].tests`, `total.tests`, `modules[].total.tests`, and `languages[].by_file[].tests`.
+  `languages[].tests`, `total.tests`, `modules[].total.tests`, and `languages[].by_file[].tests`,
+  and records `test-preset-unapplied` in `warnings` when a named test tool found no tests.
+- **SVG badges (`--badge`):** `tests` shows the share of the lines that are test code. A card shows
+  it unless it is zero, and any badge shows it when `tests` is named.
 - **Comparisons (`--diff`):** Compares test counts alongside total counts. If a test preset applies
   on only one side of a diff, the report emits a `preset-on-one-side` note.
 - **Line-by-line explanation (`--explain`):** Labels every test line as `test code`, prints the test

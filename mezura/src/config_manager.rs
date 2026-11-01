@@ -9,6 +9,7 @@ use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, P
         validate_exclude_patterns, validate_test_patterns};
 pub use mezura_core::SortCriterion;
 
+use super::badge::BadgeSpec;
 use super::config_files::InvalidField;
 use super::git::Checkout;
 use super::message_printer::{self, Formatted, wrap_message};
@@ -48,6 +49,7 @@ pub const BAR_THICKNESS      :&str   = "bar-thickness";
 pub const PROGRESS_BAR       :&str   = "progress-bar";
 pub const LAYOUT             :&str   = "layout";
 pub const OUTPUT             :&str   = "output";
+pub const BADGE              :&str   = "badge";
 pub const EXPLAIN            :&str   = "explain";
 pub const DIFF               :&str   = "diff";
 pub const NUMBER_SEPARATOR   :&str   = "number-separator";
@@ -144,6 +146,8 @@ pub struct ViewConfig {
     pub progress_bar: ProgressBarStyle,
     pub layout: Layout,
     pub output: OutputFormat,
+    // What a '--badge' run draws. Command line only, like '--output', which it sets to 'Svg'.
+    pub badge: Option<BadgeSpec>,
     // One file explained line by line instead of a report, and which of its lines to print.
     // Command line only, like '--output'.
     pub explain: Option<ExplainedLines>,
@@ -171,9 +175,14 @@ impl ViewConfig {
         self.output == OutputFormat::Text
     }
 
-    // Markdown answers this one like text and every other question like JSON
     pub fn prints_a_report(&self) -> bool {
-        self.output != OutputFormat::Json
+        self.output.prints_a_report()
+    }
+
+    // The JSON document holds what the scan found and left out and which settings applied, so
+    // nothing is printed beside it. Every other output prints those on the error output.
+    pub fn document_carries_the_notes(&self) -> bool {
+        self.output == OutputFormat::Json
     }
 
     // The project whose log this run writes and reads, when the log is a project's own. A run
@@ -221,6 +230,7 @@ impl Default for ViewConfig {
             progress_bar: ProgressBarStyle::default(),
             layout: Layout::default(),
             output: OutputFormat::default(),
+            badge: None,
             explain: None,
             diff_against: None,
             number_separator: NumberSeparator::default(),
@@ -603,7 +613,9 @@ pub enum OutputFormat {
     #[default]
     Text,
     Json,
-    Markdown
+    Markdown,
+    // Set by '--badge' and never by '--output', so that a badge is asked for in one way
+    Svg
 }
 
 impl OutputFormat {
@@ -614,6 +626,12 @@ impl OutputFormat {
             "markdown" | "md" => Some(Self::Markdown),
             _ => None
         }
+    }
+
+    // Markdown answers this one like text and every other question like JSON. A badge is a
+    // document like JSON: written whole, even over nothing, with no report, history or log.
+    pub fn prints_a_report(self) -> bool {
+        matches!(self, Self::Text | Self::Markdown)
     }
 }
 
@@ -753,6 +771,8 @@ pub enum ArgParsingError {
     ContestedTarget(String, String, String),
     GitTarget(String),
     MeaninglessWithExplain(String),
+    MeaninglessWithBadge(String),
+    BadgeAskedThroughOutput,
     ContradictoryCommands(String, String)
 }
 
@@ -814,6 +834,8 @@ impl Formatted for ArgParsingError {
             Self::ContestedTarget(path, first, second) => paint(&wrap_message(&format!("'{path}' is declared both as '{first}' and as '{second}'.\nEvery file belongs to exactly one module, and there is no more specific of the two to decide it."))),
             Self::GitTarget(message) => paint(&wrap_message(message)),
             Self::MeaninglessWithExplain(command) => paint(&wrap_message(&format!("'--{EXPLAIN}' explains one file line by line and '--{command}' belongs to a report over a whole scan, so the two cannot be asked for together."))),
+            Self::MeaninglessWithBadge(command) => paint(&wrap_message(&format!("'--{BADGE}' draws one scan as a picture and '--{command}' asks for another output, so the two cannot be asked for together."))),
+            Self::BadgeAskedThroughOutput => paint(&wrap_message(&format!("A badge is asked for with '--{BADGE}', which also names what it shows: '--{BADGE}', '--{BADGE} code tests' or '--{BADGE} card'."))),
             Self::ContradictoryCommands(one, other) => paint(&wrap_message(&format!("'--{one}' and '--{other}' ask for opposite things, so they cannot be given together.")))
         }
     }
@@ -851,7 +873,7 @@ impl TypedExplicitlyOnCommandLine {
             log: _, compare_level: _, config_name_to_save: _, config_name_to_load: _, counts_the_named_config: _,
             theme_name_to_save: _, preset_name_to_save: _, test_patterns_from_presets: _, local_dir: _, bar_thickness: _,
             progress_bar: _, number_separator: _, decimal_separator: _,
-            layout: _, output: _, explain: _, diff_against: _, sort_by: _, top_n: _, by_file: _,
+            layout: _, output: _, badge: _, explain: _, diff_against: _, sort_by: _, top_n: _, by_file: _,
             tests_breakdown: _, styles: _, config_styles: _, theme_styles: _,
             target_checkouts: _, original_typed_targets: _, single_unnamed_checkout_root: _,
             typed_explicitly: _ } = builder;
@@ -928,6 +950,8 @@ pub struct ConfigurationBuilder {
     // Absent from 'add_missing_fields' and 'has_missing_fields' on purpose, like the save and load
     // names: those two functions exist for what a configuration file can supply, and this is not it
     pub output:                   Option<OutputFormat>,
+    // Absent from the same two for the reason 'output' is, which it sets
+    pub badge:                    Option<BadgeSpec>,
     // Absent from the same two for the same reason: a per-run diagnostic, never a saved setting
     pub explain:                  Option<ExplainedLines>,
     // Absent from those same two, and for the same reason: a configuration that silently turned
@@ -1000,7 +1024,7 @@ impl ConfigurationBuilder {
             // never carried by a configuration file, so never merged out of one either
             targets_source: _, log: _, config_name_to_save: _, config_name_to_load: _, counts_the_named_config: _,
             theme_name_to_save: _, preset_name_to_save: _, test_patterns_from_presets: _, local_dir: _, output: _,
-            explain: _, diff_against: _, styles: _, theme_styles: _,
+            badge: _, explain: _, diff_against: _, styles: _, theme_styles: _,
             target_checkouts: _, original_typed_targets: _, single_unnamed_checkout_root: _,
             typed_explicitly: _ } = &mut self;
 
@@ -1026,6 +1050,17 @@ impl ConfigurationBuilder {
         *no_shebang = None;
 
         self
+    }
+
+    // A badge draws no report, no file rows and no history, and writes no log, so what asks for
+    // them is dropped. Returns the commands that held something, the one list of what a badge
+    // ignores.
+    pub fn forget_what_a_badge_never_draws(&mut self) -> Vec<&'static str> {
+        let dropped = [(LAYOUT, self.layout.take().is_some()), (BY_FILE, self.by_file.take().is_some()),
+                (LOG, self.log.take().is_some()), (COMPARE_LEVEL, self.compare_level.take().is_some()),
+                (BAR_THICKNESS, self.bar_thickness.take().is_some()), (TESTS_BREAKDOWN, self.tests_breakdown.take().is_some())];
+
+        dropped.into_iter().filter(|(_, held)| *held).map(|(command, _)| command).collect()
     }
 
     // Every field 'add_missing_fields' merges has to be asked about here, or the answer is "nothing
@@ -1084,8 +1119,8 @@ impl ConfigurationBuilder {
             sort_by = SortCriterion::default();
         }
         // Decided here, after a configuration file has had its say on both halves. A JSON document
-        // carries every figure whatever is hidden, so there the order stands as asked.
-        if hidden.hides_column_of(sort_by) && self.output.unwrap_or_default() != OutputFormat::Json {
+        // or a badge draws no column, so there the order stands as asked.
+        if hidden.hides_column_of(sort_by) && self.output.unwrap_or_default().prints_a_report() {
             let message = format!("'--{SORT} {}' orders by a column '--{HIDE} {0}' takes out, so the report \
                     is sorted by lines.", sort_by.as_str());
             eprintln!("\n{}", wrap_message(&message).yellow());
@@ -1156,6 +1191,7 @@ impl ConfigurationBuilder {
                 progress_bar: self.progress_bar.unwrap_or_default(),
                 layout: self.layout.unwrap_or_default(),
                 output: self.output.unwrap_or_default(),
+                badge: self.badge.clone(),
                 explain: self.explain,
                 diff_against: self.diff_against.clone(),
                 number_separator: self.number_separator.unwrap_or_default(),
@@ -1413,7 +1449,16 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
             PROGRESS_BAR => config_builder.progress_bar =
                     Some(parse_or_refuse(PROGRESS_BAR, arguments, ProgressBarStyle::parse)?),
             LAYOUT => config_builder.layout = Some(parse_or_refuse(LAYOUT, arguments, Layout::parse)?),
-            OUTPUT => config_builder.output = Some(parse_or_refuse(OUTPUT, arguments, OutputFormat::parse)?),
+            OUTPUT => {
+                if matches!(arguments.trim().to_lowercase().as_str(), "svg" | "badge") {
+                    return Err(ArgParsingError::BadgeAskedThroughOutput);
+                }
+                config_builder.output = Some(parse_or_refuse(OUTPUT, arguments, OutputFormat::parse)?)
+            },
+            BADGE => config_builder.badge = Some(BadgeSpec::parse(arguments).map_err(|word| {
+                message_printer::print_help_message_for_command(BADGE);
+                refuse_argument(&word, BADGE.to_owned())
+            })?),
             EXPLAIN => config_builder.explain =
                     Some(parse_or_refuse(EXPLAIN, arguments, crate::args::parse_explained_lines)?),
             DIFF => config_builder.diff_against = Some(take_name(DIFF, arguments)?),
@@ -1453,6 +1498,7 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     if save_local && no_local {
         return Err(ArgParsingError::ContradictoryCommands(SAVE_LOCAL.to_owned(), NO_LOCAL.to_owned()));
     }
+    apply_the_badge_command(&mut config_builder)?;
 
     config_builder.original_typed_targets.clone_from(&config_builder.targets);
     let (seeded_from_diff, skip_working_dir_local) = if config_builder.targets.is_none()
@@ -1580,6 +1626,18 @@ pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilde
     if !no_default_config && config_builder.has_missing_fields()
             && apply_default_configuration(&mut config_builder)? {
         targets_config_source = Some(DEFAULT_CONFIG_LABEL.to_owned());
+    }
+    // After the files, so that a project's own '--by-file' goes too, and after 'typed_explicitly'
+    // was taken, so that the keywords count as hidden by the badge and never as typed. A 'tests'
+    // figure typed for the badge wins over a file's 'hide tests', the way every typed value does.
+    if let Some(badge) = &config_builder.badge {
+        let mut hidden = config_builder.hidden.unwrap_or_default();
+        hidden.keywords = true;
+        if badge.names_tests() {
+            hidden.tests = false;
+        }
+        config_builder.hidden = Some(hidden);
+        config_builder.forget_what_a_badge_never_draws();
     }
 
     // No pattern is expanded here, or anywhere in this crate: the run resolves the declared targets
@@ -1758,9 +1816,6 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
             .map(|declared| rebase_patterns_on(&local.project_dir, &label, declared));
     local_config.test_patterns = local_config.test_patterns
             .map(|declared| rebase_patterns_on(&local.project_dir, &label, declared));
-    if let Some(found) = &mut config_builder.local_dir {
-        found.declares_test_patterns = local_config.test_patterns.is_some();
-    }
     project_targets.clone_from(&local_config.targets);
     if config_builder.single_unnamed_checkout_root && local_config.targets.is_some() {
         config_builder.targets = None;
@@ -1953,17 +2008,21 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             config_name_to_save: _, config_name_to_load: _, counts_the_named_config: _,
             theme_name_to_save: _, preset_name_to_save: _, output: _,
             explain: _, diff_against: _, log: _, targets_source: _, local_dir: _, typed_explicitly: _,
+            // a badge drops the five fields below that it never draws, so a bad value in a file is
+            // as overridden as a typed one would make it
+            badge,
             test_patterns_from_presets: _, target_checkouts: _, original_typed_targets: _,
             single_unnamed_checkout_root: _,
             // a style that does not parse is reported per line and skipped, and the rest of the file
             // still applies, so these warn instead of reaching here
             styles: _, config_styles: _, theme_styles: _ } = config_builder;
 
+    let dropped_by_a_badge = badge.is_some();
     for InvalidField { command, reason } in invalid_fields {
         let is_overridden = match *command {
             TARGETS => targets.is_some(),
             THREADS => threads.is_some(),
-            COMPARE_LEVEL => compare_level.is_some(),
+            COMPARE_LEVEL => compare_level.is_some() || dropped_by_a_badge,
             COUNTING => counting.is_some(),
             SEARCH_IN_DOTTED => should_search_in_dotted.is_some(),
             COUNT_MINIFIED => count_minified.is_some(),
@@ -1982,13 +2041,13 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             THEME => theme_name.is_some(),
             SORT => sort_by.is_some(),
             TOP => top_n.is_some(),
-            BY_FILE => by_file.is_some(),
-            TESTS_BREAKDOWN => tests_breakdown.is_some(),
-            BAR_THICKNESS => bar_thickness.is_some(),
+            BY_FILE => by_file.is_some() || dropped_by_a_badge,
+            TESTS_BREAKDOWN => tests_breakdown.is_some() || dropped_by_a_badge,
+            BAR_THICKNESS => bar_thickness.is_some() || dropped_by_a_badge,
             PROGRESS_BAR => progress_bar.is_some(),
             NUMBER_SEPARATOR => number_separator.is_some(),
             DECIMAL_SEPARATOR => decimal_separator.is_some(),
-            LAYOUT => layout.is_some(),
+            LAYOUT => layout.is_some() || dropped_by_a_badge,
             _ => false
         };
 
@@ -2042,6 +2101,30 @@ fn targets_match_by(one: &[Target], other: &[Target], include_modules: bool) -> 
     };
 
     normalise(one) == normalise(other)
+}
+
+// Decided while every field is still the command line's own, like the '--explain' check: a command
+// that asks for another output is refused, one a badge never draws is dropped with a word, and the
+// output is set to what the printing branches on.
+fn apply_the_badge_command(builder: &mut ConfigurationBuilder) -> Result<(), ArgParsingError> {
+    let Some(badge) = &builder.badge else { return Ok(()) };
+    let typed_beside_it = [(OUTPUT, builder.output.is_some()), (DIFF, builder.diff_against.is_some()),
+            (EXPLAIN, builder.explain.is_some())];
+    if let Some((command, _)) = typed_beside_it.iter().find(|(_, typed)| *typed) {
+        return Err(ArgParsingError::MeaninglessWithBadge((*command).to_owned()));
+    }
+    if badge.names_tests() && builder.hidden.is_some_and(|hidden| hidden.tests) {
+        return Err(ArgParsingError::ContradictoryCommands(format!("{BADGE} tests"), format!("{HIDE} tests")));
+    }
+    builder.output = Some(OutputFormat::Svg);
+    for command in builder.forget_what_a_badge_never_draws() {
+        let why = if command == LOG {"a badge run writes no log"} else {"a badge draws nothing it decides"};
+        let message = format!("'--{command}' command will be ignored: {why}.");
+        eprintln!("\n{}", wrap_message(&message).yellow());
+        super::warning_collector::keep(ProgramWarning::new(ProgramCode::CommandIgnored, command, message));
+    }
+
+    Ok(())
 }
 
 fn print_warnings_for_commands_that_need_a_loaded_configuration(builder: &ConfigurationBuilder,
@@ -2580,15 +2663,17 @@ mod tests {
         std::fs::remove_dir_all(&project).unwrap();
     }
 
-    // A JSON document carries every figure whatever is hidden, so there the order stands as asked
+    // A JSON document or a badge draws no column, so there the order stands as asked
     #[test]
     fn sorting_by_a_hidden_column_falls_back_to_lines() {
         let sorted = |command: &str| create_config_from_args(command).unwrap().view.sort_by;
 
         assert_eq!(SortCriterion::Lines, sorted("./ --hide size --sort size"));
         assert_eq!(SortCriterion::Lines, sorted("./ --hide size --sort size --diff old.json"));
+        assert_eq!(SortCriterion::Lines, sorted("./ --hide size --sort size --output markdown"));
         assert_eq!(SortCriterion::Size, sorted("./ --hide extra --sort size"));
         assert_eq!(SortCriterion::Size, sorted("./ --hide size --sort size --output json"));
+        assert_eq!(SortCriterion::Size, sorted("./ --hide size --sort size --badge card"));
         assert_eq!(SortCriterion::Code, sorted("./ --hide files,comments,extra,size,percentages --sort code"));
     }
 
@@ -3136,8 +3221,8 @@ mod tests {
         assert_eq!(Some(7), found.view.top_n);
         assert_eq!(Some(project.clone() + "/.mezura/config.txt"),
                 found.view.local_dir.as_ref().map(LocalDir::get_config_path));
-        assert!(found.view.local_dir.is_some_and(|x| x.configuration_applied && !x.declares_test_patterns),
-                "a project with no tests block silenced the presets list");
+        assert!(found.view.local_dir.is_some_and(|x| x.configuration_applied));
+        assert!(found.engine.test_patterns.patterns.is_empty(), "a project with no tests block declared some");
 
         let overridden = create_config_from_args(&format!("{project}/src --languages python --top 2")).unwrap();
         assert_eq!(vec!["python".to_owned()], overridden.engine.languages_of_interest.to_written_form());
@@ -3464,8 +3549,6 @@ mod tests {
         assert_eq!(PathPatterns { patterns: vec![format!("{project}/build/"), "node_modules".to_owned()], read_from: Some(project.clone()),
                 reports_unmatched_names: false }, found.engine.exclude_patterns);
         assert!(!found.typed_explicitly.tests && !found.typed_explicitly.exclude);
-        assert!(found.view.local_dir.as_ref().is_some_and(|x| x.declares_test_patterns),
-                "a project that saved its test patterns still gets the presets list");
 
         let cwd = crate::paths::normalise_separators(&std::env::current_dir().unwrap().to_string_lossy()).into_owned();
         let typed = create_config_from_args(&format!("{project}/src --tests ./spec --exclude ./gen")).unwrap();
@@ -3509,6 +3592,62 @@ mod tests {
                 .find(|x| x.code == crate::warning_collector::AnyCode::Program(ProgramCode::CommandIgnored)
                         && x.subject == TESTS).unwrap();
         assert!(warned.message.contains("'--hide tests' turns the detection off"), "{}", warned.message);
+    }
+
+    #[test]
+    fn a_badge_is_an_output_of_its_own_and_refuses_what_asks_for_another() {
+        let badge = create_config_from_args("./ --badge card code").unwrap();
+        assert_eq!(OutputFormat::Svg, badge.view.output);
+        assert_eq!(Some(BadgeSpec::parse("card code").unwrap()), badge.view.badge);
+        assert!(!badge.engine.count_keywords && !badge.engine.collect_files, "a badge run counted keywords or kept files");
+        assert!(!badge.view.prints_text() && !badge.view.prints_a_report());
+        assert!(!badge.typed_explicitly.hide_keywords, "the keywords a badge hides by itself were taken as typed");
+
+        assert_eq!(Err(ArgParsingError::BadgeAskedThroughOutput), create_config_from_args("./ --output svg"));
+        assert_eq!(Err(ArgParsingError::MeaninglessWithBadge(OUTPUT.to_owned())), create_config_from_args("./ --badge --output json"));
+        assert_eq!(Err(ArgParsingError::MeaninglessWithBadge(EXPLAIN.to_owned())), create_config_from_args("./ --badge --explain"));
+        assert_eq!(Err(ArgParsingError::ContradictoryCommands("badge tests".to_owned(), "hide tests".to_owned())),
+                create_config_from_args("./ --badge tests --hide tests"));
+        assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(BADGE.to_owned(), "keywords".to_owned())),
+                create_config_from_args("./ --badge code keywords"));
+    }
+
+    #[test]
+    fn what_a_badge_never_draws_is_dropped_whether_typed_or_read_from_a_configuration() {
+        let typed = create_config_from_args("./ --badge --by-file --layout boxed --compare 3 --log x --bar-thickness fat \
+                --tests-breakdown split").unwrap();
+        assert!(typed.view.by_file.is_none() && !typed.engine.collect_files && !typed.view.log.should_log);
+        let ignored = crate::warning_collector::get_collected_warnings().into_iter()
+                .filter(|x| x.code == crate::warning_collector::AnyCode::Program(ProgramCode::CommandIgnored)
+                        && x.message.contains("a badge "))
+                .map(|x| x.subject).collect::<Vec<_>>();
+        for command in [BY_FILE, LAYOUT, COMPARE_LEVEL, LOG, BAR_THICKNESS, TESTS_BREAKDOWN] {
+            assert!(ignored.contains(&command.to_owned()), "'--{command}' was dropped without a word: {ignored:?}");
+        }
+
+        let project = build_test_project("badge-configuration", "===> by-file\n5\n===> layout\nboxed\n===> hide\ntests\n");
+        let from_file = create_config_from_args(&format!("{project}/src --badge card")).unwrap();
+        assert!(from_file.view.by_file.is_none() && !from_file.engine.collect_files,
+                "a project's '--by-file' kept every file of a badge run in memory");
+        assert!(!from_file.engine.detect_tests, "a project's '--hide tests' was dropped from a badge run");
+        let asked_for_tests = create_config_from_args(&format!("{project}/src --badge card tests")).unwrap();
+        assert!(asked_for_tests.engine.detect_tests, "a project's 'hide tests' beat a 'tests' typed for the badge");
+        std::fs::remove_dir_all(&project).unwrap();
+    }
+
+    // The rescue asks whether the command line holds a value for the field, and a badge run holds
+    // none of what it drops, so without this a badge run died on a value it was never going to read
+    #[test]
+    fn a_bad_value_of_a_field_a_badge_drops_only_warns() {
+        std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
+        let named = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/zz-badge-bad-layout.txt");
+        std::fs::write(&named, "===> layout\nsideways\n").unwrap();
+
+        assert_eq!(Err(ArgParsingError::InvalidValueInConfig(LAYOUT.to_owned(), "zz-badge-bad-layout".to_owned())),
+                create_config_from_args("./ --load zz-badge-bad-layout"));
+        assert!(create_config_from_args("./ --load zz-badge-bad-layout --badge").is_ok(),
+                "a bad layout in a loaded configuration killed a badge run");
+        std::fs::remove_file(&named).unwrap();
     }
 
     #[test]

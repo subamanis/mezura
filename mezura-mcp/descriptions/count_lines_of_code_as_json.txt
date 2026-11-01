@@ -12,3 +12,5 @@ The test code sits under 'tests' on each language, on 'total' and on each module
 test tools whose own file turned their test names on, with the folder and the file, since the
 report's list of them is not in this document. A language with no 'tests' key had none found; what
 counts as found, and how the rest is declared with 'tests', is as for 'count_lines_of_code'.
+'warnings' holds the warnings of the run. The code 'test-preset-unapplied' means a test tool the
+project names found no tests, so they count as production until 'tests' declares them.
