@@ -29,6 +29,8 @@ Bugfixes:
       into (unless '--search-in-dotted' is set), and never match inside '.git'.
 
 Change in commands:
+  -> '--output markdown' now also renders '--layout matrix', the 'Overview' percentage table, and
+      the 'History' section under '--compare'.
   -> '--save <name>' now writes target paths only when they were explicitly given (or already in a
       configuration loaded with '--load' in the same run), and not into 'default', so saving
       without a target path creates a reusable settings bundle instead of pinning to the current

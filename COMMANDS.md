@@ -925,14 +925,15 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
     One argument: 'text', 'markdown' or 'json'. Default: text
 
-    'markdown' prints the details as a markdown table, for a build step to put in a pull request
-    or a job summary.
+    'markdown' prints the report as markdown tables and lists, for a build step to put in a pull
+    request or a job summary.
 
       mezura ./src --diff origin/main --output markdown >> $GITHUB_STEP_SUMMARY
 
-    It is still the report, so '--hide', '--sort', '--top' and '--by-file' all apply. '--layout'
-    does not, there being one table shape, and the colors, the overview and the history section
-    are left out as terminal drawings. '--explain' has no markdown form and says so.
+    It is still the report, so '--hide', '--sort', '--top', '--by-file', '--compare' and
+    '--layout matrix' all apply. The other '--layout' values draw the same markdown table, and
+    the colors and the overview bar are left out as terminal drawings. '--explain' has no
+    markdown form and says so.
 
     A warning that puts the numbers in doubt goes under the table as well as to the error output.
     One about an ignored setting stays on the error output.

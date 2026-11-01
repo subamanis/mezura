@@ -103,10 +103,9 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
     // Nothing to cross when no module was named, so the table is printed instead of a grid of one
     // column. A warning and not an error: the numbers are worth more than the layout, and the
     // reader asked for one layout and is getting another.
-    // Markdown never reaches the four below, so a word about them would name nothing that printed
     let markdown = config.view.output == config_manager::OutputFormat::Markdown;
     let mut layout = config.view.layout;
-    if !markdown && layout == Layout::Matrix && !is_grouped(&groups) {
+    if layout == Layout::Matrix && !is_grouped(&groups) {
         layout = Layout::Table;
         let message = match config.view.hidden.modules && result.has_modules() {
             true => "'--layout matrix' crosses languages with modules and '--hide modules' hides the \
@@ -118,7 +117,7 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
         eprintln!("\n{}", super::theme::get_active().warning.paint(message));
     }
     // The matrix crosses languages with modules and has no third direction for a file to hang in.
-    let files_are_shown = markdown || layout != Layout::Matrix;
+    let files_are_shown = layout != Layout::Matrix;
     if config.view.by_file.is_some() && !files_are_shown {
         eprintln!("\n{}", super::theme::get_active().warning.paint(
                 "'--by-file' prints nothing under the 'matrix' layout, whose rows are languages \
@@ -146,7 +145,8 @@ pub fn format_and_print_results(result: &RunResult, existing_log_content: &Optio
 
     let view = ViewSettings::of(config);
     if markdown {
-        print_as_markdown(theme, &groups, &shown.total, print_total, should_print_keywords, &notes, view);
+        print_as_markdown(theme, result, &groups, &shown, &global_names, &matrix_names, layout,
+                print_total, should_print_keywords, &notes, existing_log_content, datetime_now, config);
         return;
     }
     match layout {
@@ -1087,16 +1087,30 @@ fn get_third_column_header(model: CountingModel) -> &'static str {
 
 // The header cells reuse the label token of the quantity underneath them and the body cells its
 // number token, so the table needs no styling of its own.
-fn print_as_markdown(theme: &Theme, groups: &[Group], total: &Stats, print_total: bool,
-        should_print_keywords: bool, notes: &[String], view: ViewSettings)
+fn print_as_markdown(theme: &Theme, result: &RunResult, groups: &[Group], shown: &ShownFigures,
+        global_names: &[String], matrix_names: &[String], layout: Layout, print_total: bool,
+        should_print_keywords: bool, notes: &[String], existing_log_content: &Option<String>,
+        datetime_now: &DateTime<Local>, config: &Configuration)
 {
     outln!("### Details\n");
-    for line in format_markdown_lines(theme, groups, total, print_total, notes, view) {
+    let details = match layout {
+        Layout::Matrix => format_markdown_matrix_lines(groups, matrix_names, &shown.total,
+                print_total, notes, config.view.counting),
+        _ => format_markdown_lines(theme, groups, &shown.total, print_total, notes, ViewSettings::of(config))
+    };
+    for line in details {
         outln!("{line}");
     }
 
     if should_print_keywords {
-        let lines = format_markdown_keyword_lines(theme, groups);
+        let filtered;
+        let keyword_groups = if layout == Layout::Matrix {
+            filtered = filter_groups_to_languages(groups, matrix_names);
+            &filtered
+        } else {
+            groups
+        };
+        let lines = format_markdown_keyword_lines(theme, keyword_groups);
         if !lines.is_empty() {
             outln!("\n### Keywords\n");
             for line in lines {
@@ -1104,6 +1118,26 @@ fn print_as_markdown(theme: &Theme, groups: &[Group], total: &Stats, print_total
             }
         }
     }
+
+    if print_total && !config.view.hidden.overview {
+        outln!("\n### Overview\n");
+        for line in format_markdown_overview_lines(global_names, &shown.per_language, &shown.total, config.view.top_n) {
+            outln!("{line}");
+        }
+    }
+
+    if !config.view.hidden.history && let Some(content) = existing_log_content
+        && !content.trim().is_empty() && config.view.compare_level != 0
+    {
+        let entries = super::log::read_last_entries(content, config.view.compare_level);
+        if !entries.is_empty() {
+            outln!("\n### History\n");
+            for line in format_markdown_history_lines(result, &entries, config, datetime_now) {
+                outln!("{line}");
+            }
+        }
+    }
+
     print_markdown_warnings();
 }
 
@@ -1922,26 +1956,33 @@ fn print_as_matrix(theme: &Theme, groups: &[Group], languages: &[String], total:
     }
 
     if should_print_keywords {
-        // The rows of the matrix are cut globally by '--top' while every other layout cuts per
-        // module, so the block has to follow these rows or it names a language with no row above it
-        let shown = groups.iter().map(|group| Group {
-            languages: languages.iter().filter(|x| group.per_language.contains_key(*x)).cloned().collect(),
-            per_language: Cow::Borrowed(&group.per_language),
-            files: HashMap::new(),
-            total: Cow::Borrowed(&group.total),
-            ..*group
-        }).collect::<Vec<_>>();
+        let shown = filter_groups_to_languages(groups, languages);
         print_keyword_block(theme, &shown);
     }
     outln!();
 }
 
-fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[String], total: &Stats,
-        print_total: bool, notes: &[String], model: CountingModel) -> Vec<String>
-{
-    const GAP : usize = 4;
-    const TOTAL_HEADER : &str = "Total";
+// The rows of the matrix are cut globally by '--top' while every other layout cuts per module, so
+// the keyword block has to follow these rows or it names a language with no row above it.
+fn filter_groups_to_languages<'a>(groups: &'a [Group<'a>], languages: &[String]) -> Vec<Group<'a>> {
+    groups.iter().map(|group| Group {
+        languages: languages.iter().filter(|x| group.per_language.contains_key(*x)).cloned().collect(),
+        per_language: Cow::Borrowed(&group.per_language),
+        files: HashMap::new(),
+        total: Cow::Borrowed(&group.total),
+        ..*group
+    }).collect()
+}
 
+struct MatrixCells {
+    headers: Vec<String>,
+    rows: Vec<(Vec<String>, usize)>,
+    totals: Vec<(Vec<String>, usize)>
+}
+
+fn build_matrix_cells(groups: &[Group], languages: &[String], total: &Stats,
+        blank_language_labels: bool, model: CountingModel) -> MatrixCells
+{
     // 'None' is a module that does not have the language at all, which is not the same as one that
     // has it and counts zero
     let of_group = |group: &Group, language: &str, metric: usize| -> Option<usize> {
@@ -1968,7 +2009,7 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
     let mut rows = Vec::with_capacity(languages.len() * MATRIX_METRICS.len() + MATRIX_METRICS.len());
     for language in languages {
         for (metric, label) in MATRIX_METRICS.iter().enumerate() {
-            let label = if print_total {String::new()} else {(*label).to_owned()};
+            let label = if blank_language_labels {String::new()} else {(*label).to_owned()};
             let mut cells = vec![if metric == 0 {language.clone()} else {String::new()}, label];
             cells.extend(groups.iter().map(|group| cell_of(of_group(group, language, metric), metric)));
             let total = groups.iter().filter_map(|group| of_group(group, language, metric)).sum::<usize>();
@@ -1978,7 +2019,7 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
     }
     // The total counts every language, including the ones '--top' left out of the rows above
     let totals = MATRIX_METRICS.iter().enumerate().map(|(metric, label)| {
-        let mut cells = vec![if metric == 0 {TOTAL_HEADER.to_owned()} else {String::new()}, (*label).to_owned()];
+        let mut cells = vec![if metric == 0 {TOTAL_NAME.to_owned()} else {String::new()}, (*label).to_owned()];
         cells.extend(groups.iter().map(|group| cell_of((group.total.files > 0).then(|| of_stats(&group.total, metric)), metric)));
         cells.push(cell_of(Some(of_stats(total, metric)), metric));
         (cells, metric)
@@ -1988,7 +2029,53 @@ fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[Stri
             .collect::<HashSet<_>>().len();
     let headers = [format_language_header(language_count), String::new()].into_iter()
             .chain(groups.iter().map(|group| group.get_displayed_name().to_owned()))
-            .chain(std::iter::once(TOTAL_HEADER.to_owned())).collect::<Vec<_>>();
+            .chain(std::iter::once(TOTAL_NAME.to_owned())).collect::<Vec<_>>();
+
+    MatrixCells { headers, rows, totals }
+}
+
+fn format_markdown_matrix_lines(groups: &[Group], languages: &[String], total: &Stats,
+        print_total: bool, notes: &[String], model: CountingModel) -> Vec<String>
+{
+    let MatrixCells { headers, rows, totals } = build_matrix_cells(groups, languages, total, false, model);
+    let headers = headers.iter().enumerate().map(|(at, header)| {
+        if at >= 2 && at + 1 < headers.len() {escape_markdown_name(header)} else {header.clone()}
+    }).collect::<Vec<_>>();
+    let alignment = (0..headers.len()).map(|at| if at < 2 {"---"} else {"---:"}).collect::<Vec<_>>();
+
+    let mut lines = vec![format!("| {} |", headers.join(" | ")),
+            format!("|{}|", alignment.join("|"))];
+    for (mut cells, _) in rows {
+        if !cells[0].is_empty() {
+            cells[0] = escape_markdown_name(&cells[0]);
+        }
+        cells[1] = format!("*{}*", cells[1]);
+        lines.push(format!("| {} |", cells.join(" | ")));
+    }
+    if print_total {
+        for (cells, _) in totals {
+            let cells = cells.into_iter()
+                    .map(|cell| if cell.is_empty() {cell} else {format!("**{cell}**")})
+                    .collect::<Vec<_>>();
+            lines.push(format!("| {} |", cells.join(" | ")));
+        }
+    }
+    if !notes.is_empty() {
+        lines.push(String::new());
+    }
+    for note in notes {
+        lines.push(note.clone());
+    }
+
+    lines
+}
+
+fn format_matrix_lines<'a>(theme: &'a Theme, groups: &[Group], languages: &[String], total: &Stats,
+        print_total: bool, notes: &[String], model: CountingModel) -> Vec<String>
+{
+    const GAP : usize = 4;
+
+    let MatrixCells { headers, rows, totals } = build_matrix_cells(groups, languages, total, print_total, model);
     let widths = (0..headers.len()).map(|i| rows.iter().chain(totals.iter())
             .map(|(row,_)| calculate_widest_visible_line(&row[i])).max().unwrap_or(0)
             .max(calculate_widest_visible_line(&headers[i]))).collect::<Vec<_>>();
@@ -2760,6 +2847,32 @@ fn print_visual_overview(sorted_language_names: &[String], per_language: &HashMa
     print_lines(&format_overview_lines(sorted_language_names, per_language, total, config));
 }
 
+fn format_markdown_overview_lines(sorted_language_names: &[String],
+        per_language: &HashMap<String, Stats>, total: &Stats, top_n: Option<usize>) -> Vec<String>
+{
+    let (names, per_language) = fold_rest_into_others(sorted_language_names, per_language, total, top_n);
+    let headers = std::iter::once(String::new())
+            .chain(names.iter().map(|name| if name == OTHERS_NAME {format!("*{OTHERS_NAME}*")}
+                    else {escape_markdown_name(name)}))
+            .collect::<Vec<_>>();
+    let alignment = (0..headers.len()).map(|at| if at == 0 {"---"} else {"---:"}).collect::<Vec<_>>();
+    let row_of = |label: &str, value: fn(&Stats) -> usize| {
+        let cells = std::iter::once(format!("**{label}**"))
+                .chain(get_percentages_of(&per_language, &names, value).into_iter()
+                        .map(|percent| format_percent_text(percent) + "%"))
+                .collect::<Vec<_>>();
+        format!("| {} |", cells.join(" | "))
+    };
+
+    vec![
+        format!("| {} |", headers.join(" | ")),
+        format!("|{}|", alignment.join("|")),
+        row_of("Files", |x| x.files),
+        row_of("Lines", |x| x.lines),
+        row_of("Size", |x| x.bytes),
+    ]
+}
+
 fn format_overview_lines(sorted_language_names: &[String], per_language: &HashMap<String, Stats>, total: &Stats, config: &Configuration) -> Vec<String>
 {
     let (sorted_language_vec, per_language) =
@@ -2934,19 +3047,12 @@ fn format_modified_tag(changed: &[&'static str]) -> String {
             theme.history_modified_field.paint(&changed.join(", ")))
 }
 
-// One line per module under the line of the entry, and narrower than it: Files and Extra stay on
-// the total, or one entry is five wide lines and '--compare 3' stops being readable.
-fn format_module_comparison_lines(entry: &super::log::LogEntry, modules: &[mezura_core::ModuleResult],
-        model: CountingModel, without_tests: bool) -> String {
-    let theme = super::theme::get_active();
+fn collect_compared_modules<'a>(entry: &super::log::LogEntry, modules: &'a [mezura_core::ModuleResult],
+        without_tests: bool) -> Vec<(String, Option<Cow<'a, Stats>>, Option<Stats>)>
+{
     fn name_of(module: &mezura_core::ModuleResult) -> &str {
         module.name.as_deref().unwrap_or(UNNAMED_MODULE_NAME)
     }
-    let names = modules.iter().map(|x| name_of(x).to_owned())
-            .chain(entry.modules.iter().map(|x| x.name.clone())
-                    .filter(|name| !modules.iter().any(|x| name_of(x) == name)))
-            .collect::<Vec<_>>();
-    let width = names.iter().map(|x| calculate_widest_visible_line(x)).max().unwrap_or(0);
     let figures_of = |then: &super::log::ModuleEntry| {
         let whole = Stats::new(0, 0, then.lines, then.classes.clone(), HashMap::new());
         match (without_tests, &then.tests) {
@@ -2955,21 +3061,38 @@ fn format_module_comparison_lines(entry: &super::log::LogEntry, modules: &[mezur
         }
     };
 
+    modules.iter().map(|x| name_of(x).to_owned())
+            .chain(entry.modules.iter().map(|x| x.name.clone())
+                    .filter(|name| !modules.iter().any(|x| name_of(x) == name)))
+            .map(|name| {
+                let now = modules.iter().find(|x| name_of(x) == name)
+                        .map(|x| ShownFigures::of_module(x, without_tests).total);
+                let then = entry.modules.iter().find(|x| x.name == name).map(figures_of);
+                (name, now, then)
+            })
+            .collect()
+}
+
+// One line per module under the line of the entry, and narrower than it: Files and Extra stay on
+// the total, or one entry is five wide lines and '--compare 3' stops being readable.
+fn format_module_comparison_lines(entry: &super::log::LogEntry, modules: &[mezura_core::ModuleResult],
+        model: CountingModel, without_tests: bool) -> String {
+    let theme = super::theme::get_active();
+    let compared = collect_compared_modules(entry, modules, without_tests);
+    let width = compared.iter().map(|(name, _, _)| calculate_widest_visible_line(name)).max().unwrap_or(0);
+
     // Right aligned, since these three narrow columns are meant to be read down the entry.
-    let compared = names.iter().filter_map(|name| entry.modules.iter().find(|x| &x.name == name))
-            .map(figures_of).collect::<Vec<_>>();
-    let number_width = |value: &dyn Fn(&Stats) -> usize|
-            compared.iter().map(|x| format_with_separators(value(x)).len()).max().unwrap_or(0);
+    let number_width = |value: &dyn Fn(&Stats) -> usize| compared.iter()
+            .filter_map(|(_, _, then)| then.as_ref())
+            .map(|x| format_with_separators(value(x)).len()).max().unwrap_or(0);
     let (lines_width, code_width, comments_width) = (number_width(&|x| x.lines),
             number_width(&|x| x.calculate_code_lines(model)),
             number_width(&|x| x.calculate_comment_lines(model)));
 
-    let mut rendered = String::with_capacity(names.len() * 80);
-    for name in &names {
+    let mut rendered = String::with_capacity(compared.len() * 80);
+    for (name, now, then) in &compared {
         let padded = format!("       {}{}   ", theme.details_module.paint(name),
                 " ".repeat(width - calculate_widest_visible_line(name)));
-        let now = modules.iter().find(|x| name_of(x) == name).map(|x| ShownFigures::of_module(x, without_tests).total);
-        let then = entry.modules.iter().find(|x| &x.name == name).map(figures_of);
         // A module compared against nothing would read '+100%', which is false. It did not grow, it
         // started being counted on its own. The ones that are not in both are named as what they are.
         let tail = match (now, then) {
@@ -2996,6 +3119,73 @@ fn format_module_comparison_lines(entry: &super::log::LogEntry, modules: &[mezur
     }
 
     rendered
+}
+
+fn format_markdown_module_comparison_lines(entry: &super::log::LogEntry,
+        modules: &[mezura_core::ModuleResult], model: CountingModel, without_tests: bool) -> Vec<String>
+{
+    let field = |name: &str, then: usize, now: usize| format!("{name} {} ({}%)",
+            format_with_separators(then), format_signed_percentage_difference(then, now));
+
+    collect_compared_modules(entry, modules, without_tests).into_iter().map(|(name, now, then)| {
+        let name = escape_markdown_name(&name);
+        let tail = match (now, then) {
+            (Some(now), Some(then)) => format!("{} · {} · {}",
+                    field("Lines:", then.lines, now.lines),
+                    field("Code:", then.calculate_code_lines(model), now.calculate_code_lines(model)),
+                    field("Comments:", then.calculate_comment_lines(model), now.calculate_comment_lines(model))),
+            (Some(_), None) => "*declared in this run, nothing to compare against*".to_owned(),
+            _ => "*not counted any more*".to_owned()
+        };
+        format!("  - `{name}`: {tail}")
+    }).collect()
+}
+
+fn format_markdown_history_lines(result: &RunResult, entries: &[super::log::LogEntry],
+        config: &Configuration, datetime_now: &DateTime<Local>) -> Vec<String>
+{
+    let without_tests = leaves_tests_out(config);
+    let shown = ShownFigures::of_run(result, without_tests);
+    let total = shown.total.as_ref();
+    let model = config.view.counting;
+    let field = |name: &str, then: usize, now: usize| format!("{name} {} ({}%)",
+            format_with_separators(then), format_signed_percentage_difference(then, now));
+
+    let mut lines = Vec::with_capacity(entries.len() * 3);
+    for entry in entries {
+        let duration = datetime_now.signed_duration_since(entry.datetime);
+        let (days, hours, minutes) = split_minutes_to_D_H_M(duration.num_minutes());
+        let heading = match &entry.name {
+            Some(name) => format!("**\"{}\"**", escape_markdown_name(name)),
+            None => format!("**{}**", entry.datetime.naive_local())
+        };
+        let mut line = format!("- {heading} *({days} days, {hours} hours and {minutes} minutes ago)*");
+        let changed = find_settings_changed_since(entry, config, &result.targets);
+        if !changed.is_empty() {
+            line.push_str(&format!(" · *modified: {}*", changed.join(", ")));
+        }
+        let then = match (without_tests, &entry.tests) {
+            (true, Some(tests)) => Cow::Owned(tests.calculate_production_of(&entry.total)),
+            (true, None) => {
+                line.push_str(" · *tests included*");
+                Cow::Borrowed(&entry.total)
+            },
+            _ => Cow::Borrowed(&entry.total)
+        };
+        lines.push(line);
+        lines.push(format!("  - **Total:** {} · {} · {} · {} · {}",
+                field("Files:", then.files, total.files),
+                field("Lines:", then.lines, total.lines),
+                field("Code:", then.calculate_code_lines(model), total.calculate_code_lines(model)),
+                field("Comments:", then.calculate_comment_lines(model), total.calculate_comment_lines(model)),
+                field(&format!("{}:", get_third_column_header(model)),
+                        then.calculate_extra_lines(model), total.calculate_extra_lines(model))));
+        if result.has_modules() && !config.view.hidden.modules {
+            lines.extend(format_markdown_module_comparison_lines(entry, &result.modules, model, without_tests));
+        }
+    }
+
+    lines
 }
 
 fn paint_percentage(percentage: &str) -> ColoredString {
@@ -3513,9 +3703,13 @@ mod tests {
         cases.push(("overview".to_owned(), format_overview_lines(&sorted, &content_info, &total, &config)));
         cases.push(("overview, tests removed".to_owned(),
                 format_overview_lines(&removed_names, &removed.per_language, &removed.total, &config)));
+        cases.push(("overview, markdown".to_owned(),
+                format_markdown_overview_lines(&sorted, &content_info, &total, None)));
 
         config.view.top_n = Some(2);
         cases.push(("overview, top 2".to_owned(), format_overview_lines(&sorted, &content_info, &total, &config)));
+        cases.push(("overview, top 2, markdown".to_owned(),
+                format_markdown_overview_lines(&sorted, &content_info, &total, Some(2))));
 
         config.view.top_n = None;
         config.view.hidden.bar = true;
@@ -3571,12 +3765,19 @@ mod tests {
         let groups = groups_from(&modules, &config);
         cases.push(("modules, matrix".to_owned(),
                 format_matrix_lines(theme, &groups, &sorted, &total, true, &[], content)));
+        cases.push(("modules, matrix, markdown".to_owned(),
+                format_markdown_matrix_lines(&groups, &sorted, &total, true, &[], content)));
         config.view.top_n = Some(2);
         let matrix_note = create_hidden_notes(sorted.len() - 2, 0, &config);
         cases.push(("modules, matrix, top 2".to_owned(),
                 format_matrix_lines(theme, &groups, &sorted[..2], &total, true, &matrix_note, content)));
+        let mut matrix_top_2 = format_markdown_matrix_lines(&groups, &sorted[..2], &total, true, &matrix_note, content);
+        matrix_top_2.extend(format_markdown_keyword_lines(theme, &filter_groups_to_languages(&groups, &sorted[..2])));
+        cases.push(("modules, matrix, top 2, markdown".to_owned(), matrix_top_2));
         cases.push(("modules, matrix, no total".to_owned(),
                 format_matrix_lines(theme, &groups, &sorted[..1], &total, false, &[], content)));
+        cases.push(("modules, matrix, no total, markdown".to_owned(),
+                format_markdown_matrix_lines(&groups, &sorted[..1], &total, false, &[], content)));
 
         // The dates are fixed, being the one part of the heading a clock would otherwise write.
         const EARLIER : &str = "2026-07-30T14:22:07+03:00";
@@ -3699,6 +3900,47 @@ mod tests {
         cases.push(("comparison, modules, top 1".to_owned(), headed(format_comparison_lines(theme,
                 &create_compared_rows(Some(&pairs), &before.result, &now.result, None, &config).0,
                 ViewSettings::of(&config)), &before, &now)));
+
+        let taken = chrono::TimeZone::with_ymd_and_hms(&Local, 2026, 7, 30, 14, 22, 7).single().unwrap();
+        let now_time = taken + chrono::Duration::minutes(6 * 24 * 60 + 19 * 60 + 18);
+        let recent_time = now_time - chrono::Duration::minutes(2 * 24 * 60 + 3 * 60 + 40);
+        let mut history_config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+        let mut modified_scope = crate::diff::scope_of(&history_config.engine, content);
+        modified_scope.gitignore = false;
+        let earlier_for_log = earlier_modules();
+        let entries = vec![
+            crate::log::LogEntry {
+                name: Some("baseline".to_owned()),
+                datetime: recent_time,
+                scope: crate::diff::scope_of(&history_config.engine, content),
+                targets: Vec::new(),
+                total: before.result.total.clone(),
+                tests: Some(TestCode::calculate_total_of(&earlier_tests())),
+                modules: vec![
+                    crate::log::ModuleEntry { name: "frontend".to_owned(), lines: earlier_for_log[1].total.lines,
+                            classes: earlier_for_log[1].total.classes.clone(), tests: None },
+                    crate::log::ModuleEntry { name: "backend".to_owned(), lines: earlier_for_log[0].total.lines,
+                            classes: earlier_for_log[0].total.classes.clone(), tests: None },
+                    crate::log::ModuleEntry { name: "legacy".to_owned(), lines: 210,
+                            classes: earlier_for_log[2].total.classes.clone(), tests: None },
+                ]
+            },
+            crate::log::LogEntry {
+                name: None,
+                datetime: taken,
+                scope: modified_scope,
+                targets: Vec::new(),
+                total: before.result.total.clone(),
+                tests: None,
+                modules: Vec::new()
+            }
+        ];
+        cases.push(("history, modules, markdown".to_owned(),
+                format_markdown_history_lines(&now.result, &entries, &history_config, &now_time)));
+        let ungrouped_now = attach_tests(reading_of("newer.json", LATER, without_modules(&modules)), sample_tests());
+        history_config.view.tests_breakdown = TestsBreakdown::Removed;
+        cases.push(("history, tests removed, markdown".to_owned(),
+                format_markdown_history_lines(&ungrouped_now.result, &entries, &history_config, &now_time)));
 
         // The two models, over data that tells them apart: every one of the nine classes is in play,
         // so a block handed the wrong model, or folding the default, cannot pass. The counts are

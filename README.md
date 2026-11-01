@@ -355,7 +355,7 @@ details and per-language rules are in
 
 ### Markdown output
 
-`--output markdown` prints the details as a markdown table, for a build step to leave in a pull request or a job summary.
+`--output markdown` prints the report as markdown tables and lists, for a build step to leave in a pull request or a job summary.
 
 ```bash
 mezura ./src --diff origin/main --output markdown >> $GITHUB_STEP_SUMMARY
@@ -365,7 +365,7 @@ mezura ./src --diff origin/main --output markdown >> $GITHUB_STEP_SUMMARY
 
 The modules, the languages under them and the changed files under those are all rows of the one table, at the depth the printed report draws them at.
 
-It is the report and not a document of its own, so `--hide`, `--sort` and `--top` cut and order it exactly as they do the printed one, and `--by-file` hangs the changed files under each language. Markdown has one table shape, so `--layout` has nothing to choose between and is ignored, and the colours, the overview bar and the history section are left out, all three being terminal drawings.
+It is the report and not a document of its own, so `--hide`, `--sort` and `--top` cut and order it exactly as they do the printed one, `--by-file` hangs the files under each language, `--layout matrix` crosses languages with modules, and `--compare` adds the `History` section as a list. The other `--layout` values draw the same markdown table, and the colours and the overview bar are left out as terminal drawings.
 
 A warning that puts the numbers in doubt, an unreadable language file among them, is written under the table as well as to the error output, since whoever reads the page is the one deciding on those numbers. The ones that only report an ignored setting stay on the error output, where the build log keeps them.
 
