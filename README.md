@@ -156,7 +156,7 @@ WHAT IS COUNTED
 HOW THE REPORT LOOKS
 
   --layout             the shape of the details section: a table, a box, a list, or a matrix of modules
-  --sort               which column the languages are ordered by
+  --sort               which column the languages and modules are ordered by
   --top                show only this many languages, and say how many were left out
   --by-file            give every file its own row, or only the biggest few of each language
   --tests-breakdown    the tests of each language as one row, split from the rest of it, or removed from the

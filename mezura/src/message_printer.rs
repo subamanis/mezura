@@ -64,8 +64,9 @@ pub const TARGETS_HELP  :  &str =
 
     Every file belongs to one module and the most specific path wins, so the second example means
     'the tests there, the rest of the project here' in either order. Files that were not claimed by
-    a module explicitly become a row called '(unnamed)' and it comes last; the rest keep the order you wrote them in, which is
-    also the order of the columns in 'matrix'. '--sort' orders the languages inside each module.
+    a module explicitly become a row called '(unnamed)'. '--sort' orders the modules (and the
+    columns in 'matrix') as well as the languages inside each module; under '--sort name' and on
+    ties '(unnamed)' comes last.
 
     Once anything is named a space ends a target, so a path holding spaces cannot be written
     beside modules: the shell takes the quotation marks away before mezura sees them. Put those
@@ -590,7 +591,7 @@ pub const SAVE_PRESET_HELP  :  &str =
 ";
 pub const SORT_HELP  :  &str =
 "--sort
-    which column the languages are ordered by
+    which column the languages and modules are ordered by
 
     One argument: 'lines', 'files', 'code', 'comments', 'extra', 'blanks', 'size' or 'name'.
     Default: lines
@@ -598,8 +599,8 @@ pub const SORT_HELP  :  &str =
     shows. The third column is 'extra' under '--counting content' and 'blanks' under
     '--counting region', and naming the other model's word orders by lines with a warning.
 
-    Orders the languages in the \"details\" section, which also decides which of them reach the
-    \"overview\" section and which are folded into its 'others' entry.
+    Orders the modules and the languages in the \"details\" section, which also decides which
+    languages reach the \"overview\" section and which are folded into its 'others' entry.
 
     Everything except 'name' sorts from the largest down, and ties are broken alphabetically so
     the order never changes between runs on the same data. The column that decides it carries a
@@ -619,9 +620,9 @@ pub const TOP_HELP  :  &str =
     shows no more languages than this either, so asking for the top 2 does not leave a third one
     sitting in the bar.
 
-    The modules keep the order you wrote them in, and the cut is made inside each one, since the
-    rows under a module are its own languages. The 'matrix' layout is the exception: its rows are
-    the languages of the whole run, so there the cut is over all of them.
+    With modules the cut is made inside each one, since the rows under a module are its own
+    languages. The 'matrix' layout is the exception: its rows are the languages of the whole run,
+    so there the cut is over all of them.
 
 ";
 pub const BAR_THICKNESS_HELP  :  &str =

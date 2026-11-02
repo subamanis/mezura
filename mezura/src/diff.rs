@@ -125,15 +125,18 @@ impl Comparison {
             forget_tests_of(if baseline.scope.tests_detected { &mut baseline } else { &mut subject });
             notes_so_far.push(Note::SettingsAdopted { from, settings: vec![HIDE_TESTS], naming_nothing: Vec::new() });
         }
-        let unpaired = pair_modules(&baseline.result, &subject.result).is_none();
+        let unpaired = pair_modules(&baseline.result, &subject.result, config.view.sort_by,
+                config.view.counting, false).is_none();
         let notes = determine_comparison_notes(&baseline, &subject, config, notes_so_far, unpaired);
 
         Comparison { baseline, subject, notes }
     }
 
     // Computed rather than stored, because the pairs borrow the readings this struct owns
-    pub fn module_pairs(&self) -> Option<Vec<ModulePair<'_>>> {
-        pair_modules(&self.baseline.result, &self.subject.result)
+    pub fn module_pairs(&self, sort_by: SortCriterion, model: mezura_core::CountingModel,
+            without_tests: bool) -> Option<Vec<ModulePair<'_>>>
+    {
+        pair_modules(&self.baseline.result, &self.subject.result, sort_by, model, without_tests)
     }
 
     // None unless both sides hold every row there was to pair: against a document written without
@@ -488,15 +491,20 @@ pub fn determine_file_bases(baseline: &RunResult, subject: &RunResult) -> (Strin
 // sets differ, or nothing was ever named and the only pair is the one module holding everything.
 // Nothing short of the same set can be shown, because a module only one side has would be compared
 // against nothing and every language in it would read as written from scratch or deleted whole.
-pub fn pair_modules<'a>(baseline: &'a RunResult, subject: &'a RunResult) -> Option<Vec<ModulePair<'a>>> {
+pub fn pair_modules<'a>(baseline: &'a RunResult, subject: &'a RunResult,
+        sort_by: SortCriterion, model: mezura_core::CountingModel, without_tests: bool)
+-> Option<Vec<ModulePair<'a>>>
+{
     if baseline.modules.len() != subject.modules.len() || !subject.has_modules() {
         return None;
     }
 
     // A name is claimed once, so finding every one of the second reading's in the first means the
     // sets are equal, and collecting into an Option lets one missing name answer for all of them
-    subject.modules.iter().map(|now| baseline.modules.iter().find(|x| x.name == now.name)
-            .map(|before| ModulePair { name: now.name.as_deref(), before, now })).collect()
+    super::result_printer::get_sorted_modules(&subject.modules, sort_by, model, without_tests).into_iter()
+            .map(|now| baseline.modules.iter().find(|x| x.name == now.name)
+                    .map(|before| ModulePair { name: now.name.as_deref(), before, now }))
+            .collect()
 }
 
 // The modules of one reading as the message names them, and None when nothing was declared. The
@@ -1147,11 +1155,11 @@ mod tests {
             crate::test_support::plain_result_of(per_language, modules, Vec::new())
         };
 
-        // The order they were declared in is not a difference: the pairs follow the second reading
-        // and find the first's wherever it put them
+        // The order they were declared in is not a difference: the pairs are ordered by '--sort' on
+        // the second reading and find the first's wherever it put them
         let before = result(vec![module(Some("cli"), 40), module(Some("core"), 100), module(None, 7)]);
-        let now = result(vec![module(Some("core"), 120), module(Some("cli"), 44), module(None, 9)]);
-        let pairs = pair_modules(&before, &now).unwrap();
+        let now = result(vec![module(Some("cli"), 44), module(Some("core"), 120), module(None, 9)]);
+        let pairs = pair_modules(&before, &now, SortCriterion::Lines, mezura_core::CountingModel::Content, false).unwrap();
         assert_eq!(vec![Some("core"), Some("cli"), None], pairs.iter().map(|x| x.name).collect::<Vec<_>>());
         assert_eq!(100, pairs[0].before.total.lines);
         assert_eq!(120, pairs[0].now.total.lines);
@@ -1159,17 +1167,19 @@ mod tests {
 
         // One name that is not on both sides takes the whole block with it, the leftover included
         assert!(pair_modules(&before, &result(vec![module(Some("core"), 120), module(Some("web"), 44),
-                module(None, 9)])).is_none());
-        assert!(pair_modules(&before, &result(vec![module(Some("core"), 120), module(Some("cli"), 44)])).is_none());
-        assert!(pair_modules(&result(vec![module(None, 100)]), &now).is_none());
+                module(None, 9)]), SortCriterion::Lines, mezura_core::CountingModel::Content, false).is_none());
+        assert!(pair_modules(&before, &result(vec![module(Some("core"), 120), module(Some("cli"), 44)]),
+                SortCriterion::Lines, mezura_core::CountingModel::Content, false).is_none());
+        assert!(pair_modules(&result(vec![module(None, 100)]), &now,
+                SortCriterion::Lines, mezura_core::CountingModel::Content, false).is_none());
 
         // A run that named nothing has the one module holding everything, and a pair of those has
         // nothing to show
         let plain = result(vec![module(None, 100)]);
-        assert!(pair_modules(&plain, &plain).is_none());
+        assert!(pair_modules(&plain, &plain, SortCriterion::Lines, mezura_core::CountingModel::Content, false).is_none());
         assert!(!plain.has_modules());
 
-        assert_eq!(Some("'core', 'cli', '(unnamed)'".to_owned()), format_module_names(&now));
+        assert_eq!(Some("'cli', 'core', '(unnamed)'".to_owned()), format_module_names(&now));
         assert_eq!(None, format_module_names(&plain));
     }
 

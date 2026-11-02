@@ -261,6 +261,23 @@ pub(crate) fn find_shown_language_names(per_language: &HashMap<String, Stats>, c
     (names, hidden)
 }
 
+pub(crate) fn get_sorted_modules(modules: &[mezura_core::ModuleResult],
+        criterion: SortCriterion, model: CountingModel, without_tests: bool)
+-> Vec<&mezura_core::ModuleResult>
+{
+    if !without_tests {
+        return criterion.sort_modules(modules, model);
+    }
+
+    let mut indexed = modules.iter()
+            .map(|module| (module, ShownFigures::of_module(module, true).total))
+            .collect::<Vec<_>>();
+    indexed.sort_by(|(one, one_total), (other, other_total)| criterion.compare_modules(
+            (one.name.as_deref(), one_total), (other.name.as_deref(), other_total), model));
+
+    indexed.into_iter().map(|(module, _)| module).collect()
+}
+
 // The languages are in the order '--sort' put them. A run that named no module has exactly one of
 // these, with no name.
 struct Group<'a> {
@@ -346,9 +363,6 @@ fn is_grouped(groups: &[Group]) -> bool {
 
 // '--sort' applies at both levels with the same criterion, and '--top' is per module.
 fn create_groups_of<'a>(result: &'a RunResult, config: &Configuration) -> Vec<Group<'a>> {
-    // The modules keep the order they were written in and only the languages inside them are
-    // sorted: that order is the only say the user has over the columns of a matrix. What no name
-    // claimed comes last.
     let without_tests = leaves_tests_out(config);
     let create_group = |name: Option<&'a str>, shown: ShownFigures<'a>,
             nested: &'a HashMap<String, HashMap<String, Stats>>, tests: &'a HashMap<String, TestCode>| {
@@ -370,7 +384,8 @@ fn create_groups_of<'a>(result: &'a RunResult, config: &Configuration) -> Vec<Gr
     let mut groups = match config.view.hidden.modules && result.has_modules() {
         true => vec![create_group(None, ShownFigures::of_run(result, without_tests),
                 &result.nested_languages, &result.tests)],
-        false => result.modules.iter()
+        false => get_sorted_modules(&result.modules, config.view.sort_by, config.view.counting, without_tests)
+                .into_iter()
                 .map(|module| create_group(module.name.as_deref(), ShownFigures::of_module(module, without_tests),
                         &module.nested_languages, &module.tests))
                 .collect()
@@ -425,7 +440,8 @@ pub(crate) fn find_files_to_show<'a>(result: &'a RunResult, config: &Configurati
     let common_directory = find_common_directory_of(&result.targets);
     let groups_of_modules = match flatten_modules {
         true => vec![(ShownFigures::of_run(result, without_tests), result.modules.as_slice())],
-        false => result.modules.iter()
+        false => get_sorted_modules(&result.modules, config.view.sort_by, config.view.counting, without_tests)
+                .into_iter()
                 .map(|module| (ShownFigures::of_module(module, without_tests), std::slice::from_ref(module)))
                 .collect()
     };
@@ -1317,7 +1333,9 @@ fn draw_markdown_table(columns: &[Column], rows: &[Vec<String>], kinds: &[RowKin
 pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configuration) {
     let theme = super::theme::get_active();
     let (baseline, subject) = (&comparison.baseline, &comparison.subject);
-    let pairs = (!config.view.hidden.modules).then(|| comparison.module_pairs()).flatten();
+    let without_tests = leaves_tests_out(config);
+    let pairs = (!config.view.hidden.modules).then(||
+            comparison.module_pairs(config.view.sort_by, config.view.counting, without_tests)).flatten();
 
     let markdown_wanted = config.view.output == config_manager::OutputFormat::Markdown;
     if markdown_wanted {
@@ -1361,7 +1379,6 @@ pub fn print_comparison(comparison: &super::diff::Comparison, config: &Configura
     }
 
     if !config.view.hidden.keywords {
-        let without_tests = leaves_tests_out(config);
         let sides = match pairs.as_deref() {
             Some(pairs) => pairs.iter().map(|pair| (pair.name, ShownFigures::of_module(pair.before, without_tests),
                     ShownFigures::of_module(pair.now, without_tests))).collect::<Vec<_>>(),
@@ -3052,7 +3069,8 @@ fn format_modified_tag(changed: &[&'static str]) -> String {
 }
 
 fn collect_compared_modules<'a>(entry: &super::log::LogEntry, modules: &'a [mezura_core::ModuleResult],
-        without_tests: bool) -> Vec<(String, Option<Cow<'a, Stats>>, Option<Stats>)>
+        sort_by: SortCriterion, model: CountingModel, without_tests: bool)
+-> Vec<(String, Option<Cow<'a, Stats>>, Option<Stats>)>
 {
     fn name_of(module: &mezura_core::ModuleResult) -> &str {
         module.name.as_deref().unwrap_or(UNNAMED_MODULE_NAME)
@@ -3064,12 +3082,13 @@ fn collect_compared_modules<'a>(entry: &super::log::LogEntry, modules: &'a [mezu
             _ => whole
         }
     };
+    let sorted = get_sorted_modules(modules, sort_by, model, without_tests);
 
-    modules.iter().map(|x| name_of(x).to_owned())
+    sorted.iter().map(|x| name_of(x).to_owned())
             .chain(entry.modules.iter().map(|x| x.name.clone())
-                    .filter(|name| !modules.iter().any(|x| name_of(x) == name)))
+                    .filter(|name| !sorted.iter().any(|x| name_of(x) == name)))
             .map(|name| {
-                let now = modules.iter().find(|x| name_of(x) == name)
+                let now = sorted.iter().find(|x| name_of(x) == name)
                         .map(|x| ShownFigures::of_module(x, without_tests).total);
                 let then = entry.modules.iter().find(|x| x.name == name).map(figures_of);
                 (name, now, then)
@@ -3080,9 +3099,10 @@ fn collect_compared_modules<'a>(entry: &super::log::LogEntry, modules: &'a [mezu
 // One line per module under the line of the entry, and narrower than it: Files and Extra stay on
 // the total, or one entry is five wide lines and '--compare 3' stops being readable.
 fn format_module_comparison_lines(entry: &super::log::LogEntry, modules: &[mezura_core::ModuleResult],
-        model: CountingModel, without_tests: bool) -> String {
+        sort_by: SortCriterion, model: CountingModel, without_tests: bool) -> String
+{
     let theme = super::theme::get_active();
-    let compared = collect_compared_modules(entry, modules, without_tests);
+    let compared = collect_compared_modules(entry, modules, sort_by, model, without_tests);
     let width = compared.iter().map(|(name, _, _)| calculate_widest_visible_line(name)).max().unwrap_or(0);
 
     // Right aligned, since these three narrow columns are meant to be read down the entry.
@@ -3126,12 +3146,13 @@ fn format_module_comparison_lines(entry: &super::log::LogEntry, modules: &[mezur
 }
 
 fn format_markdown_module_comparison_lines(entry: &super::log::LogEntry,
-        modules: &[mezura_core::ModuleResult], model: CountingModel, without_tests: bool) -> Vec<String>
+        modules: &[mezura_core::ModuleResult], sort_by: SortCriterion, model: CountingModel,
+        without_tests: bool) -> Vec<String>
 {
     let field = |name: &str, then: usize, now: usize| format!("{name} {} ({}%)",
             format_with_separators(then), format_signed_percentage_difference(then, now));
 
-    collect_compared_modules(entry, modules, without_tests).into_iter().map(|(name, now, then)| {
+    collect_compared_modules(entry, modules, sort_by, model, without_tests).into_iter().map(|(name, now, then)| {
         let name = escape_markdown_name(&name);
         let tail = match (now, then) {
             (Some(now), Some(then)) => format!("{} · {} · {}",
@@ -3185,7 +3206,8 @@ fn format_markdown_history_lines(result: &RunResult, entries: &[super::log::LogE
                 field(&format!("{}:", get_third_column_header(model)),
                         then.calculate_extra_lines(model), total.calculate_extra_lines(model))));
         if result.has_modules() && !config.view.hidden.modules {
-            lines.extend(format_markdown_module_comparison_lines(entry, &result.modules, model, without_tests));
+            lines.extend(format_markdown_module_comparison_lines(
+                    entry, &result.modules, config.view.sort_by, model, without_tests));
         }
     }
 
@@ -3245,7 +3267,8 @@ fn print_comparison_to_previous_runs(result: &RunResult, log_content: &str, conf
         // A run that named no module says nothing about them here either. The modified targets tag
         // is what already reports that the targets are not the ones they were.
         if result.has_modules() && !config.view.hidden.modules {
-            comparison_str.push_str(&format_module_comparison_lines(entry, &result.modules, model, without_tests));
+            comparison_str.push_str(&format_module_comparison_lines(
+                    entry, &result.modules, config.view.sort_by, model, without_tests));
         }
         comparison_str.push('\n');
     }
@@ -3885,7 +3908,7 @@ mod tests {
         // the same modules
         let (before, now) = (reading_of("older.json", EARLIER, earlier),
                 reading_of("newer.json", LATER, sample_modules()));
-        let pairs = crate::diff::pair_modules(&before.result, &now.result).unwrap();
+        let pairs = crate::diff::pair_modules(&before.result, &now.result, SortCriterion::Lines, content, false).unwrap();
         let grouped_keywords = |config: &crate::config_manager::Configuration| pairs.iter()
                 .map(|pair| create_group_with_baseline(pair.name, &pair.before.per_language, &pair.now.per_language,
                         &pair.now.total, config)).collect::<Vec<_>>();
@@ -4042,7 +4065,8 @@ mod tests {
                 reading_of("newer.json", "2026-08-06T09:41:00+03:00", vec![of("api", 30), of("web", 12)]));
 
         let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
-        let pairs = crate::diff::pair_modules(&before.result, &now.result).unwrap();
+        let pairs = crate::diff::pair_modules(&before.result, &now.result, SortCriterion::Lines,
+                CountingModel::Content, false).unwrap();
         let groups = pairs.iter().map(|pair| create_group_with_baseline(pair.name, &pair.before.per_language,
                 &pair.now.per_language, &pair.now.total, &config)).collect::<Vec<_>>();
         let lines = format_keyword_block_lines(&Theme::default(), &groups);
@@ -4115,8 +4139,8 @@ mod tests {
         // files than its neighbour still shows its own
         let across_two_modules = of_modules(split());
         let split_two = find_files_to_show(&across_two_modules, &config_of(Some(config_manager::ByFile::Capped(2)), None), false);
-        assert_eq!(vec![("HTML", 2, 0)], sorted_rows(&split_two[0]));
-        assert_eq!(vec![("Python", 2, 1)], sorted_rows(&split_two[1]));
+        assert_eq!(vec![("Python", 2, 1)], sorted_rows(&split_two[0]));
+        assert_eq!(vec![("HTML", 2, 0)], sorted_rows(&split_two[1]));
     }
 
     // (language, files shown, files left out), ordered by language name
@@ -4690,6 +4714,23 @@ mod tests {
 
         // Ada and Zig both have 100 lines, so the name decides, not the iteration order of the map
         assert_eq!(vec!["Rust","Ada","Zig"], sorted(SortCriterion::Lines));
+
+        // When tests are excluded, module sorting ranks by production figures rather than the whole
+        let module = |name: &str, lines, test_lines| ModuleResult {
+            name: Some(name.to_owned()),
+            total: crate::test_support::plain_stats_of(2, lines * 10, lines, lines, 0, HashMap::new()),
+            per_language: HashMap::new(), nested_languages: HashMap::new(),
+            tests: hashmap!["Rust".to_owned() => TestCode {
+                stats: crate::test_support::plain_stats_of(1, test_lines * 10, test_lines, test_lines, 0, HashMap::new()),
+                whole_files: 1
+            }],
+            files: HashMap::new()
+        };
+        let modules = vec![module("api", 200, 150), module("core", 120, 10)];
+        let names = |without_tests| get_sorted_modules(&modules, SortCriterion::Lines, CountingModel::Content, without_tests)
+                .into_iter().map(|m| m.name.as_deref().unwrap()).collect::<Vec<_>>();
+        assert_eq!(vec!["api", "core"], names(false));
+        assert_eq!(vec!["core", "api"], names(true));
     }
 
     #[test]
@@ -4822,11 +4863,14 @@ mod tests {
                     modules: vec![crate::log::ModuleEntry { name: "core".to_owned(), lines: 90, classes: stats(3, 90, 60).classes, tests }] }
         };
 
-        let whole = format_module_comparison_lines(&entry(Some(tests_of(30, 20))), std::slice::from_ref(&now), CountingModel::Content, false);
+        let whole = format_module_comparison_lines(&entry(Some(tests_of(30, 20))),
+                std::slice::from_ref(&now), SortCriterion::Lines, CountingModel::Content, false);
         assert!(whole.contains("90") && whole.contains("60") && !whole.contains("40"), "{whole}");
-        let outside = format_module_comparison_lines(&entry(Some(tests_of(30, 20))), std::slice::from_ref(&now), CountingModel::Content, true);
+        let outside = format_module_comparison_lines(&entry(Some(tests_of(30, 20))),
+                std::slice::from_ref(&now), SortCriterion::Lines, CountingModel::Content, true);
         assert!(outside.contains("60") && outside.contains("40") && !outside.contains("90"), "{outside}");
-        let unrecorded = format_module_comparison_lines(&entry(None), &[now], CountingModel::Content, true);
+        let unrecorded = format_module_comparison_lines(&entry(None),
+                std::slice::from_ref(&now), SortCriterion::Lines, CountingModel::Content, true);
         assert!(unrecorded.contains("90") && unrecorded.contains("60"), "an entry without tests was not shown whole: {unrecorded}");
     }
 
@@ -4869,7 +4913,8 @@ mod tests {
         let grouped = create_groups_of(&result, &config);
         assert!(is_grouped(&grouped) && grouped.len() == 2);
         assert_eq!(0, count_hidden_files(&grouped));
-        assert_eq!("big.rs", grouped[0].files["Rust"].shown[0].0.as_ref());
+        assert_eq!("mid.rs", grouped[0].files["Rust"].shown[0].0.as_ref());
+        assert_eq!("big.rs", grouped[1].files["Rust"].shown[0].0.as_ref());
 
         config.view.hidden.modules = true;
         let flat = create_groups_of(&result, &config);

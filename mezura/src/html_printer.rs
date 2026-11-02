@@ -30,8 +30,6 @@ pub fn print_as_html(result: &RunResult, datetime_now: &DateTime<Local>, config:
     outln!("{}", create_page(result, datetime_now, config));
 }
 
-// The page is the template with the run written into it: the document of '--output json' for the
-// same command line, every theme, the two badges, and the fonts, so the file needs nothing beside it
 fn create_page(result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> String {
     let fillings = [
         (FONTS_MARKER, create_font_faces()),
@@ -45,9 +43,7 @@ fn create_page(result: &RunResult, datetime_now: &DateTime<Local>, config: &Conf
     fill_template(TEMPLATE, &fillings)
 }
 
-// What the page cannot read off the document: the column the rows were sorted by, which the
-// document only shows through its order. The page names the third column and the size by what
-// they hold, whichever model counted.
+// The sort column, which the document shows only through its order
 fn create_view_document(config: &Configuration) -> String {
     let sort = match config.view.sort_by.as_str() {
         "extra" | "blanks" => "third",
@@ -75,10 +71,8 @@ fn fill_template(template: &str, fillings: &[(&str, String)]) -> String {
     page
 }
 
-// The theme of the run first, under its own name and as the terminal shows it, then every shipped
-// theme in the order of a listing. Each is resolved, so the page never has to fill a token in. A
-// shipped theme loads whatever the case it was typed in, and the page keeps the file's spelling,
-// which is what its light and dark partner is found by.
+// The run's theme first, under the shipped file's spelling whatever case it was typed in, since
+// the page finds its light and dark partner by that spelling
 fn create_themes_document(config: &Configuration) -> String {
     let typed_name = config.view.theme_name.clone().unwrap_or_else(|| STOCK_LOOK_THEME.to_owned());
     let mut shipped = get_shipped_theme_files().into_iter().filter_map(|(relative, contents)| {
@@ -103,8 +97,7 @@ fn create_themes_document(config: &Configuration) -> String {
     format!("{{\"active\":\"{}\",\"order\":[{order}],\"themes\":{{{entries}}}}}", escape(&active_name))
 }
 
-// A '<' in a JSON document sits inside a string, so escaping every one keeps the document the same
-// document and keeps a '</script>' typed in a path from closing the page's script early
+// Every '<' sits inside a string, so escaping them all keeps a '</script>' in a path from closing the script
 fn escape_for_script(json: &str) -> String {
     json.replace('<', "\\u003c")
 }

@@ -433,8 +433,9 @@ body.print-plain [class*="t-"] { color: inherit !important; background: transpar
   }
 
   function comparatorOf(key) {
-    if (key === 'name') return (a, b) => a.name.localeCompare(b.name);
-    return (a, b) => (b.stats[key] - a.stats[key]) || a.name.localeCompare(b.name);
+    const byName = (a, b) => (a.unnamed ? 1 : 0) - (b.unnamed ? 1 : 0) || a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+    if (key === 'name') return byName;
+    return (a, b) => (b.stats[key] - a.stats[key]) || byName(a, b);
   }
 
   function keywordsOf(entry) {
@@ -460,7 +461,7 @@ body.print-plain [class*="t-"] { color: inherit !important; background: transpar
     const grouped = state.grouping === 'modules' && Array.isArray(doc.modules);
     const compare = comparatorOf(state.sort);
     if (grouped) {
-      const modules = doc.modules.map((m) => ({ name: m.name == null ? '(unnamed)' : m.name, stats: statsOf(m.total, third), module: m }));
+      const modules = doc.modules.map((m) => ({ name: m.name == null ? '(unnamed)' : m.name, unnamed: m.name == null, stats: statsOf(m.total, third), module: m })).sort(compare);
       for (const m of modules) {
         const id = 'm:' + m.name;
         const collapsed = state.collapsed.has(id);

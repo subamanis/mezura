@@ -90,7 +90,8 @@ fn create_comparison_document(comparison: &super::diff::Comparison, datetime_now
     let keywords_counted = !config.view.hidden.keywords;
     // Written only when both readings named the same modules, since a module only one of them has
     // has nothing to be compared against
-    let pairs = (!config.view.hidden.modules).then(|| comparison.module_pairs()).flatten();
+    let pairs = (!config.view.hidden.modules).then(||
+            comparison.module_pairs(config.view.sort_by, config.view.counting, false)).flatten();
 
     // The changed files under each language, the same gate and the same single placement the run
     // document has: inside the modules when they are written, at the top level otherwise
@@ -562,7 +563,7 @@ fn create_total_object(total: &Stats, tests: Option<&HashMap<String, TestCode>>,
 fn create_modules_array(result: &RunResult, file_rows: &[result_printer::FileRowsOfModule],
         config: &Configuration) -> String
 {
-    create_array(result.modules.iter().zip(file_rows).map(|(module, files)| {
+    create_array(result.sort_modules_by(config.view.sort_by, config.view.counting).into_iter().zip(file_rows).map(|(module, files)| {
         let (shown, hidden) = result_printer::find_shown_language_names(&module.per_language, config);
         let files_hidden = files.values().map(|rows| rows.hidden).sum::<usize>();
         let files = find_shown_files(files);
@@ -958,12 +959,13 @@ mod tests {
                      "HTML".to_owned() => stats_of(1, 400, 40, 40, 0, HashMap::new())],
             stats_of(3, 1400, 140, 140, 0, HashMap::new()), Vec::new(),
             FilesPresent {total_files: 3, relevant_files: 3, excluded_files: 0});
-        result.modules = vec![module_of(Some("backend"), "Rust", 100, 2), module_of(None, "HTML", 40, 1)];
+        result.modules = vec![module_of(None, "HTML", 40, 1), module_of(Some("backend"), "Rust", 100, 2)];
 
         config.view.hidden.timing = true;
         let rendered = create_document(&result, &Local::now(), &config);
         assert!(rendered.contains("\"name\":\"backend\""));
         assert!(rendered.contains("\"name\":null"));
+        assert!(rendered.find("\"name\":\"backend\"").unwrap() < rendered.find("\"name\":null").unwrap());
         let block = &rendered[rendered.find("\"modules\"").unwrap()..];
         assert_eq!(2, block.matches("\"total\":").count());
         assert_eq!(2, block.matches("\"languages\":").count());
@@ -1023,7 +1025,7 @@ mod tests {
         assert!(written.contains("{\"module\":\"tests\",\"path\":\"D:/api/tests\"}"), "{written}");
         assert_eq!(2, written.matches("\"module\":\"tests\"").count());
         assert!(written.contains("{\"module\":null,\"path\":\"D:\\\\web\"}"), "{written}");
-        // in the order they were declared, which the report's columns follow, and not sorted
+        // in the order they were declared, and not sorted
         assert!(written.find("api/tests").unwrap() < written.find("web/tests").unwrap());
 
         result.targets = Vec::new();

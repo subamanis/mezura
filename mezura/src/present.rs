@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io::IsTerminal;
 
 use mezura_core::{AppliedPreset, FaultyFileDetails, RunResult, ScanSkip, UnreadableDirDetails};
 
@@ -129,6 +130,14 @@ pub fn print_comparison_as_text_or_json(comparison: &super::diff::Comparison,
         super::result_printer::print_comparison(comparison, config);
     } else {
         super::json_printer::print_comparison_as_json(comparison, datetime_now, config);
+    }
+}
+
+// Only when the standard output is a terminal, so a pipe or a redirect never sees the note
+pub fn print_how_to_save_the_document(config: &Configuration) {
+    let Some(hint) = format_how_to_save_the_document(config.view.output) else { return };
+    if std::io::stdout().is_terminal() {
+        eprintln!("\n{}", super::theme::get_active().note.paint(&hint));
     }
 }
 
@@ -360,6 +369,18 @@ fn print_document(result: &RunResult, datetime_now: &chrono::DateTime<chrono::Lo
     }
 }
 
+fn format_how_to_save_the_document(output: OutputFormat) -> Option<String> {
+    let (what, file) = match output {
+        OutputFormat::Text => return None,
+        OutputFormat::Json => ("the document", "stats.json"),
+        OutputFormat::Html => ("the page", "report.html"),
+        OutputFormat::Markdown => ("the page", "report.md"),
+        OutputFormat::Svg => ("the badge", "badge.svg")
+    };
+
+    Some(format!("To save {what} as a file, add '> {file}' to the command."))
+}
+
 fn print_detail_hint_if_anything_was_hidden(result: &RunResult, config: &Configuration) {
     if let Some(hint) = determine_detail_hint(result, config) {
         eprintln!("{}\n", super::theme::get_active().note.paint(&hint));
@@ -412,6 +433,15 @@ mod tests {
     use mezura_core::{FilesPresent, Performance, Target, Threads};
 
     use super::*;
+
+    #[test]
+    fn the_note_on_saving_a_document_names_its_file_and_a_text_report_gets_none() {
+        assert_eq!(None, format_how_to_save_the_document(OutputFormat::Text));
+        assert_eq!(Some("To save the page as a file, add '> report.html' to the command.".to_owned()),
+                format_how_to_save_the_document(OutputFormat::Html));
+        assert_eq!(Some("To save the badge as a file, add '> badge.svg' to the command.".to_owned()),
+                format_how_to_save_the_document(OutputFormat::Svg));
+    }
 
     #[test]
     fn the_left_out_notes_name_each_kind_and_the_paths_only_when_asked() {

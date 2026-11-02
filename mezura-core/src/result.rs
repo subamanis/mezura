@@ -63,6 +63,12 @@ impl RunResult {
         criterion.sort_languages(&self.per_language, model)
     }
 
+    /// The modules largest first by the chosen figure, ties broken by name with the unnamed module
+    /// last.
+    pub fn sort_modules_by(&self, criterion: SortCriterion, model: CountingModel) -> Vec<&ModuleResult> {
+        criterion.sort_modules(&self.modules, model)
+    }
+
     /// Every language outside its test code. A language that is test code whole has no entry.
     pub fn calculate_production_per_language(&self) -> HashMap<String, Stats> {
         calculate_production_per_language(&self.per_language, &self.tests)
@@ -395,6 +401,29 @@ impl SortCriterion {
 
         rows
     }
+
+    /// Compares two modules by this figure, largest first, with ties broken by name and the unnamed
+    /// module after every named one on [`SortCriterion::Name`] and on ties.
+    pub fn compare_modules(self, one: (Option<&str>, &Stats), other: (Option<&str>, &Stats),
+            model: CountingModel) -> std::cmp::Ordering
+    {
+        self.get_value_of(other.1, model).cmp(&self.get_value_of(one.1, model))
+                .then_with(|| match (one.0, other.0) {
+                    (Some(a), Some(b)) => a.to_lowercase().cmp(&b.to_lowercase()),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal
+                })
+    }
+
+    /// The modules largest first by this figure, ties broken by name with the unnamed module last.
+    pub fn sort_modules(self, modules: &[ModuleResult], model: CountingModel) -> Vec<&ModuleResult> {
+        let mut sorted = modules.iter().collect::<Vec<_>>();
+        sorted.sort_by(|one, other| self.compare_modules(
+                (one.name.as_deref(), &one.total), (other.name.as_deref(), &other.total), model));
+
+        sorted
+    }
 }
 
 impl std::fmt::Display for SortCriterion {
@@ -575,6 +604,7 @@ impl std::error::Error for RunError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::LineClasses;
     use crate::engine::modules::Modules;
 
     fn result_with(relevant: usize, unreadable: &[&str]) -> RunResult {
@@ -593,5 +623,34 @@ mod tests {
         assert!(result_with(0, &["D:/gone"]).nothing_could_be_read());
         assert!(!result_with(3, &["D:/gone"]).nothing_could_be_read());
         assert!(!result_with(3, &[]).nothing_could_be_read());
+    }
+
+    #[test]
+    fn modules_sort_by_the_chosen_figure_with_the_unnamed_module_last_on_name_and_ties() {
+        let module = |name: Option<&str>, files, bytes, lines| ModuleResult {
+            name: name.map(str::to_owned),
+            total: Stats::new(files, bytes, lines, LineClasses::default(), HashMap::new()),
+            per_language: HashMap::new(),
+            nested_languages: HashMap::new(),
+            tests: HashMap::new(),
+            files: HashMap::new()
+        };
+        let modules = vec![
+            module(Some("web"), 9, 10, 100),
+            module(None, 3, 200, 200),
+            module(Some("api"), 1, 900, 100),
+            module(Some("core"), 5, 50, 300)
+        ];
+        let sorted = |criterion: SortCriterion| criterion.sort_modules(&modules, CountingModel::Content)
+                .into_iter().map(|m| m.name.as_deref()).collect::<Vec<_>>();
+
+        assert_eq!(vec![Some("core"), None, Some("api"), Some("web")], sorted(SortCriterion::Lines));
+        assert_eq!(vec![Some("web"), Some("core"), None, Some("api")], sorted(SortCriterion::Files));
+        assert_eq!(vec![Some("api"), None, Some("core"), Some("web")], sorted(SortCriterion::Size));
+        assert_eq!(vec![Some("api"), Some("core"), Some("web"), None], sorted(SortCriterion::Name));
+
+        let tied = vec![module(None, 1, 10, 100), module(Some("web"), 1, 10, 100)];
+        assert_eq!(vec![Some("web"), None], SortCriterion::Lines.sort_modules(&tied, CountingModel::Content)
+                .into_iter().map(|m| m.name.as_deref()).collect::<Vec<_>>());
     }
 }

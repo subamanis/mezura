@@ -136,8 +136,7 @@ pub struct ViewConfig {
     pub config_name_to_save: Option<String>,
     pub config_name_to_load: Option<String>,
     pub counts_the_named_config: bool,
-    // The theme the run loaded, None for the stock look and for one that could not be loaded. The
-    // HTML page names it, since the resolved theme below carries values and no name.
+    // None for the stock look and for a theme that could not be loaded
     pub theme_name: Option<String>,
     pub theme_name_to_save: Option<String>,
     pub test_patterns_from_presets: Vec<String>,
@@ -183,8 +182,7 @@ impl ViewConfig {
     }
 
     // The JSON document holds what the scan found and left out and which settings applied, so
-    // nothing is printed beside it. Every other output prints those on the error output, the HTML
-    // page too: it is read by a person, and its stderr cannot reach the file.
+    // nothing is printed beside it. Every other output prints those on the error output.
     pub fn document_carries_the_notes(&self) -> bool {
         self.output == OutputFormat::Json
     }
@@ -2257,8 +2255,6 @@ fn targets_match_by(one: &[Target], other: &[Target], include_modules: bool) -> 
     normalise(one) == normalise(other)
 }
 
-// The page draws one run. A comparison and an explanation are documents of other shapes, so asking
-// for either as html is refused here, where the command line is still its own.
 fn refuse_the_html_output_where_it_has_no_form(builder: &ConfigurationBuilder) -> Result<(), ArgParsingError> {
     if builder.output != Some(OutputFormat::Html) {
         return Ok(());
@@ -2270,8 +2266,6 @@ fn refuse_the_html_output_where_it_has_no_form(builder: &ConfigurationBuilder) -
     }
 }
 
-// A document is written whole, with no history under it and no log entry after it, so the two
-// commands asking for those are dropped with a word, the way a badge run drops them
 fn forget_what_a_document_never_writes(builder: &mut ConfigurationBuilder) {
     if !matches!(builder.output, Some(OutputFormat::Json | OutputFormat::Html)) {
         return;
@@ -3779,14 +3773,12 @@ mod tests {
                 create_config_from_args("./ --badge code keywords"));
     }
 
-    // Without the refusal both would quietly write a JSON document into the file named .html
     #[test]
     fn the_html_output_refuses_a_comparison_and_an_explanation() {
         assert_eq!(Err(ArgParsingError::NoHtmlForm(DIFF.to_owned())), create_config_from_args("./ --diff HEAD --output html"));
         assert_eq!(Err(ArgParsingError::NoHtmlForm(EXPLAIN.to_owned())), create_config_from_args("./ --explain --output html"));
     }
 
-    // A document run used to drop both without a word, so the log entry was silently never written
     #[test]
     fn what_a_document_never_writes_is_dropped_with_a_word() {
         let config = create_config_from_args("./ --output html --log x --compare 3").unwrap();

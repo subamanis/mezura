@@ -48,6 +48,7 @@ pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
                 print_text(&display_path, &explanation, config.view.counting, asked_for);
             } else {
                 outln!("{}", build_json_document(&display_path, &explanation, config.view.counting));
+                crate::present::print_how_to_save_the_document(config);
             }
             ExitCode::SUCCESS
         },

@@ -212,6 +212,7 @@ fn main() -> ExitCode {
                         outln!();
                     }
                     crate::present::print_comparison_as_text_or_json(&comparison, &chrono::Local::now(), &config);
+                    crate::present::print_how_to_save_the_document(&config);
                     // The exec time alone, without the parsing figures: those describe one scan, and
                     // a comparison had up to two
                     if config.view.prints_text() && !config.view.hidden.timing {
@@ -285,6 +286,7 @@ fn main() -> ExitCode {
             let comparison = counted_baseline.map(|baseline| baseline.with_subject(
                     crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config), &config));
             crate::present::present(&result, comparison.as_ref(), &config);
+            crate::present::print_how_to_save_the_document(&config);
             // Already presented above as the failures they are. The exit code keeps its meaning:
             // 1 is a run that did not happen, every file unparseable or every place unopenable.
             if result.all_relevant_files_were_faulty() || result.nothing_could_be_read() {

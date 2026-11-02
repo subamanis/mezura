@@ -14,6 +14,10 @@ Main changes:
   -> '--output html' writes the run as one HTML file, fonts and themes inside it, to open or to
       send: the overview bars, the details per module or flat with rows that fold and sort, every
       shipped theme to switch between with the run's own first, and the badge of the run.
+  -> A document printed on a terminal ('--output json', 'html', 'markdown' and '--badge') is
+      followed by a note on saving it as a file ('> report.html'). A pipe or a redirect never
+      sees the note.
+  -> '--sort' now orders the modules as well as the languages inside each module.
 
 Bugfixes:
   -> '--log' and '--compare' typed beside '--output json' or '--output html' now say they are
