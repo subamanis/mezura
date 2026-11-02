@@ -67,7 +67,7 @@ jobs:
           $name = "mezura-${{ github.ref_name }}-${{ matrix.platform }}"
           New-Item -ItemType Directory -Path $name | Out-Null
           Copy-Item target/release/mezura.exe, target/release/mezura-mcp.exe -Destination $name
-          Copy-Item LICENSE-MIT, LICENSE-APACHE, mezura/Changelog, README.md -Destination $name
+          Copy-Item LICENSE-MIT, LICENSE-APACHE, mezura/templates/fonts/LICENSE-Inter.txt, mezura/templates/fonts/LICENSE-JetBrainsMono.txt, mezura/Changelog, README.md -Destination $name
           Compress-Archive -Path $name -DestinationPath "$name.zip"
 
       # The release profile already strips, so this only keeps the size of what people download
@@ -79,7 +79,7 @@ jobs:
           strip target/release/mezura target/release/mezura-mcp
           mkdir "$name"
           cp target/release/mezura target/release/mezura-mcp "$name/"
-          cp LICENSE-MIT LICENSE-APACHE mezura/Changelog README.md "$name/"
+          cp LICENSE-MIT LICENSE-APACHE mezura/templates/fonts/LICENSE-Inter.txt mezura/templates/fonts/LICENSE-JetBrainsMono.txt mezura/Changelog README.md "$name/"
           tar czf "$name.tar.gz" "$name"
 
       - name: Upload the archive

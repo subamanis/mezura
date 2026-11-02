@@ -32,7 +32,7 @@ pub fn load_theme(name: &str, themes_dir: &str) -> Option<super::theme::ThemeFil
 // Flattened on purpose: a theme file is meant to be handed to someone else, so it carries values
 // and not a reference to whatever it was built on top of.
 pub fn save_theme_to_file(themes_dir: &str, name: &str, theme: &super::theme::Theme) -> io::Result<()> {
-    let styles = theme.find_non_default_tokens().into_iter().map(|(token, value)| (token.to_owned(), value)).collect::<Vec<_>>();
+    let styles = theme.collect_non_default_tokens().into_iter().map(|(token, value)| (token.to_owned(), value)).collect::<Vec<_>>();
     fs::create_dir_all(themes_dir)?;
     fs::write(themes_dir.to_owned() + name + ".txt", super::theme::create_theme_file_contents(&styles))
 }
@@ -71,7 +71,7 @@ fn build_themes_js(themes_dir: &str) -> io::Result<String> {
         let Some(stem) = path.file_stem().and_then(|x| x.to_str()) else { continue };
         let Ok(contents) = fs::read_to_string(&path) else { continue };
         let resolved = super::theme::resolve(&super::theme::parse_theme_file(&contents).0, &[], &[]);
-        entries.push((stem.to_owned(), resolved.find_non_default_tokens()));
+        entries.push((stem.to_owned(), resolved.collect_non_default_tokens()));
     }
     entries.sort_by_key(|x| build_listing_key(&x.0));
 
@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn the_editor_page_names_the_styles_mezura_ships() {
         let page = include_str!("../docs/theme-editor/index.html");
-        let shipped = crate::theme::Theme::default().find_all_tokens().into_iter()
+        let shipped = crate::theme::Theme::default().collect_all_tokens().into_iter()
                 .collect::<std::collections::HashMap<_, _>>();
 
         // The last entry of a group carries no comma, and dropping those leaves one token of every
@@ -164,7 +164,7 @@ mod tests {
         assert!(errors.is_empty(), "Uncolored.txt does not parse cleanly: {errors:?}");
 
         let theme = crate::theme::resolve(&styles, &[], &[]);
-        let colored = theme.find_all_tokens().into_iter().filter(|(_, value)| {
+        let colored = theme.collect_all_tokens().into_iter().filter(|(_, value)| {
             let style = crate::theme::Style::parse(value).unwrap();
             style.fill != crate::theme::Fill::Terminal || style.background.is_some()
         }).map(|(token, value)| format!("{token} = {value}")).collect::<Vec<_>>();
@@ -191,7 +191,7 @@ mod tests {
         assert!(errors.is_empty(), "Mezura.txt does not parse cleanly: {errors:?}");
 
         let named = styles.iter().map(|(token, _)| token.as_str()).collect::<std::collections::HashSet<_>>();
-        let missing = crate::theme::Theme::default().find_all_tokens().into_iter()
+        let missing = crate::theme::Theme::default().collect_all_tokens().into_iter()
                 .filter(|(token, _)| !is_left_alone_by_every_theme(token) && !named.contains(token))
                 .map(|(token, value)| format!("{token} = {value}")).collect::<Vec<_>>();
         assert!(missing.is_empty(), "Mezura.txt names {} of the {} tokens a shipped theme moves. Add \
@@ -202,7 +202,7 @@ mod tests {
         assert!(held.is_empty(), "these colours are the same under every shipped theme, so the file \
                 that undoes a theme has nothing to put back for them. Take them out of Mezura.txt: {held:?}");
 
-        let moved = crate::theme::resolve(&styles, &[], &[]).find_non_default_tokens().into_iter()
+        let moved = crate::theme::resolve(&styles, &[], &[]).collect_non_default_tokens().into_iter()
                 .map(|(token, value)| format!("{token} = {value}")).collect::<Vec<_>>();
         assert!(moved.is_empty(), "Mezura.txt is meant to carry what this build ships and these \
                 lines of it do not:\n{}", moved.join("\n"));

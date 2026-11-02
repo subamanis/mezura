@@ -1,0 +1,755 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mezura report</title>
+<style>
+/*MEZURA_FONTS*/
+</style>
+<style>
+:root {
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --bg: #131417;
+  --fg: #d6d8dc;
+  --muted: color-mix(in srgb, var(--fg) 62%, var(--bg));
+  --faint: color-mix(in srgb, var(--fg) 36%, var(--bg));
+  --rule: color-mix(in srgb, var(--fg) 13%, var(--bg));
+  --stripe: color-mix(in srgb, var(--fg) 2%, var(--bg));
+  --hover: color-mix(in srgb, var(--fg) 7%, var(--bg));
+  --sep-header: var(--rule);
+  --sep-total: var(--rule);
+  color-scheme: dark;
+}
+:root[data-base="light"] {
+  --bg: #fcfcfb;
+  --fg: #1e2024;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-sans); font-size: .9375rem; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+.page { max-width: 64rem; margin: 0 auto; padding: 2.75rem 2rem 4rem; }
+.titlerow { display: flex; align-items: baseline; gap: .75rem; flex-wrap: wrap; }
+h1 { font-size: 1.5rem; font-weight: 600; margin: 0; letter-spacing: .005em; line-height: 1.2; }
+h1 .ver { font-weight: 400; font-size: .7em; margin-left: .4em; }
+h1 a { color: inherit; text-decoration: none; }
+h1 a:hover { text-decoration: underline; text-underline-offset: .2em; }
+.when { color: var(--muted); font-size: .875rem; font-style: italic; }
+.titlerow .options { margin-left: auto; }
+.targets { margin-top: .5rem; font-size: .875rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: .2rem 1.25rem; }
+.targets .path { font-family: var(--font-mono); font-size: .86em; }
+.targets b { font-weight: 600; margin-right: .4em; }
+.lede { margin: 1.5rem 0 0; max-width: 46rem; }
+.lede div { margin: .2rem 0; }
+.lede b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.scan { margin: .55rem 0 0; color: var(--muted); font-size: .875rem; }
+section { margin-top: 2.4rem; }
+h2 { font-size: .9375rem; font-weight: 600; margin: 0 0 .9rem; }
+.ov { display: grid; grid-template-columns: 3.5rem minmax(14rem, 1fr) auto; column-gap: 1.25rem; row-gap: .6rem; align-items: center; font-size: .875rem; }
+.ov .legend { display: flex; gap: 1rem; white-space: nowrap; }
+.ov .legend .pct { font-variant-numeric: tabular-nums; margin-right: .3em; }
+.bar { display: flex; height: .5rem; background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.bar span { min-width: 2px; box-shadow: inset -1px 0 var(--bg); }
+.tablewrap { overflow-x: auto; }
+table.details { border-collapse: collapse; width: 100%; font-size: .875rem; }
+.details th { font-weight: 500; text-align: right; padding: 0 .4rem .45rem; border-bottom: 1px solid var(--sep-header); white-space: nowrap; cursor: pointer; user-select: none; }
+.details th.name { text-align: left; }
+.details th.pct { text-align: left; padding-left: 0; }
+.details th .mark { display: inline-block; width: 1.2em; text-align: left; }
+.details td { padding: .2rem .4rem; white-space: nowrap; vertical-align: baseline; }
+.details td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.details td.pct { text-align: left; padding-left: 0; font-size: .8em; width: 3.8em; }
+.details td.name { text-align: left; }
+.details tr.module td { padding-top: .65rem; }
+.details tr.gap td { padding: 0; height: .35rem; }
+.details tr.total td { border-top: 1px solid var(--sep-total); padding-top: .45rem; }
+.details tr.collapsible td.name { cursor: pointer; }
+.details tbody tr.even td { background: var(--stripe); }
+.details tbody tr:not(.gap):hover td { background: var(--hover); }
+.chev { display: inline-block; width: 1.1em; color: var(--faint); font-size: .75em; vertical-align: .1em; }
+.branch { font-family: var(--font-mono); margin-right: .3em; }
+.kw { display: block; font-size: .78em; white-space: normal; padding-left: 1.1em; line-height: 1.35; margin-bottom: .1em; }
+.kw .k { margin-right: .65em; }
+body.no-pct .details .pct { display: none; }
+body.no-kw .kw { display: none; }
+body.nothing-counted section.counted { display: none; }
+body.no-card .badges .card { display: none; }
+body.no-pill .badges .pill { display: none; }
+body.no-card.no-pill .badge-row { display: none; }
+.extras { display: flex; flex-direction: column; gap: .35rem; font-size: .875rem; }
+.extras details summary { cursor: pointer; color: var(--muted); list-style: none; }
+.extras details summary::-webkit-details-marker { display: none; }
+.extras details summary::before { content: '\25B8'; display: inline-block; width: 1.1em; color: var(--faint); font-size: .8em; }
+.extras details[open] summary::before { content: '\25BE'; }
+.extras ul { margin: .4rem 0 .6rem; padding-left: 2.2rem; color: var(--muted); }
+.extras li { margin: .2rem 0; }
+.extras code { font-family: var(--font-mono); font-size: .9em; }
+.extras .empty { margin: .3rem 0 .5rem 1.1em; color: var(--faint); }
+.badge-row { position: relative; }
+.badges { display: flex; align-items: flex-end; gap: .6rem; width: max-content; }
+.badges svg { display: block; }
+.badge-help { position: absolute; left: 0; bottom: calc(100% + .9rem); z-index: 4; max-width: 36rem; background: var(--bg); border: 1px solid var(--rule); padding: .6rem .85rem .7rem; font-size: .8125rem; color: var(--muted); visibility: hidden; opacity: 0; transition: opacity .15s; }
+.badge-help::after { content: ''; position: absolute; left: 1.4rem; bottom: -.45rem; width: .8rem; height: .8rem; background: var(--bg); border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule); transform: rotate(45deg); }
+.badges:hover + .badge-help, .badge-help:hover { visibility: visible; opacity: 1; }
+.badge-help code { display: block; font-family: var(--font-mono); font-size: .9em; margin: .15rem 0; color: var(--fg); }
+.badge-help a { color: inherit; }
+footer { margin-top: 2.5rem; padding-top: .8rem; border-top: 1px solid var(--rule); font-size: .8125rem; color: var(--muted); }
+footer a { color: inherit; text-decoration: none; }
+footer a:hover { text-decoration: underline; text-underline-offset: .2em; }
+select { font: inherit; font-size: .8125rem; color: var(--fg); background: var(--bg); border: 1px solid var(--rule); padding: .1em .3em; }
+input[type="checkbox"] { margin: 0 .2em 0 0; vertical-align: -.1em; }
+input[type="color"] { width: 1.6rem; height: 1.3rem; padding: 0; border: 1px solid var(--rule); background: none; cursor: pointer; vertical-align: middle; }
+.options { position: relative; font-size: .875rem; }
+.options summary { cursor: pointer; color: var(--muted); list-style: none; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: .25em; }
+.options summary::-webkit-details-marker { display: none; }
+.options summary:hover { color: var(--fg); }
+.menu { position: absolute; right: 0; top: 1.8rem; z-index: 5; background: var(--bg); border: 1px solid var(--rule); padding: .7rem .9rem .8rem; min-width: 22rem; display: grid; grid-template-columns: max-content 1fr; column-gap: 1rem; row-gap: .5rem; align-items: baseline; }
+.menu .k { color: var(--muted); }
+.menu .v { display: flex; flex-wrap: wrap; gap: .3rem .8rem; align-items: baseline; }
+.menu label { display: inline-flex; gap: .3em; align-items: baseline; cursor: pointer; white-space: nowrap; }
+.menu label.off { opacity: .4; cursor: default; }
+button.lnk { font: inherit; background: none; border: 0; padding: 0; color: var(--muted); cursor: pointer; }
+button.lnk:hover { color: var(--fg); }
+button.lnk.on { color: var(--fg); font-weight: 600; }
+button.lnk:disabled { opacity: .4; cursor: default; }
+body.print-plain [class*="t-"] { color: inherit !important; background: transparent !important; padding: 0 !important; }
+@media print {
+  :root, :root[data-base="light"] { --bg: #ffffff !important; --fg: #1a1c20; color-scheme: light; }
+  .page { max-width: none; padding: 0; }
+  .options, .badge-help { display: none; }
+  .details tbody tr.even td, .bar, .bar span { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .tablewrap { overflow: visible; }
+  tr, .ov { break-inside: avoid; }
+  @page { margin: 1.6cm; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+<header>
+  <div class="titlerow">
+    <h1><a href="https://github.com/subamanis/mezura">mezura</a><span class="ver t-version" id="version"></span></h1>
+    <span class="when" id="when"></span>
+    <details class="options" id="options">
+      <summary>options</summary>
+      <div class="menu">
+        <span class="k">theme</span><span class="v"><select id="theme"></select><button class="lnk" id="base"></button></span>
+        <span class="k">background</span><span class="v"><input type="color" id="bg"><button class="lnk" id="bg-reset">reset</button></span>
+        <span class="k">group</span><span class="v"><button class="lnk" data-v="modules">by module</button><button class="lnk" data-v="flat">flat</button></span>
+        <span class="k">show</span><span class="v"><label><input type="checkbox" id="opt-tests" checked>tests</label><label><input type="checkbox" id="opt-nested" checked>nested languages</label><label><input type="checkbox" id="opt-keywords" checked>keywords</label><label><input type="checkbox" id="opt-percent" checked>percentages</label></span>
+        <span class="k">badges</span><span class="v"><label><input type="checkbox" id="opt-card" checked>card</label><label><input type="checkbox" id="opt-pill" checked>pill</label></span>
+        <span class="k">sort by</span><span class="v"><select id="sort"></select></span>
+        <span class="k">rows</span><span class="v"><button class="lnk" id="expand">expand all</button><button class="lnk" id="collapse">collapse all</button></span>
+      </div>
+    </details>
+  </div>
+  <div class="targets" id="targets"></div>
+  <div class="lede" id="lede"></div>
+  <p class="scan" id="scan"></p>
+</header>
+<section class="counted">
+  <h2 class="t-heading">Overview</h2>
+  <div class="ov" id="overview"></div>
+</section>
+<section class="counted">
+  <h2 class="t-heading">Details</h2>
+  <div class="tablewrap"><table class="details" id="details"></table></div>
+</section>
+<section class="extras">
+  <details id="warnings"></details>
+  <details id="notes"></details>
+</section>
+<section class="badge-row">
+  <div class="badges"><span class="card"><!--MEZURA_CARD--></span><span class="pill"><!--MEZURA_BADGE--></span></div>
+  <div class="badge-help">
+    <div>Badge generated by mezura itself.</div>
+    <code>mezura --badge > badge.svg</code>
+    <code>[![mezura](badge.svg)](https://github.com/subamanis/mezura)</code>
+    <div>A GitHub Action can write it on every push, see <a href="https://github.com/subamanis/mezura#a-badge-for-the-readme">the README</a>.</div>
+  </div>
+</section>
+<footer id="footer"></footer>
+</div>
+<script type="application/json" id="mezura-themes">/*MEZURA_THEMES*/</script>
+<script type="application/json" id="mezura-view">/*MEZURA_VIEW*/</script>
+<script type="application/json" id="mezura-document">/*MEZURA_DOCUMENT*/</script>
+<script>
+(function () {
+  const PALETTE = {
+    dark: {
+      'black': '#0C0C0C', 'red': '#C50F1F', 'green': '#13A10E', 'yellow': '#C19C00', 'blue': '#0037DA', 'magenta': '#881798', 'cyan': '#3A96DD', 'white': '#CCCCCC',
+      'bright-black': '#767676', 'bright-red': '#E74856', 'bright-green': '#16C60C', 'bright-yellow': '#F9F1A5', 'bright-blue': '#3B78FF', 'bright-magenta': '#B4009E', 'bright-cyan': '#61D6D6', 'bright-white': '#F2F2F2'
+    },
+    light: {
+      'black': '#383A42', 'red': '#E45649', 'green': '#50A14F', 'yellow': '#C18301', 'blue': '#0184BC', 'magenta': '#A626A4', 'cyan': '#0997B3', 'white': '#FAFAFA',
+      'bright-black': '#4F525D', 'bright-red': '#DF6C75', 'bright-green': '#98C379', 'bright-yellow': '#E4C07A', 'bright-blue': '#61AFEF', 'bright-magenta': '#C577DD', 'bright-cyan': '#56B5C1', 'bright-white': '#FFFFFF'
+    }
+  };
+  const BASE_BACKGROUNDS = { dark: '#131417', light: '#fcfcfb' };
+  const SORT_KEYS = [['lines', 'lines'], ['code', 'code'], ['files', 'files'], ['comments', 'comments'], ['third', 'extra'], ['bytes', 'size'], ['name', 'name']];
+  const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const OVERVIEW_LANGUAGES = 3;
+  const SLOTS = ['language-1', 'language-2', 'language-3', 'language-4'];
+  const UNCOLORED_SHADES = [.9, .65, .45, .32];
+  const UNCOLORED_OTHERS_SHADE = .22;
+  const TOKENS_OFF_THE_PAGE = ['progress-bar', 'change-', 'history-', 'explain-', 'file-', 'bar-frame', 'summary', 'success', 'error'];
+  const COUNT_TOKENS = { files: 'files-number', lines: 'lines-number', code: 'code-number', comments: 'comments-number', third: 'extra-number', size: 'total-size-number', unit: 'size-unit', percent: 'percent' };
+  const TOKENS_OF = {
+    module: Object.assign({ name: 'details-module', branch: 'arrow' }, COUNT_TOKENS),
+    language: Object.assign({ name: 'details-language-name', branch: 'arrow' }, COUNT_TOKENS),
+    total: Object.assign({ name: 'details-total', branch: 'arrow' }, COUNT_TOKENS),
+    tests: { name: 'tests-name', files: 'tests-files', lines: 'tests-lines', code: 'tests-code', comments: 'tests-comments', third: 'tests-extra', size: 'tests-size', unit: 'tests-size-unit', percent: 'tests-percent', branch: 'tests-branch' },
+    nested: { name: 'nested-name', files: 'nested-files', lines: 'nested-lines', code: 'nested-code', comments: 'nested-comments', third: 'nested-extra', size: 'nested-size', unit: 'nested-size-unit', percent: 'nested-percent', branch: 'nested-branch' },
+    itself: { name: 'production-name', files: 'production-files', lines: 'production-lines', code: 'production-code', comments: 'production-comments', third: 'production-extra', size: 'production-size', unit: 'production-size-unit', percent: 'production-percent', branch: 'production-branch' }
+  };
+  TOKENS_OF['total-tests'] = TOKENS_OF.tests;
+
+  const $ = (id) => document.getElementById(id);
+  const DOC = JSON.parse($('mezura-document').textContent);
+  const THEME_DATA = JSON.parse($('mezura-themes').textContent);
+  const THEMES = THEME_DATA.themes;
+  const THEME_ORDER = THEME_DATA.order;
+  const VIEW = JSON.parse($('mezura-view').textContent);
+
+  const state = {
+    theme: THEME_DATA.active,
+    base: matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark',
+    grouping: 'modules',
+    tests: true,
+    nested: true,
+    keywords: true,
+    percent: true,
+    card: true,
+    pill: true,
+    sort: 'lines',
+    background: null,
+    collapsed: new Set()
+  };
+
+  function esc(text) {
+    return String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  }
+
+  function formatInt(value) {
+    return value.toLocaleString('en-US');
+  }
+
+  function formatFixed(value, digits) {
+    const scale = Math.pow(10, digits);
+    const scaled = value * scale;
+    const floor = Math.floor(scaled);
+    const rounded = scaled - floor === 0.5 ? (floor % 2 === 0 ? floor : floor + 1) : Math.round(scaled);
+    return (rounded / scale).toFixed(digits);
+  }
+
+  function formatPercent(value) {
+    if (!value) return '';
+    let text;
+    if (value >= 100 || formatFixed(value, 1) === '100.0') text = formatFixed(value, 0);
+    else if (value >= 10 || formatFixed(value, 2) === '10.00') text = formatFixed(value, 1);
+    else text = formatFixed(value, 2);
+    return (text === '0.00' ? '<0.01' : text) + '%';
+  }
+
+  function formatSize(bytes) {
+    for (const [limit, unit] of [[1e9, 'GB'], [1e6, 'MB'], [1e3, 'KB']]) {
+      if (bytes >= limit) return { value: formatFixed(bytes / limit, 1), unit };
+    }
+    return { value: formatInt(bytes), unit: 'B' };
+  }
+
+  function formatDate(iso) {
+    const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/);
+    return m ? Number(m[3]) + ' ' + MONTHS[Number(m[2]) - 1] + ' ' + m[1] + ', ' + m[4] : iso;
+  }
+
+  function plural(count, word, words) {
+    return formatInt(count) + ' ' + (count === 1 ? word : (words || word + 's'));
+  }
+
+  function parseStyle(value) {
+    const style = { fill: null, gradient: null, rainbow: false, background: null, bold: false, italic: false, underline: false, dim: false, reverse: false };
+    let colors = 0;
+    for (const raw of String(value).trim().split(/\s+/)) {
+      const token = raw.toLowerCase();
+      if (token === 'bold') style.bold = true;
+      else if (token === 'italic') style.italic = true;
+      else if (token === 'underline') style.underline = true;
+      else if (token === 'dim') style.dim = true;
+      else if (token === 'reverse') style.reverse = true;
+      else if (token === 'default') colors++;
+      else {
+        if (colors === 0) {
+          if (token === 'rainbow') style.rainbow = true;
+          else if (token.includes('..')) style.gradient = token.split('..');
+          else style.fill = token;
+        } else if (colors === 1) {
+          style.background = token;
+        }
+        colors++;
+      }
+    }
+    return style;
+  }
+
+  function colorOf(token, base) {
+    if (!token) return null;
+    const named = PALETTE[base][token.replace('_', '-')];
+    if (named) return named;
+    const hex = token.replace(/^#/, '');
+    return /^[0-9a-f]{6}$/.test(hex) ? '#' + hex : null;
+  }
+
+  function textColorOf(style, base) {
+    if (style.fill) return colorOf(style.fill, base);
+    if (style.gradient) return colorOf(style.gradient[0], base);
+    if (style.rainbow) return PALETTE[base].magenta;
+    return null;
+  }
+
+  function fillOf(style, base) {
+    if (style.rainbow) return 'linear-gradient(90deg, #ff4040, #ffd040, #40e040, #40e0e0, #4060ff, #e040e0)';
+    if (style.gradient) return 'linear-gradient(90deg, ' + style.gradient.map((s) => colorOf(s, base)).join(', ') + ')';
+    const flat = colorOf(style.fill, base);
+    if (flat) return flat;
+    return style.dim ? 'color-mix(in srgb, var(--fg) 30%, transparent)' : 'var(--fg)';
+  }
+
+  function lineColorOf(style, base) {
+    return colorOf(style.fill, base) || (style.dim ? 'color-mix(in srgb, var(--fg) 25%, transparent)' : 'var(--rule)');
+  }
+
+  function declarationsOf(style, base, colorOnly) {
+    const parts = [];
+    const fill = textColorOf(style, base);
+    const bg = colorOf(style.background, base);
+    if (fill) parts.push('color:' + fill);
+    if (colorOnly) return parts.join(';');
+    if (style.reverse) parts.push('background:' + (fill || 'var(--fg)'), 'color:var(--bg)', 'padding:0 .3em');
+    else if (bg) parts.push('background:' + bg, 'padding:0 .3em');
+    if (style.bold) parts.push('font-weight:600');
+    if (style.italic) parts.push('font-style:italic');
+    if (style.underline) parts.push('text-decoration:underline', 'text-underline-offset:.2em');
+    if (style.dim) parts.push('opacity:.62');
+    return parts.join(';');
+  }
+
+  function tokensOf(name) {
+    return THEMES[name] || THEMES[THEME_DATA.active];
+  }
+
+  function usesHex(tokens) {
+    return Object.entries(tokens).some(([token, value]) => {
+      if (TOKENS_OFF_THE_PAGE.some((prefix) => token.startsWith(prefix))) return false;
+      const hexes = String(value).match(/(^|\s)#?[0-9a-f]{6}(?=\s|$|\.\.)/gi) || [];
+      return hexes.some((h) => { const hex = h.trim().replace(/^#/, ''); return hex.slice(0, 2) !== hex.slice(2, 4) || hex.slice(2, 4) !== hex.slice(4, 6); });
+    });
+  }
+
+  function siblingOf(name) {
+    const other = name.endsWith('-light') ? name.slice(0, -6) : name + '-light';
+    return THEMES[other] ? other : null;
+  }
+
+  function isLight(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const luminance = (0.2126 * (n >> 16) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255;
+    return luminance > 0.5;
+  }
+
+  function baseOf(name, tokens) {
+    if (state.background) return isLight(state.background) ? 'light' : 'dark';
+    if (name.endsWith('-light')) return 'light';
+    if (usesHex(tokens)) return 'dark';
+    return state.base;
+  }
+
+  function applyTheme() {
+    const tokens = tokensOf(state.theme);
+    const base = baseOf(state.theme, tokens);
+    document.documentElement.dataset.base = base;
+    if (state.background) document.documentElement.style.setProperty('--bg', state.background);
+    else document.documentElement.style.removeProperty('--bg');
+    $('bg').value = state.background || BASE_BACKGROUNDS[base];
+    const rules = [];
+    for (const [token, value] of Object.entries(tokens)) {
+      rules.push('.t-' + token + '{' + declarationsOf(parseStyle(value), base, token === 'heading' || token === 'version') + '}');
+    }
+    rules.push(':root{--sep-header:' + lineColorOf(parseStyle(tokens['separator-header']), base) + ';--sep-total:' + lineColorOf(parseStyle(tokens['separator-total']), base) + '}');
+    $('theme-css').textContent = rules.join('\n');
+    const sibling = siblingOf(state.theme);
+    const button = $('base');
+    button.disabled = !sibling && usesHex(tokens);
+    button.textContent = sibling ? (base === 'dark' ? 'light' : 'dark') : (base === 'dark' ? 'light base' : 'dark base');
+    button.title = button.disabled ? 'This theme has one base' : '';
+  }
+
+  function slotStyles(tokens, base) {
+    const colored = SLOTS.some((s) => { const st = parseStyle(tokens[s]); return st.fill || st.gradient || st.rainbow; });
+    const shade = (value) => 'color-mix(in srgb, var(--fg) ' + Math.round(value * 100) + '%, transparent)';
+    const shadeAt = (i) => shade(UNCOLORED_SHADES[Math.min(i, UNCOLORED_SHADES.length - 1)]);
+    return {
+      fillAt(i) {
+        return colored ? fillOf(parseStyle(tokens[SLOTS[Math.min(i, SLOTS.length - 1)]]), base) : shadeAt(i);
+      },
+      othersFill() {
+        return colored ? fillOf(parseStyle(tokens['language-others']), base) : shade(UNCOLORED_OTHERS_SHADE);
+      },
+      nameAttrAt(i) {
+        return colored ? ' class="t-' + SLOTS[Math.min(i, SLOTS.length - 1)] + '"' : ' style="color:' + shadeAt(i) + '"';
+      },
+      othersNameAttr() {
+        return colored ? ' class="t-language-others"' : ' style="color:' + shade(UNCOLORED_OTHERS_SHADE) + '"';
+      }
+    };
+  }
+
+  function thirdKeyOf(doc) {
+    return doc.scope && doc.scope.counting === 'region' ? 'blanks' : 'extra';
+  }
+
+  function thirdLabelOf(doc) {
+    return thirdKeyOf(doc) === 'blanks' ? 'Blanks' : 'Extra';
+  }
+
+  function statsOf(s, third) {
+    return { files: s.files || 0, lines: s.lines || 0, code: s.code || 0, comments: s.comments || 0, third: s[third] || 0, bytes: s.bytes || 0 };
+  }
+
+  function subtract(a, b) {
+    return { files: a.files, lines: a.lines - b.lines, code: a.code - b.code, comments: a.comments - b.comments, third: a.third - b.third, bytes: a.bytes - b.bytes };
+  }
+
+  function productionOf(stats, tests, third) {
+    const production = subtract(stats, statsOf(tests, third));
+    production.files = Math.max(0, stats.files - (tests.whole_files || 0));
+    return production;
+  }
+
+  function sumOf(list) {
+    return list.reduce((acc, s) => ({ files: acc.files + s.files, lines: acc.lines + s.lines, code: acc.code + s.code, comments: acc.comments + s.comments, third: acc.third + s.third, bytes: acc.bytes + s.bytes }), { files: 0, lines: 0, code: 0, comments: 0, third: 0, bytes: 0 });
+  }
+
+  function comparatorOf(key) {
+    if (key === 'name') return (a, b) => a.name.localeCompare(b.name);
+    return (a, b) => (b.stats[key] - a.stats[key]) || a.name.localeCompare(b.name);
+  }
+
+  function keywordsOf(entry) {
+    return Object.entries(entry.keywords || {}).filter(([, count]) => count > 0);
+  }
+
+  function hasTests(entry) {
+    return !!(entry.tests && (entry.tests.lines > 0 || entry.tests.files > 0));
+  }
+
+  function percentOf(part, whole) {
+    return whole ? part / whole * 100 : 0;
+  }
+
+  function languageCountOf(doc) {
+    return doc.languages.length + (doc.languages_hidden || 0);
+  }
+
+  function buildRows(doc) {
+    const third = thirdKeyOf(doc);
+    const total = statsOf(doc.total, third);
+    const rows = [];
+    const grouped = state.grouping === 'modules' && Array.isArray(doc.modules);
+    const compare = comparatorOf(state.sort);
+    if (grouped) {
+      const modules = doc.modules.map((m) => ({ name: m.name == null ? '(unnamed)' : m.name, stats: statsOf(m.total, third), module: m }));
+      for (const m of modules) {
+        const id = 'm:' + m.name;
+        const collapsed = state.collapsed.has(id);
+        rows.push({ kind: 'module', id, name: m.name, stats: m.stats, parent: total, depth: 0, collapsible: m.module.languages.length > 0, collapsed });
+        if (!collapsed) pushLanguages(rows, m.module.languages, m.stats, 1, id, m.module.languages_hidden, third, compare);
+        rows.push({ kind: 'gap' });
+      }
+    } else {
+      pushLanguages(rows, doc.languages, total, 0, '', doc.languages_hidden, third, compare);
+    }
+    rows.push({ kind: 'total', name: 'Total', stats: total, parent: total, depth: 0 });
+    if (state.tests && hasTests(doc.total)) {
+      rows.push({ kind: 'total-tests', name: 'tests', stats: statsOf(doc.total.tests, third), parent: total, depth: 0, branch: '└─', branchIndent: true });
+    }
+    return rows;
+  }
+
+  function pushLanguages(rows, languages, parent, depth, prefix, hidden, third, compare) {
+    const entries = languages.map((l) => ({ name: l.name, stats: statsOf(l, third), language: l })).sort(compare);
+    for (const e of entries) {
+      const l = e.language;
+      const id = prefix + '/l:' + l.name;
+      const nested = state.nested && Array.isArray(l.nested_languages) ? l.nested_languages.map((n) => ({ name: n.name, stats: statsOf(n, third) })).sort(compare) : [];
+      const children = [];
+      if (nested.length) {
+        const own = hasTests(l) ? productionOf(e.stats, l.tests, third) : e.stats;
+        const itself = subtract(own, sumOf(nested.map((n) => n.stats)));
+        if (itself.lines > 0) children.push({ kind: 'itself', name: l.name + ' itself', stats: itself, parent: e.stats });
+        for (const n of nested) children.push({ kind: 'nested', name: n.name, stats: n.stats, parent: e.stats });
+      }
+      if (state.tests && hasTests(l)) children.push({ kind: 'tests', name: 'tests', stats: statsOf(l.tests, third), parent: e.stats });
+      const collapsed = state.collapsed.has(id);
+      rows.push({ kind: 'language', id, name: l.name, stats: e.stats, parent, depth, collapsible: children.length > 0, collapsed, keywords: keywordsOf(l) });
+      if (!collapsed) {
+        children.forEach((c, i) => {
+          c.depth = depth;
+          c.branch = i === children.length - 1 ? '└─' : '├─';
+          c.branchIndent = true;
+          rows.push(c);
+        });
+      }
+    }
+    if (hidden > 0) rows.push({ kind: 'hidden', depth, count: hidden });
+  }
+
+  function renderRow(r) {
+    if (r.kind === 'gap') return '<tr class="gap"><td colspan="11"></td></tr>';
+    const indent = 'calc(.4rem + ' + (r.depth * 1.25) + 'em)';
+    if (r.kind === 'hidden') {
+      return '<tr><td colspan="11" style="padding-left:' + indent + '"><span class="chev"></span><span class="t-note">+' + plural(r.count, 'more language') + ' left out by --top</span></td></tr>';
+    }
+    const t = TOKENS_OF[r.kind];
+    const s = r.stats;
+    const p = r.parent;
+    const nothing = r.kind === 'module' && s.files === 0;
+    const size = nothing ? { value: '-', unit: '' } : formatSize(s.bytes);
+    const chevron = '<span class="chev">' + (r.collapsible ? (r.collapsed ? '▸' : '▾') : '') + '</span>';
+    const lead = r.branchIndent ? '<span class="chev"></span><span class="branch t-' + t.branch + '">' + r.branch + '</span>' : chevron;
+    let name = '<span class="t-' + t.name + '">' + esc(r.name) + '</span>';
+    if (r.keywords && r.keywords.length) {
+      name += '<span class="kw">' + r.keywords.map(([k, v]) => '<span class="k"><span class="t-keyword-label">' + esc(k) + ':</span> <span class="t-keyword-number">' + formatInt(v) + '</span></span>').join('') + '</span>';
+    }
+    const num = (value, token) => '<td class="num"><span class="t-' + token + '">' + (nothing ? '-' : formatInt(value)) + '</span></td>';
+    const pct = (value) => '<td class="pct"><span class="t-' + t.percent + '">' + (nothing ? '' : formatPercent(value)) + '</span></td>';
+    return '<tr class="' + r.kind + (r.collapsible ? ' collapsible' : '') + '"' + (r.id ? ' data-id="' + esc(r.id) + '"' : '') + '>' +
+      '<td class="name" style="padding-left:' + indent + '">' + lead + name + '</td>' +
+      num(s.files, t.files) + pct(percentOf(s.files, p.files)) +
+      num(s.lines, t.lines) + pct(percentOf(s.lines, p.lines)) +
+      num(s.code, t.code) + pct(percentOf(s.code, s.lines)) +
+      num(s.comments, t.comments) + pct(percentOf(s.comments, s.lines)) +
+      num(s.third, t.third) +
+      '<td class="num"><span class="t-' + t.size + '">' + size.value + '</span> <span class="t-' + t.unit + '">' + size.unit + '</span></td>' +
+      '</tr>';
+  }
+
+  function renderDetails(doc) {
+    const grouped = state.grouping === 'modules' && Array.isArray(doc.modules);
+    const count = grouped ? doc.modules.length : languageCountOf(doc);
+    const first = (grouped ? 'Module' : 'Language') + (count === 1 ? '' : ' (' + count + ')');
+    const mark = (key) => '<span class="mark t-sort-marker">' + (state.sort === key ? (key === 'name' ? '↑' : '↓') : '') + '</span>';
+    const th = (key, label, token) => '<th data-sort="' + key + '">' + mark(key) + '<span class="t-' + token + '">' + label + '</span></th>';
+    const pctHead = '<th class="pct"><span class="t-percent">%</span></th>';
+    const head = '<thead><tr>' +
+      '<th class="name" data-sort="name">' + mark('name') + '<span class="t-details-language-header">' + first + '</span></th>' +
+      th('files', 'Files', 'files-label') + pctHead + th('lines', 'Lines', 'lines-label') + pctHead +
+      th('code', 'Code', 'code-label') + pctHead + th('comments', 'Comments', 'comments-label') + pctHead +
+      th('third', thirdLabelOf(doc), 'extra-label') + th('bytes', 'Size', 'total-size-label') +
+      '</tr></thead>';
+    let striped = 0;
+    const body = buildRows(doc).map((r) => {
+      const html = renderRow(r);
+      if (r.kind === 'gap') return html;
+      striped++;
+      return striped % 2 === 0 ? html.replace('<tr class="', '<tr class="even ') : html;
+    }).join('');
+    $('details').innerHTML = head + '<tbody>' + body + '</tbody>';
+  }
+
+  function renderHeader(doc) {
+    const third = thirdKeyOf(doc);
+    const t = statsOf(doc.total, third);
+    const size = formatSize(t.bytes);
+    const targets = doc.scope.targets || [];
+    const named = targets.some((x) => x.module);
+    $('version').textContent = 'v' + doc.mezura_version;
+    $('when').textContent = formatDate(doc.generated_at);
+    $('targets').innerHTML = targets.map((x) => '<span>' + (named ? '<b class="t-details-module">' + esc(x.module == null ? '(unnamed)' : x.module) + '</b>' : '') + '<span class="path">' + esc(x.path) + '</span></span>').join('');
+    const b = (v) => '<b>' + v + '</b>';
+    const lines = t.files === 0 ? ['No relevant files were found.'] : [
+      b(formatInt(t.lines)) + ' lines in ' + plural(t.files, 'file') + ' of ' + plural(languageCountOf(doc), 'language') + ', ' + b(size.value + ' ' + size.unit) + '.',
+      b(formatInt(t.code)) + ' code, ' + b(formatInt(t.comments)) + ' comments, ' + b(formatInt(t.third)) + ' ' + thirdLabelOf(doc).toLowerCase() + '.'
+    ];
+    if (t.files > 0 && hasTests(doc.total)) {
+      const tests = statsOf(doc.total.tests, third);
+      lines.push('Tests are ' + b(formatInt(tests.lines)) + ' of the lines, ' + formatPercent(percentOf(tests.lines, t.lines)) + ', in ' + plural(tests.files, 'file') + '.');
+    }
+    $('lede').innerHTML = lines.map((l) => '<div>' + l + '</div>').join('');
+    const scan = doc.scan;
+    const parts = [plural(scan.files_found, 'file') + ' found', formatInt(scan.files_of_interest) + ' of interest', formatInt(scan.files_excluded) + ' excluded'];
+    if (doc.scope.exclude && doc.scope.exclude.length) parts.push('excluding ' + doc.scope.exclude.map(esc).join(', '));
+    $('scan').innerHTML = parts.join(', ') + '.';
+    document.title = 'mezura · ' + targets.map((x) => x.module || x.path).join(', ');
+  }
+
+  function renderOverview(doc) {
+    const tokens = tokensOf(state.theme);
+    const base = document.documentElement.dataset.base;
+    const slots = slotStyles(tokens, base);
+    const langs = doc.languages;
+    const keep = Math.min(OVERVIEW_LANGUAGES, langs.length);
+    const fold = languageCountOf(doc) > keep + 1 || (doc.languages_hidden || 0) > 0;
+    const shown = fold ? langs.slice(0, keep) : langs;
+    let html = '';
+    for (const [label, key] of [['Files', 'files'], ['Lines', 'lines'], ['Size', 'bytes']]) {
+      const whole = doc.total[key] || 0;
+      const parts = shown.map((l, i) => ({ name: l.name, pct: percentOf(l[key] || 0, whole), fill: slots.fillAt(i), attr: slots.nameAttrAt(i) }));
+      if (fold) {
+        const rest = whole - shown.reduce((sum, l) => sum + (l[key] || 0), 0);
+        parts.push({ name: 'others', pct: percentOf(rest, whole), fill: slots.othersFill(), attr: slots.othersNameAttr() });
+      }
+      html += '<span class="t-overview-label">' + label + '</span>' +
+        '<div class="bar">' + parts.map((p) => '<span style="flex:0 0 ' + p.pct.toFixed(3) + '%;background:' + p.fill + '" title="' + esc(p.name) + ' ' + formatPercent(p.pct) + '"></span>').join('') + '</div>' +
+        '<div class="legend">' + parts.map((p) => '<span><span class="pct t-overview-percent">' + formatPercent(p.pct) + '</span><span' + p.attr + '>' + esc(p.name) + '</span></span>').join('') + '</div>';
+    }
+    $('overview').innerHTML = html;
+  }
+
+  function notesOf(doc) {
+    const notes = [];
+    for (const p of doc.scope.test_presets || []) {
+      if (p.matched) notes.push('<code>@' + esc(p.name) + '</code> applied under <code>' + esc(p.directory) + '</code> (' + esc(p.trigger_file) + ').');
+      else notes.push('<code>@' + esc(p.name) + '</code>, named by <code>' + esc(p.trigger_file) + '</code> under <code>' + esc(p.directory) + '</code>, found no tests, so they count as production until <code>--tests</code> declares them.');
+    }
+    if (doc.languages_hidden > 0) notes.push(plural(doc.languages_hidden, 'more language') + ' left out of the list by <code>--top</code>.');
+    const scan = doc.scan;
+    if (scan.files_generated > 0) notes.push(plural(scan.files_generated, 'generated file') + ' left out.');
+    if (scan.files_minified > 0) notes.push(plural(scan.files_minified, 'minified file') + ' left out.');
+    if (scan.files_not_code > 0) notes.push(plural(scan.files_not_code, 'file') + ' holding no code left out.');
+    if (scan.files_faulty > 0) notes.push(plural(scan.files_faulty, 'file') + ' could not be read.');
+    if (scan.dirs_unreadable > 0) notes.push(plural(scan.dirs_unreadable, 'directory', 'directories') + ' could not be opened.');
+    return notes;
+  }
+
+  function renderExtras(doc) {
+    const warnings = doc.warnings || [];
+    const counts = warnings.some((w) => w.affects === 'counts');
+    $('warnings').innerHTML = '<summary><span class="' + (counts ? 't-warning' : '') + '">Warnings (' + warnings.length + ')</span></summary>' +
+      (warnings.length ? '<ul>' + warnings.map((w) => '<li><span class="' + (w.affects === 'counts' ? 't-warning' : '') + '">' + esc(w.message) + '</span> <code>' + esc(w.code) + '</code></li>').join('') + '</ul>' : '<div class="empty">Nothing put the numbers in doubt.</div>');
+    const notes = notesOf(doc);
+    $('notes').innerHTML = '<summary>Notes (' + notes.length + ')</summary>' +
+      (notes.length ? '<ul>' + notes.map((n) => '<li>' + n + '</li>').join('') + '</ul>' : '<div class="empty">Nothing to note.</div>');
+  }
+
+  function renderFooter(doc) {
+    $('footer').innerHTML = '<span class="t-footer"><a href="https://github.com/subamanis/mezura">mezura</a> v' + esc(doc.mezura_version) + ' by Petros Papatheodorou</span>';
+  }
+
+  function syncOptions(doc) {
+    const hasModules = Array.isArray(doc.modules);
+    for (const b of document.querySelectorAll('.menu button[data-v]')) {
+      b.classList.toggle('on', b.dataset.v === (hasModules ? state.grouping : 'flat'));
+      b.disabled = !hasModules;
+    }
+    const sync = (id, available) => { $(id).disabled = !available; $(id).parentElement.classList.toggle('off', !available); };
+    sync('opt-tests', hasTests(doc.total));
+    sync('opt-nested', doc.languages.some((l) => l.nested_languages && l.nested_languages.length) || (doc.modules || []).some((m) => m.languages.some((l) => l.nested_languages && l.nested_languages.length)));
+    sync('opt-keywords', Object.values(doc.total.keywords || {}).some((v) => v > 0));
+    $('sort').value = state.sort;
+    $('theme').value = state.theme;
+  }
+
+  function render() {
+    applyTheme();
+    renderHeader(DOC);
+    renderOverview(DOC);
+    renderDetails(DOC);
+    renderExtras(DOC);
+    renderFooter(DOC);
+    document.body.classList.toggle('no-pct', !state.percent);
+    document.body.classList.toggle('no-kw', !state.keywords);
+    document.body.classList.toggle('nothing-counted', (DOC.total.files || 0) === 0);
+    document.body.classList.toggle('no-card', !state.card);
+    document.body.classList.toggle('no-pill', !state.pill);
+    syncOptions(DOC);
+  }
+
+  function fillSelect(select, options, value) {
+    select.innerHTML = options.map(([v, label]) => '<option value="' + esc(v) + '">' + esc(label) + '</option>').join('');
+    select.value = value;
+  }
+
+  const themeStyle = document.createElement('style');
+  themeStyle.id = 'theme-css';
+  document.head.appendChild(themeStyle);
+
+  const params = new URLSearchParams(location.search);
+  if (params.has('theme') && THEMES[params.get('theme')]) state.theme = params.get('theme');
+  if (params.get('base') === 'light' || params.get('base') === 'dark') state.base = params.get('base');
+  state.sort = SORT_KEYS.some(([key]) => key === VIEW.sort) ? VIEW.sort : 'lines';
+  state.grouping = Array.isArray(DOC.modules) && params.get('grouping') !== 'flat' ? 'modules' : 'flat';
+
+  fillSelect($('theme'), THEME_ORDER.map((n) => [n, n]), state.theme);
+  fillSelect($('sort'), SORT_KEYS.map(([key, label]) => [key, key === 'third' ? thirdLabelOf(DOC).toLowerCase() : label]), state.sort);
+
+  $('theme').addEventListener('change', (e) => { state.theme = e.target.value; render(); });
+  $('base').addEventListener('click', () => {
+    const sibling = siblingOf(state.theme);
+    state.background = null;
+    if (sibling) state.theme = sibling;
+    else state.base = document.documentElement.dataset.base === 'dark' ? 'light' : 'dark';
+    render();
+  });
+  $('bg').addEventListener('input', (e) => { state.background = e.target.value; render(); });
+  $('bg-reset').addEventListener('click', () => { state.background = null; render(); });
+  document.querySelector('.menu').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-v]');
+    if (!b || b.disabled) return;
+    state.grouping = b.dataset.v;
+    render();
+  });
+  $('opt-tests').addEventListener('change', (e) => { state.tests = e.target.checked; render(); });
+  $('opt-nested').addEventListener('change', (e) => { state.nested = e.target.checked; render(); });
+  $('opt-keywords').addEventListener('change', (e) => { state.keywords = e.target.checked; render(); });
+  $('opt-percent').addEventListener('change', (e) => { state.percent = e.target.checked; render(); });
+  $('opt-card').addEventListener('change', (e) => { state.card = e.target.checked; render(); });
+  $('opt-pill').addEventListener('change', (e) => { state.pill = e.target.checked; render(); });
+  $('sort').addEventListener('change', (e) => { state.sort = e.target.value; render(); });
+  $('expand').addEventListener('click', () => { state.collapsed = new Set(); render(); });
+  $('collapse').addEventListener('click', () => {
+    state.collapsed = new Set();
+    if (state.grouping === 'modules' && DOC.modules) for (const m of DOC.modules) state.collapsed.add('m:' + (m.name == null ? '(unnamed)' : m.name));
+    else for (const l of DOC.languages) state.collapsed.add('/l:' + l.name);
+    render();
+  });
+  $('details').addEventListener('click', (e) => {
+    const th = e.target.closest('th[data-sort]');
+    if (th) { state.sort = th.dataset.sort; render(); return; }
+    const row = e.target.closest('tr.collapsible');
+    if (!row) return;
+    const id = row.dataset.id;
+    if (state.collapsed.has(id)) state.collapsed.delete(id); else state.collapsed.add(id);
+    render();
+  });
+  document.addEventListener('click', (e) => {
+    const options = $('options');
+    if (options.open && !options.contains(e.target)) options.open = false;
+  });
+
+  let beforePrint = null;
+  window.addEventListener('beforeprint', () => {
+    beforePrint = { theme: state.theme, base: state.base, background: state.background };
+    state.background = null;
+    const sibling = siblingOf(state.theme);
+    if (state.theme.endsWith('-light')) {}
+    else if (sibling) state.theme = sibling;
+    else if (!usesHex(tokensOf(state.theme))) state.base = 'light';
+    else document.body.classList.add('print-plain');
+    render();
+  });
+  window.addEventListener('afterprint', () => {
+    if (!beforePrint) return;
+    Object.assign(state, beforePrint);
+    beforePrint = null;
+    document.body.classList.remove('print-plain');
+    render();
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

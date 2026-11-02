@@ -11,8 +11,14 @@ Main changes:
   -> '--badge' draws an SVG badge of the count for a README: a pill of figures ('--badge',
       '--badge code tests languages') or a card with the languages bar ('--badge card'), with
       its own colors for a light and a dark page.
+  -> '--output html' writes the run as one HTML file, fonts and themes inside it, to open or to
+      send: the overview bars, the details per module or flat with rows that fold and sort, every
+      shipped theme to switch between with the run's own first, and the badge of the run.
 
 Bugfixes:
+  -> '--log' and '--compare' typed beside '--output json' or '--output html' now say they are
+      ignored, since a document run writes no log and shows no history; the log entry used to be
+      left unwritten without a word.
   -> The note that a test tool named in 'package.json', 'pyproject.toml', 'Gemfile' or
       'composer.json' found no tests now prints under '--output json' and '--output markdown'
       too, names the file that names the tool, and reaches the JSON 'warnings' (code
@@ -38,7 +44,7 @@ Bugfixes:
   -> Blank and comment lines between the closing brace of a test-marked 'if' arm and its 'else'
       stay in the test extent when code follows the 'else' arm on its closing line.
   -> Glob target patterns no longer match files inside dotted directories that the wildcards walked
-      into (unless '--search-in-dotted' is set), and never match inside '.git'.
+      into (unless '--search-in-dotted' is set). Nothing inside '.git' is ever matched.
 
 Change in commands:
   -> '--output markdown' now also renders '--layout matrix', the 'Overview' percentage table, and
@@ -46,9 +52,9 @@ Change in commands:
   -> '--help' beside '--output json' now prints the help of '--output'. The two together were
       refused before.
   -> '--save <name>' now writes target paths only when they were explicitly given (or already in a
-      configuration loaded with '--load' in the same run), and never into 'default', so saving
-      without a target path creates a reusable settings bundle instead of pinning to the current
-      working directory.
+      configuration loaded with '--load' in the same run), so saving without a target path
+      creates a reusable settings bundle that works in any directory. 'default' holds no target
+      paths.
   -> '--save default' now adds to the settings the default configuration holds, and removes the
       target paths an earlier version wrote there.
   -> '--load default' and '--save default' inside a project now keep the project's settings, and

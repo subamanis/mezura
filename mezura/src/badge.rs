@@ -82,6 +82,10 @@ pub struct BadgeSpec {
 }
 
 impl BadgeSpec {
+    pub fn of(shape: BadgeShape) -> BadgeSpec {
+        BadgeSpec { shape, figures: Vec::new() }
+    }
+
     // The words in any order, separated by spaces or commas. The shape is a word like the others.
     pub fn parse(words: &str) -> Result<BadgeSpec, String> {
         let mut shape = BadgeShape::Pill;
@@ -116,7 +120,7 @@ pub fn print_badge(result: &RunResult, config: &Configuration) {
     }
 }
 
-fn render_badge(result: &RunResult, config: &Configuration, spec: &BadgeSpec) -> String {
+pub fn render_badge(result: &RunResult, config: &Configuration, spec: &BadgeSpec) -> String {
     let figures = collect_figures(result, config, spec);
     match spec.shape {
         BadgeShape::Pill => render_pill(&figures),
@@ -125,7 +129,7 @@ fn render_badge(result: &RunResult, config: &Configuration, spec: &BadgeSpec) ->
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BadgeShape {
+pub enum BadgeShape {
     Pill,
     Card
 }
@@ -395,10 +399,8 @@ fn shorten_name(name: &str) -> String {
 fn format_short_number(value: usize) -> String {
     match value {
         0..=999 => value.to_string(),
-        1_000..=9_999 => format_with_decimal_separator(format_with_one_decimal(value as f64 / 1_000.0)) + "k",
-        10_000..=999_499 => format!("{}k", (value as f64 / 1_000.0).round() as usize),
-        999_500..=9_999_999 => format_with_decimal_separator(format_with_one_decimal(value as f64 / 1_000_000.0)) + "M",
-        _ => format!("{}M", (value as f64 / 1_000_000.0).round() as usize)
+        1_000..=999_949 => format_with_decimal_separator(format_with_one_decimal(value as f64 / 1_000.0)) + "k",
+        _ => format_with_decimal_separator(format_with_one_decimal(value as f64 / 1_000_000.0)) + "M"
     }
 }
 
@@ -450,9 +452,9 @@ mod tests {
     }
 
     #[test]
-    fn a_short_number_keeps_three_digits_at_most() {
-        assert_eq!(["0", "999", "1k", "1.5k", "9.9k", "10k", "123k", "999k", "1M", "1M", "1.2M", "12M"],
-                [0, 999, 1000, 1549, 9949, 10_000, 123_456, 999_499, 999_500, 1_000_000, 1_250_000, 12_000_000]
+    fn a_short_number_keeps_one_decimal_and_never_a_trailing_zero() {
+        assert_eq!(["0", "999", "1k", "1.5k", "9.9k", "10k", "123.5k", "999.5k", "999.9k", "1M", "1M", "1.2M", "12M"],
+                [0, 999, 1000, 1549, 9949, 10_000, 123_456, 999_499, 999_949, 999_950, 1_000_000, 1_250_000, 12_000_000]
                         .map(format_short_number));
     }
 

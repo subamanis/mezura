@@ -467,6 +467,10 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
     outcome
 }
 
+pub(crate) fn get_shipped_theme_files() -> Vec<(String, &'static [u8])> {
+    include_dir!("data/themes").files.iter().map(|file| build_relative_path(THEMES_DIR_NAME, file)).collect()
+}
+
 // A file the manifest never recorded is one this version brings and not one that was lost. The
 // default configuration is outside the manifest, so for it the question is only whether this
 // installation existed before, and a theme asks the same where the record is older than themes.
@@ -827,10 +831,6 @@ fn get_written_once_files() -> Vec<String> {
     get_shipped_theme_files().into_iter().map(|(relative, _)| relative)
             .chain([format!("{CONFIG_DIR_NAME}/{DEFAULT_CONFIG_NAME}")])
             .collect()
-}
-
-fn get_shipped_theme_files() -> Vec<(String, &'static [u8])> {
-    include_dir!("data/themes").files.iter().map(|file| build_relative_path(THEMES_DIR_NAME, file)).collect()
 }
 
 fn get_shipped_files() -> Vec<(String, &'static [u8])> {

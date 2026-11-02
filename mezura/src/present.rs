@@ -354,6 +354,7 @@ fn print_comparison_or_empty_document(result: &RunResult, comparison: Option<&su
 fn print_document(result: &RunResult, datetime_now: &chrono::DateTime<chrono::Local>, config: &Configuration) {
     match config.view.output {
         OutputFormat::Json => super::json_printer::print_as_json(result, datetime_now, config),
+        OutputFormat::Html => super::html_printer::print_as_html(result, datetime_now, config),
         OutputFormat::Svg => super::badge::print_badge(result, config),
         OutputFormat::Text | OutputFormat::Markdown => ()
     }

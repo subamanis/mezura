@@ -259,12 +259,11 @@ macro_rules! theme_tokens {
                 theme
             }
 
-            #[cfg(test)]
-            pub fn find_all_tokens(&self) -> Vec<(&'static str, String)> {
+            pub fn collect_all_tokens(&self) -> Vec<(&'static str, String)> {
                 vec![$(($name, self.$field.to_config_string())),+]
             }
 
-            pub fn find_non_default_tokens(&self) -> Vec<(&'static str, String)> {
+            pub fn collect_non_default_tokens(&self) -> Vec<(&'static str, String)> {
                 let defaults = Theme::default();
                 let mut entries = Vec::new();
                 $(if self.$field != defaults.$field {
@@ -866,11 +865,11 @@ mod tests {
     #[test]
     fn only_modified_tokens_are_reported_as_non_default() {
         let mut theme = Theme::default();
-        assert!(theme.find_non_default_tokens().is_empty());
+        assert!(theme.collect_non_default_tokens().is_empty());
 
         theme.set_token("code-number", "bright-black").unwrap();
         theme.set_token("percent", "italic").unwrap();
-        let non_defaults = theme.find_non_default_tokens();
+        let non_defaults = theme.collect_non_default_tokens();
         assert_eq!(2, non_defaults.len());
         assert!(non_defaults.contains(&("code-number", "bright-black".to_owned())));
         assert!(non_defaults.contains(&("percent", "default italic".to_owned())));

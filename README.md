@@ -28,6 +28,7 @@ The whole Linux kernel, in five of the bundled themes:
   * [What is skipped](#what-is-skipped)
   * [Test code](#test-code)
 * [Taking the result elsewhere](#taking-the-result-elsewhere)
+  * [HTML page](#html-page)
   * [Markdown output](#markdown-output)
   * [JSON output](#json-output)
   * [A badge for the README](#a-badge-for-the-readme)
@@ -80,7 +81,7 @@ Things it does that most counters do not:
 - **Very customizable output.** You have a lot of control about how mezura counts, and also about how 
   it presents the results to you. You don't like the layout? You find it very busy with many sections? You don't want the animations? You can change everything. See [Commands](#commands).
 - **Themes.** Everything printed can be styled and colored: 98 tokens, 15 bundled themes, and an [interactive web editor](https://subamanis.github.io/mezura/theme-editor/) to experiment. See [Themes](#themes).
-- **Output for other places.** A markdown table with `--output markdown` for a pull request or a job summary, one JSON document with `--output json`, an SVG badge or card with `--badge` for a README, and an MCP server so a coding
+- **Output for other places.** An [HTML page](https://subamanis.github.io/mezura/report/) with `--output html` to send around, a markdown table with `--output markdown` for a pull request or a job summary, one JSON document with `--output json`, an SVG badge or card with `--badge` for a README, and an MCP server so a coding
   assistant can run mezura itself. See [Taking the result elsewhere](#taking-the-result-elsewhere).
 - **Data driven.** All the files, languages and the settings mezura uses are extracted to your machine, where they can be inspected, changed, or extended very easily. See [The data directory](#the-data-directory).  
   
@@ -172,7 +173,8 @@ HOW THE REPORT LOOKS
 
 TAKING THE RESULT ELSEWHERE
 
-  --output             text for a person, markdown for a page, or one JSON document for another program
+  --output             text for a person, markdown for a pull request, one JSON document for a program, or one
+                       HTML file
   --badge              an SVG badge of the count, for a README
   --log                append this run to the log of the loaded configuration
 
@@ -198,7 +200,7 @@ THE SETTINGS OF A PROJECT
 
 TUNING AND DIAGNOSTICS
 
-  --explain            show one file line by line instead of printing a report
+  --explain            show one file line by line
   --threads            how many threads walk the directories and how many parse the files
   --show-faulty-files  name the files that could not be parsed, and what went wrong with each
   --show-skipped       name the files that were left out as minified, generated or not code
@@ -277,7 +279,7 @@ and `--by-file` decide what the rows are and in what order. They are all listed 
 
 ### The counting model
 
-By default, mezura asks what a line says, not which block it sits inside. A blank line inside a
+By default, mezura judges a line by what it holds. A blank line inside a
 block comment is not a comment, because it documents nothing. A line holding only `}` or `);` is
 neither code nor comment, because it carries no data and no instruction: those are tokens the
 language demands, placed wherever your style puts them, and whether the brace goes on its own line
@@ -300,7 +302,7 @@ and `--no-ignore-files`). Directories whose name starts with a dot are skipped u
 
 Three checks on a file's head can also set it aside, each reported above the table with its own
 count: minified (an average line of 1000 bytes or more), generated (a marker like `do not edit` or
-`@generated` in the first 512 bytes), and not code at all (give-away text listed per extension in
+`@generated` in the first 512 bytes), and non-code files (give-away text listed per extension in
 `language_conflicts.txt`, the way a `.d` dependency file is not the D language and a ProGuard
 `.pro` is not Prolog). Each check has its own flag that turns it off: `--count-minified`,
 `--count-generated`, `--count-not-code`. The not-code check is also off under `--no-heuristics`.
@@ -308,8 +310,8 @@ count: minified (an average line of 1000 bytes or more), generated (a marker lik
 The reasoning behind the tests is in [Accuracy and limitations](#accuracy-and-limitations).
 
 A path you write out yourself is always counted, even if it is ignored, dotted, a link, minified,
-generated or not code. The matches of a glob pattern were found by mezura rather than named by
-you, so those are skipped like any other found path.
+generated or not code. The matches of a glob pattern are paths mezura found, so those are skipped
+like any other found path.
 
 ### Test code
 
@@ -370,7 +372,7 @@ mezura ./src --diff origin/main --output markdown >> $GITHUB_STEP_SUMMARY
 
 The modules, the languages under them and the changed files under those are all rows of the one table, at the depth the printed report draws them at.
 
-It is the report and not a document of its own, so `--hide`, `--sort` and `--top` cut and order it exactly as they do the printed one, `--by-file` hangs the files under each language, `--layout matrix` crosses languages with modules, and `--compare` adds the `History` section as a list. The other `--layout` values draw the same markdown table, and the colours and the overview bar are left out as terminal drawings.
+It is the report itself, so `--hide`, `--sort` and `--top` cut and order it exactly as they do the printed one, `--by-file` hangs the files under each language, `--layout matrix` crosses languages with modules, and `--compare` adds the `History` section as a list. The other `--layout` values draw the same markdown table, and the colours and the overview bar are left out as terminal drawings.
 
 A warning that puts the numbers in doubt, an unreadable language file among them, is written under the table as well as to the error output, since whoever reads the page is the one deciding on those numbers. So is the note that a test tool the project names found no tests. The ones that only report an ignored setting stay on the error output, where the build log keeps them.
 
@@ -378,12 +380,12 @@ Counting a git revision needs the full history, so a workflow doing the above wa
 
 ### JSON output
 
-`--output json` writes a single JSON document instead of the printed report, so that a build step, or another program can read a run easier. Everything that is not the document itself,
+`--output json` replaces the printed report with a single JSON document, so that a build step or another program can read a run easier. Everything that is not the document itself,
 warnings included, goes to the error output, so `mezura ./src --output json > stats.json` leaves a file
 that a parser accepts. The same holds for `--explain --output json`, where the document answers for
 one file with one verdict per line. The document is written even when there was nothing to count, and even when
 every file failed to parse: a consumer never has to tell "no output" apart from "no code found", and
-a run that failed says so in the document instead of leaving an empty file.
+a run that failed still writes a document, with the failure in it.
 
 ```bash
 mezura ./src --output json | jq '.total.code'
@@ -423,11 +425,29 @@ because zero is an answer. 1 means the run failed: a mistake in what was asked f
 not exist, a set of files where every one of them failed to be parsed, or a scan that found nothing
 after failing to open a directory, since that zero is not a count of anything. The failing cases
 still write the whole JSON document, faulty files and unreadable directories included, so the
-failure can be read and not only detected.
+failure can be read in full.
+
+### HTML page
+
+`--output html` writes the run as one HTML file that opens anywhere, fonts and themes inside it. 
+Contains every shipped theme and every user-defined theme, and more presentation options.
+
+```bash
+mezura ./src --output html > report.html
+```
+
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/html.png" width="900">
+
+[The page of mezura itself](https://subamanis.github.io/mezura/report/) is written at every release.
+
+The page carries the document of `--output json` for the same command line. `--sort`, `--top` and
+the five `--hide` names the document obeys (`keywords`, `nested-languages`, `tests`, `modules`,
+`timing`) cut it as they cut the document. The other `--hide` names leave the page as it is.
+`--diff` and `--explain` are refused with `--output html`.
 
 ### A badge for the README
 
-`--badge` writes an SVG and nothing else to the output. Without a word it is a pill with the lines
+`--badge` writes only an SVG to the output. Without a word it is a pill with the lines
 of code, `mezura` on the left. The cells are the words typed, in their order, out of `lines`,
 `code`, `comments`, `tests`, `files` and `languages`. `card` draws the box GitHub draws for a
 repository's languages, with a bar, the biggest languages and the figures.
@@ -465,7 +485,7 @@ Then add it to whichever file your editor keeps its servers in:
 }
 ```
 
-It runs the `mezura` binary rather than counting anything itself, so mezura has to be installed too.
+It runs the `mezura` binary to count, so mezura has to be installed too.
 It looks for it next to itself first, then on the path. If it lives somewhere else, name it:
 
 ```json
@@ -486,7 +506,7 @@ be asked about without the whole of it coming back.
 Every
 call starts mezura afresh, so nothing of one answer can leak into the next, and a project's own
 `.mezura` settings apply exactly as they do on the command line. An answer too long to be read at
-once is refused with what to ask instead, rather than handed over in full or cut in half.
+once is refused, together with a narrower question to ask.
 
 ### As a library
 
@@ -516,7 +536,7 @@ counting model, and so on, so you can see if at some point the configuration got
 
 A run that names its targets records its modules in the entry, and the history section then carries
 one narrow line per module: which of them grew, and by how much. A module that was not there last
-time, or that is not there any more, is named as such instead of being compared against nothing. An
+time, or that is not there any more, is named as such. An
 entry written by a run that named none has no such block.
 
 By using the `--compare <N>` flag, the (N) previous logged executions will be retrieved from the
@@ -552,8 +572,7 @@ local path at a revision (`<path>@<revision>`), or a remote repository URL (opti
 A language only one side has is marked `new` or `gone`, and a figure that did not move is a dash.
 
 Add `--by-file` and the files that changed get rows of their own under each language, marked `new`
-and `gone` the same way; a number keeps the biggest movers of each language instead of the biggest
-files.
+and `gone` the same way; a number keeps the biggest movers of each language.
 
 With `--output json` the comparison is a document of its own, every count carrying `from`, `to` and
 `change`.
@@ -572,7 +591,7 @@ Configurations can be created automatically by specifying all the flags once, al
 command `--save`, and a name for the configuration. Then the program, along with its normal
 execution, will automatically create a config file with the name you specified, and dump all the
 flags in there. Target paths are saved only when you specify them on the command line (or they
-were already in a configuration `--load` brought in on the same run), and never in `default`, so
+were already in a configuration `--load` brought in on the same run), and `default` holds none, so
 saving without a target path creates a settings bundle you can load in any directory; saving with
 explicit target paths (`mezura ./ --save <config_name>`) remembers those paths too:
 `mezura --load <config_name>`
@@ -600,9 +619,9 @@ your-project/
 
 `config.txt` is the same format a saved configuration has, and `log.jsonl` the same format a log has. Write the folder with ```mezura <flags> --save-local```, or by hand.
 
-**It is found without being asked for.** A run looks for the folder in the directory holding its targets and then in each directory above it, taking the nearest one, so it applies from anywhere inside the project and a project nested in another one shadows it. A run using one says so, naming the file it read. Ignore it for one run with ```--no-local```. A run naming a configuration other than "default" with ```--load``` or ```--save``` leaves it out, unless ```--save-local``` writes it.
+**It is found without being asked for.** A run looks for the folder in the directory holding its targets and then in each directory above it, taking the nearest one, so it applies from anywhere inside the project and a project nested in another one shadows it. A run using one names the file it read. Ignore it for one run with ```--no-local```. A run naming a configuration other than "default" with ```--load``` or ```--save``` leaves it out, unless ```--save-local``` writes it.
 
-**It is safe to commit.** Its targets are written relative to the folder, so it names the same places on somebody else's disk. And anything it does not set falls back to mezura's own defaults instead of each person's `default.txt`, for everything that decides a number, so two people get one answer. The theme, the layout and the separators still come from the personal config, since there the point is that everyone has their own.
+**It is safe to commit.** Its targets are written relative to the folder, so it names the same places on somebody else's disk. For everything that decides a number, anything it does not set falls back to mezura's own defaults, which are the same for everybody, so two people get one answer. The theme, the layout and the separators still come from the personal config, since there the point is that everyone has their own.
 
 
 The priorities of the specified flags are:
@@ -632,7 +651,7 @@ your own, add themes, or edit the default configuration.
 Set `MEZURA_DATA_DIR` and that folder is used instead, created and filled on the first run there
 exactly as the usual one was. It is what you need when two versions of mezura have to run on the
 same machine without treading on each other, since each one rewrites the shared folder into the
-shape it expects. A run using it says so, every time, because a variable set once and forgotten
+shape it expects. A run using it prints a line about it every time, because a variable set once and forgotten
 hides every configuration and theme you saved.
 
 Installing a new version updates the language files there, so a correction to a language reaches
@@ -641,8 +660,7 @@ language file that has fallen behind counts wrongly, but your copy is kept under
 `data/replaced/<version>/<date and time>/` and the program names it, so you can carry your changes
 over. Each update or `--restore` writes its own folder there, so two of them never mix and the
 newest is the one at the bottom. A language file or a theme of your own is never touched, and
-neither is your default configuration, which is written when it is absent and never rewritten
-afterwards. A shipped theme you edited, other than `Mezura.txt`, stays yours through every update,
+neither is your default configuration, which is written only when it is absent. A shipped theme you edited, other than `Mezura.txt`, stays yours through every update,
 also when a version stops shipping it, and only `--restore` puts it back to what ships, with your
 copy saved under `replaced`. A version that brings new styles adds them to your edited copy, with
 every style you set kept and your file as it stood saved under `replaced`. `Mezura.txt` is the
@@ -656,7 +674,7 @@ an edited one is merged, with your lines kept and your file as it stood saved un
 
 Everything the program prints can be styled: 98 tokens, each taking a text color, a background color, and any of bold, italic, underline, dim and reverse. Colors are hex values or one of the 16 standard terminal color names, which follow the color scheme of your terminal. You can set just the background and leave the text to the terminal, or the other way round. The live progress bar can also take a gradient between two colors, or a rainbow. Run ```--help --style``` for the full list of tokens.
 
-A **theme** is a plain .txt file of ```token = value``` lines, in the "themes" folder of your [data directory](#the-data-directory). It carries only how the output looks, never what is measured, so it can be shared as it is. Apply one with ```--theme <name>```, list the ones you have with ```--show-themes```, and write the current look into a new one with ```--save-theme <name>```.
+A **theme** is a plain .txt file of ```token = value``` lines, in the "themes" folder of your [data directory](#the-data-directory). It holds only how the output looks, so it can be shared as it is. Apply one with ```--theme <name>```, list the ones you have with ```--show-themes```, and write the current look into a new one with ```--save-theme <name>```.
 
 15 themes are bundled. **Mezura** is the default look, and it paints its text in the colors of your terminal's own scheme, so it reads well on any terminal, light or dark. The others are prettier and made for one kind of terminal: Catppuccin, Dracula, Forest, Gruvbox, Meadow and Ocean for a dark background, each with a ```-light``` version for a light one, and **Mezura-classic**, the look of earlier versions, for a dark one. **Uncolored** has no color at all and keeps the report readable with nothing but bold, italic and dim. See them all with ```--show-themes``` or in the [theme editor](https://subamanis.github.io/mezura/theme-editor/), and pick the one that suits your terminal. Edit any of them but Mezura, which follows the default look, or add your own by dropping a file there.
 
@@ -677,11 +695,11 @@ To make authoring one easier, there is an interactive editor: one run of mezura 
 
 ## Supported languages
 
-Mezura ships with over eighty languages, which realistically will contain any real language you will ever use. Still, this number is considerably smaller than the 200+ languages supported by some other counters, and most of the difference is what gets called a language: their lists carry JSON, XML, SVG, Markdown and plain text, which are not code, and a report that counts those is answering a different question than the one you asked. The rest of the difference is that an extension is only worth claiming when the files carrying it really are that language, which has a separate answer for each extension rather than one answer per language: on GitHub, 91 of every hundred `.pl` files are Perl, and 1 of every hundred `.pro` files is actually Prolog. A language you are missing is easy to add yourself (see below), and if you think an important one is missing for everyone, open an issue or a PR.
+Mezura ships with over eighty languages, which realistically will contain any real language you will ever use. Still, this number is considerably smaller than the 200+ languages supported by some other counters, and most of the difference is what gets called a language: their lists carry JSON, XML, SVG, Markdown and plain text, which are not code, and a report that counts those is answering a different question than the one you asked. The rest of the difference is that an extension is only worth claiming when the files carrying it really are that language, which has a separate answer for each extension: on GitHub, 91 of every hundred `.pl` files are Perl, and 1 of every hundred `.pro` files is actually Prolog. A language you are missing is easy to add yourself (see below), and if you think an important one is missing for everyone, open an issue or a PR.
 
 All the supported languages can be found in [the data directory](#the-data-directory). Every language is a text file that can be inspected and even modified, and **you can easily expand the collection of languages** with your own definitions, by adding more text in files there. ```--show-languages``` prints them all with the extensions each one claims, and puts a star on an extension that another language holds.
 
-If two or more language files claim the same extension, each file of it is identified by its own content: a `#!` line first, then the evidence the language files declare, so a `.m` opening with `@interface` counts as Objective-C, one opening with `function` counts as MATLAB, and one opening with `:- module` counts as Mercury. A file whose content says nothing falls back to the winner named in the `language_conflicts.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is a tie-break and not a decision. ```--force-language``` overrides all of it for a single run, or through a configuration file for a single project. It can also answer differently per module in the same run, so ```mezura ios=./ios analysis=./matlab --force-language ios/m=objective-c,analysis/m=matlab``` counts one repository's ```.m``` files as Objective-C in one folder and as MATLAB in the other.
+If two or more language files claim the same extension, each file of it is identified by its own content: a `#!` line first, then the evidence the language files declare, so a `.m` opening with `@interface` counts as Objective-C, one opening with `function` counts as MATLAB, and one opening with `:- module` counts as Mercury. A file whose content says nothing falls back to the winner named in the `language_conflicts.txt` file of the data dir, which ships with an answer for every contest between the languages that come with the program. An extension that nobody has named there goes to the language that comes first alphabetically, and the program reports it, since that is only a tie-break. ```--force-language``` overrides all of it for a single run, or through a configuration file for a single project. It can also answer differently per module in the same run, so ```mezura ios=./ios analysis=./matlab --force-language ios/m=objective-c,analysis/m=matlab``` counts one repository's ```.m``` files as Objective-C in one folder and as MATLAB in the other.
 
 A file with **no extension at all** is named by the same `#!` line, so a script called `configure` is counted as the language that line names, and a whole file name a language claims, like `Makefile`, is answered before either. ```--no-shebang``` turns that first line off everywhere, which is how a run is made comparable with a counter that only knows extensions: files with no extension go uncounted and are never opened, and a contested extension is settled without it.
 
@@ -707,7 +725,7 @@ Additionally:
 
 - A comment that ends and another that begins on the same line (```]]--[[``` in Lua, ```--><!--``` in HTML) are read as two comments.
 
-- Strings are read with the same care. A quote left open by mistake costs its own line instead of everything below it, a Python docstring or a JavaScript backtick still runs for as many lines as it likes, and the raw forms that end with a different symbol than they started with, like Rust's ```r#"..."#``` or C#'s ```@"..."```, end where the language says they do even when they finish with a backslash.
+- Strings are read with the same care. A quote left open by mistake costs only its own line, a Python docstring or a JavaScript backtick still runs for as many lines as it likes, and the raw forms that end with a different symbol than they started with, like Rust's ```r#"..."#``` or C#'s ```@"..."```, end where the language says they do even when they finish with a backslash.
 
 All of this is measured against the [LineJudge](https://loc-conformance.github.io/linejudge/) conformance suite, once per counting model:
 
@@ -733,7 +751,7 @@ With that said, it is important to mention the following limitations:
 
 - On Linux and macOS a file is read without asking its size first, and the first read that comes back short is taken as its end. A read that fails partway through, on a failing disk or a network mount that answers short, hands back what it managed and reports the error only on the next call, which is never made: such a file is counted with the part that was read and does not appear among the faulty files. Asking would cost one system call per file, and that was decided against. On Windows the size comes with the directory listing and the whole file is read.
 
-- On Linux and macOS a file of 256 KB or more is mapped into memory, since mapping it costs less than copying it out of the page cache. If another program truncates that file in place during the few milliseconds mezura spends on it, the run dies with a bus error. If it writes into the file in place without truncating it, that file is counted from a mix of its old and new bytes. Both take a write into that same file, landing inside that window, on a file of that size. A save through a new file renamed over the old one, which is how editors and git write, never touches the mapped file. A file modified in the last five seconds is read the old way, so one being generated at that moment is never mapped. ripgrep's memory maps carry the same exposure, and its help says so.
+- On Linux and macOS a file of 256 KB or more is mapped into memory, since mapping it costs less than copying it out of the page cache. If another program truncates that file in place during the few milliseconds mezura spends on it, the run dies with a bus error. If it writes into the file in place without truncating it, that file is counted from a mix of its old and new bytes. Both take a write into that same file, landing inside that window, on a file of that size. A save through a new file renamed over the old one (the way editors and git write) leaves the mapped file untouched. A file modified in the last five seconds is read the old way, so one being generated at that moment is never mapped. ripgrep's memory maps have the same exposure, and its help documents it.
 
 
 ## How it compares
@@ -778,7 +796,7 @@ methodology and the recorded numbers of each run for equal work and program defa
 `--threads <producers> <consumers>` sets how many threads walk the directories and how many parse
 the files. Without it both numbers are chosen from the machine, and the default asks for far more
 consumers than cores on purpose: a consumer spends most of its life waiting for a file to open, so
-the speed comes from how many reads are in flight, not from how many cores there are. Raising the
+the speed comes from how many reads are in flight. Raising the
 consumers is worth up to twice the speed on a slow disk, or on the first run after a reboot.
 
 To see what a run actually spent its time on, set the environment variable `MEZURA_PHASE_TIMING`
@@ -812,7 +830,7 @@ empty queue and heavy starvation mean the walk is the constraint.
 
 ### Windows and antivirus
 
-Opening a file is far more expensive on Windows than on Linux: every open walks the object manager, the security descriptor and the whole filter driver stack, which is where antivirus and other minifilters sit. Since mezura opens one file after another, this dominates: **on Windows the program is I/O bound, and most of its time is spent waiting on `File::open` rather than counting anything**. On Linux the same open is nearly free, and the run's cpu goes almost entirely into mezura's own work instead of the operating system's.
+Opening a file is far more expensive on Windows than on Linux: every open walks the object manager, the security descriptor and the whole filter driver stack, which is where antivirus and other minifilters sit. Since mezura opens one file after another, this dominates: **on Windows the program is I/O bound, and most of its time is spent waiting on `File::open`**. On Linux the same open is nearly free, and the run's cpu goes almost entirely into mezura's own work.
 
 The practical consequence is that the same repository on the same machine is measurably faster to analyze from Linux.
 
@@ -855,6 +873,10 @@ Licensed under either of
 - MIT license ([LICENSE-MIT](https://github.com/subamanis/mezura/blob/HEAD/LICENSE-MIT) or https://opensource.org/licenses/MIT)
 
 at your option.
+
+The HTML page embeds the Inter and JetBrains Mono fonts, which come under the SIL Open Font License
+([LICENSE-Inter.txt](https://github.com/subamanis/mezura/blob/HEAD/mezura/templates/fonts/LICENSE-Inter.txt),
+[LICENSE-JetBrainsMono.txt](https://github.com/subamanis/mezura/blob/HEAD/mezura/templates/fonts/LICENSE-JetBrainsMono.txt)).
 
 Any contribution intentionally submitted for inclusion in
 this work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any

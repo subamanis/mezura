@@ -21,6 +21,7 @@ mod config_manager;
 mod diff;
 mod explain;
 mod git;
+mod html_printer;
 mod json_printer;
 mod json_reader;
 mod log;
@@ -645,11 +646,11 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
 
 // The command that makes the output a document, when one was typed
 fn find_document_asked_for(args_str: &str) -> Option<&'static str> {
-    if crate::args::find_argument_of(args_str, OUTPUT).and_then(OutputFormat::parse) == Some(OutputFormat::Json) {
-        return Some("--output json");
+    match crate::args::find_argument_of(args_str, OUTPUT).and_then(OutputFormat::parse) {
+        Some(OutputFormat::Json) => Some("--output json"),
+        Some(OutputFormat::Html) => Some("--output html"),
+        _ => crate::args::find_command(args_str, BADGE).map(|_| "--badge")
     }
-
-    crate::args::find_command(args_str, BADGE).map(|_| "--badge")
 }
 
 #[cfg(test)]
@@ -658,9 +659,10 @@ mod tests {
     use crate::report_unknown_languages;
 
     #[test]
-    fn a_document_is_asked_for_by_output_json_or_by_badge() {
+    fn a_document_is_asked_for_by_output_json_or_html_or_by_badge() {
         assert_eq!(Some("--output json"), crate::find_document_asked_for("./src --output json"));
         assert_eq!(Some("--output json"), crate::find_document_asked_for("--output JSON --version"));
+        assert_eq!(Some("--output html"), crate::find_document_asked_for("./src --output html --version"));
         assert_eq!(Some("--badge"), crate::find_document_asked_for("./src --badge card --version"));
         assert_eq!(None, crate::find_document_asked_for("./src --output text --version"));
         assert_eq!(None, crate::find_document_asked_for("./src --version"));

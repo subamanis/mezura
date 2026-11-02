@@ -136,6 +136,9 @@ pub struct ViewConfig {
     pub config_name_to_save: Option<String>,
     pub config_name_to_load: Option<String>,
     pub counts_the_named_config: bool,
+    // The theme the run loaded, None for the stock look and for one that could not be loaded. The
+    // HTML page names it, since the resolved theme below carries values and no name.
+    pub theme_name: Option<String>,
     pub theme_name_to_save: Option<String>,
     pub test_patterns_from_presets: Vec<String>,
     // The project's own folder, when the run is inside one and was not told to ignore it. It
@@ -180,7 +183,8 @@ impl ViewConfig {
     }
 
     // The JSON document holds what the scan found and left out and which settings applied, so
-    // nothing is printed beside it. Every other output prints those on the error output.
+    // nothing is printed beside it. Every other output prints those on the error output, the HTML
+    // page too: it is read by a person, and its stderr cannot reach the file.
     pub fn document_carries_the_notes(&self) -> bool {
         self.output == OutputFormat::Json
     }
@@ -223,6 +227,7 @@ impl Default for ViewConfig {
             config_name_to_save: None,
             config_name_to_load: None,
             counts_the_named_config: true,
+            theme_name: None,
             theme_name_to_save: None,
             test_patterns_from_presets: Vec::new(),
             local_dir: None,
@@ -610,6 +615,7 @@ pub enum OutputFormat {
     Text,
     Json,
     Markdown,
+    Html,
     // Set by '--badge' and never by '--output', so that a badge is asked for in one way
     Svg
 }
@@ -620,12 +626,13 @@ impl OutputFormat {
             "text" => Some(Self::Text),
             "json" => Some(Self::Json),
             "markdown" | "md" => Some(Self::Markdown),
+            "html" => Some(Self::Html),
             _ => None
         }
     }
 
-    // Markdown answers this one like text and every other question like JSON. A badge is a
-    // document like JSON: written whole, even over nothing, with no report, history or log.
+    // Markdown answers this one like text and every other question like JSON. A badge and the HTML
+    // page are documents like JSON: written whole, even over nothing, with no report, history or log.
     pub fn prints_a_report(self) -> bool {
         matches!(self, Self::Text | Self::Markdown)
     }
@@ -768,6 +775,7 @@ pub enum ArgParsingError {
     GitTarget(String),
     MeaninglessWithExplain(String),
     MeaninglessWithBadge(String),
+    NoHtmlForm(String),
     BadgeAskedThroughOutput,
     ContradictoryCommands(String, String)
 }
@@ -831,6 +839,11 @@ impl Formatted for ArgParsingError {
             Self::GitTarget(message) => paint(&wrap_message(message)),
             Self::MeaninglessWithExplain(command) => paint(&wrap_message(&format!("'--{EXPLAIN}' explains one file line by line and '--{command}' belongs to a report over a whole scan, so the two cannot be asked for together."))),
             Self::MeaninglessWithBadge(command) => paint(&wrap_message(&format!("'--{BADGE}' draws one scan as a picture and '--{command}' asks for another output, so the two cannot be asked for together."))),
+            Self::NoHtmlForm(command) => {
+                let forms = if command == EXPLAIN {format!("'--{OUTPUT} text' or '--{OUTPUT} json'")}
+                        else {format!("'--{OUTPUT} text', '--{OUTPUT} markdown' or '--{OUTPUT} json'")};
+                paint(&wrap_message(&format!("'--{command}' has no html form. '--{OUTPUT} html' draws one run, so ask for {forms} beside '--{command}'.")))
+            },
             Self::BadgeAskedThroughOutput => paint(&wrap_message(&format!("A badge is asked for with '--{BADGE}', which also names what it shows: '--{BADGE}', '--{BADGE} code tests' or '--{BADGE} card'."))),
             Self::ContradictoryCommands(one, other) => paint(&wrap_message(&format!("'--{one}' and '--{other}' ask for opposite things, so they cannot be given together.")))
         }
@@ -1175,6 +1188,7 @@ impl ConfigurationBuilder {
                 config_name_to_save: self.config_name_to_save.clone(),
                 config_name_to_load: self.config_name_to_load.clone(),
                 counts_the_named_config: self.counts_the_named_config,
+                theme_name: self.theme_styles.as_ref().and(self.theme_name.clone()),
                 theme_name_to_save: self.theme_name_to_save.clone(),
                 test_patterns_from_presets: self.test_patterns_from_presets.clone(),
                 local_dir: self.local_dir.clone(),
@@ -1358,6 +1372,8 @@ fn create_config_builder_from_args_with_configs_in(line: &str, config_dir: &str)
         None
     };
     apply_the_badge_command(&mut config_builder)?;
+    refuse_the_html_output_where_it_has_no_form(&config_builder)?;
+    forget_what_a_document_never_writes(&mut config_builder);
 
     config_builder.original_typed_targets.clone_from(&config_builder.targets);
     let (seeded_from_diff, skip_working_dir_local) = if config_builder.targets.is_none() && !names_another_config {
@@ -2239,6 +2255,35 @@ fn targets_match_by(one: &[Target], other: &[Target], include_modules: bool) -> 
     };
 
     normalise(one) == normalise(other)
+}
+
+// The page draws one run. A comparison and an explanation are documents of other shapes, so asking
+// for either as html is refused here, where the command line is still its own.
+fn refuse_the_html_output_where_it_has_no_form(builder: &ConfigurationBuilder) -> Result<(), ArgParsingError> {
+    if builder.output != Some(OutputFormat::Html) {
+        return Ok(());
+    }
+    let typed_beside_it = [(DIFF, builder.diff_against.is_some()), (EXPLAIN, builder.explain.is_some())];
+    match typed_beside_it.iter().find(|(_, typed)| *typed) {
+        Some((command, _)) => Err(ArgParsingError::NoHtmlForm((*command).to_owned())),
+        None => Ok(())
+    }
+}
+
+// A document is written whole, with no history under it and no log entry after it, so the two
+// commands asking for those are dropped with a word, the way a badge run drops them
+fn forget_what_a_document_never_writes(builder: &mut ConfigurationBuilder) {
+    if !matches!(builder.output, Some(OutputFormat::Json | OutputFormat::Html)) {
+        return;
+    }
+    let dropped = [(LOG, builder.log.take().is_some()),
+            (COMPARE_LEVEL, builder.compare_level.take().is_some_and(|level| level > 0))];
+    for (command, _) in dropped.into_iter().filter(|(_, held)| *held) {
+        let why = if command == LOG {"a document run writes no log"} else {"a document shows no history"};
+        let message = format!("'--{command}' command will be ignored: {why}.");
+        eprintln!("\n{}", wrap_message(&message).yellow());
+        super::warning_collector::keep(ProgramWarning::new(ProgramCode::CommandIgnored, command, message));
+    }
 }
 
 // Decided while every field is still the command line's own, like the '--explain' check: a command
@@ -3732,6 +3777,27 @@ mod tests {
                 create_config_from_args("./ --badge tests --hide tests"));
         assert_eq!(Err(ArgParsingError::IncorrectCommandArgs(BADGE.to_owned(), "keywords".to_owned())),
                 create_config_from_args("./ --badge code keywords"));
+    }
+
+    // Without the refusal both would quietly write a JSON document into the file named .html
+    #[test]
+    fn the_html_output_refuses_a_comparison_and_an_explanation() {
+        assert_eq!(Err(ArgParsingError::NoHtmlForm(DIFF.to_owned())), create_config_from_args("./ --diff HEAD --output html"));
+        assert_eq!(Err(ArgParsingError::NoHtmlForm(EXPLAIN.to_owned())), create_config_from_args("./ --explain --output html"));
+    }
+
+    // A document run used to drop both without a word, so the log entry was silently never written
+    #[test]
+    fn what_a_document_never_writes_is_dropped_with_a_word() {
+        let config = create_config_from_args("./ --output html --log x --compare 3").unwrap();
+        assert!(!config.view.log.should_log);
+        let ignored = crate::warning_collector::get_collected_warnings().into_iter()
+                .filter(|x| x.code == crate::warning_collector::AnyCode::Program(ProgramCode::CommandIgnored)
+                        && x.message.contains("a document "))
+                .map(|x| x.subject).collect::<Vec<_>>();
+        for command in [LOG, COMPARE_LEVEL] {
+            assert!(ignored.contains(&command.to_owned()), "'--{command}' was dropped without a word: {ignored:?}");
+        }
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::test_presets::{PresetError, collect_user_preset_names, is_a_shipped_n
 
 static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
 pub(crate) const MESSAGE_WIDTH : usize = 110;
-// The help paints itself with these rather than through the theme, because it is printed before a
+// The help paints itself with these colors, because it is printed before a
 // theme is chosen: 'main' answers the message-only commands above the line that sets one, so
 // anything that does ask for a theme there is handed the default.
 const HELP_COMMAND : (u8, u8, u8) = (110, 160, 220);
@@ -42,9 +42,9 @@ pub const TARGETS_HELP  :  &str =
     folder or file that exists on disk with '@' in its name is taken as that path on disk.
 
     A path you write out is always counted, even if it is ignored, dotted, a link, minified,
-    generated or not code. The matches of a pattern were found by mezura rather than named by you,
-    so those are skipped like any other found path (see '--no-gitignore', '--search-in-dotted',
-    '--count-minified', '--count-generated' and '--count-not-code').
+    generated or not code. The matches of a pattern are paths mezura found, so those are skipped
+    like any other found path (see '--no-gitignore', '--search-in-dotted', '--count-minified',
+    '--count-generated' and '--count-not-code').
 
     In Windows Powershell the commas need a backtick, or the whole list needs quotation marks:
     <path1>`, <path2>`, <path3>   or   \"<path1>, <path2>, <path3>\"
@@ -65,8 +65,7 @@ pub const TARGETS_HELP  :  &str =
     Every file belongs to one module and the most specific path wins, so the second example means
     'the tests there, the rest of the project here' in either order. Files that were not claimed by
     a module explicitly become a row called '(unnamed)' and it comes last; the rest keep the order you wrote them in, which is
-    also the order of the columns in 'matrix'. '--sort' orders the languages inside a module and
-    never the modules.
+    also the order of the columns in 'matrix'. '--sort' orders the languages inside each module.
 
     Once anything is named a space ends a target, so a path holding spaces cannot be written
     beside modules: the shell takes the quotation marks away before mezura sees them. Put those
@@ -83,10 +82,10 @@ pub const EXCLUDE_HELP  :  &str =
     starting with './' or '../', or carrying a root or a drive, names one place and everything
     under it, read from the directory the command is typed in ('./target', 'D:/work/api/vendor').
     Any other pattern is a name, matched at any depth under the directory that holds the target,
-    so it sees the target's own name and never a folder above it ('node_modules', '*.min.js',
-    'src/generated'). Names are matched with their case. A trailing '/' means a folder only, so
-    'build/' does not match a script named 'build'; 'x/**' means the folder 'x', and '**' by itself
-    a whole target. Glob syntax is supported in both forms: * ? [..] {..}
+    starting from the target's own name ('node_modules', '*.min.js', 'src/generated'). Names are
+    matched with their case. A trailing '/' means a folder only, so 'build/' does not match a
+    script named 'build'; 'x/**' means the folder 'x', and '**' by itself a whole target. Glob
+    syntax is supported in both forms: * ? [..] {..}
 
     A '!' in front of a pattern is refused: a directory left out is never entered, so there is
     nothing to take back. A pattern that names nothing on disk is reported, and so is a name
@@ -114,10 +113,10 @@ pub const TESTS_HELP  :  &str =
     pattern starting with './' or '../', or carrying a root or a drive, names one place and
     everything under it, read from the directory the command is typed in ('./spec',
     'D:/work/api/tests'). Any other pattern is a name, matched at any depth under the directory
-    that holds the target, so it sees the target's own name and never a folder above it ('spec',
-    '*_test.py', 'src/test'). Names are matched with their case. A trailing '/' means a folder
-    only, so 'tests/' does not match a script named 'tests'; 'x/**' means the folder 'x', and '**'
-    by itself a whole target. Glob syntax is supported in both forms: * ? [..] {..}
+    that holds the target, starting from the target's own name ('spec', '*_test.py', 'src/test').
+    Names are matched with their case. A trailing '/' means a folder only, so 'tests/' does not
+    match a script named 'tests'; 'x/**' means the folder 'x', and '**' by itself a whole target.
+    Glob syntax is supported in both forms: * ? [..] {..}
 
     The last pattern that matches decides. '--tests spec,!spec/fixtures' declares 'spec' and
     takes its fixtures back, and '--tests !vendor/' keeps a vendored project's tests out even
@@ -200,7 +199,7 @@ pub const LANGUAGES_HELP  :  &str =
     the answer in 'language_conflicts.txt' or the one '--force-language' gave.
 
     Writing a module and a slash before the name holds it inside that module, and a module that
-    names any language of its own counts those and nothing else: '--languages rust,web/js' counts
+    names any language of its own counts only those: '--languages rust,web/js' counts
     Rust everywhere but inside 'web', where it counts JavaScript.
 
 ";
@@ -217,7 +216,7 @@ pub const EXCLUDE_LANGUAGES_HELP  :  &str =
     carries on.
 
     Writing a module and a slash before the name holds it inside that module, and a module that
-    names any language of its own leaves out those and nothing else: '--exclude-languages json,web/xml'
+    names any language of its own leaves out only those: '--exclude-languages json,web/xml'
     leaves out JSON everywhere but inside 'web', where it leaves out XML and counts the JSON.
 
 ";
@@ -251,9 +250,9 @@ pub const THREADS_HELP  :  &str =
     this command both numbers are chosen from the threads your machine has.
 
     The default asks for far more consumers than cores on purpose. A consumer spends most of its
-    life waiting for a file to open, so the speed comes from how many reads are in flight, not
-    from how many cores there are. Raising it costs nothing on a fast disk whose files are already
-    cached, and is worth up to twice the speed on a slow one, or on the first run after a reboot.
+    life waiting for a file to open, so the speed comes from how many reads are in flight. Raising
+    it costs nothing on a fast disk whose files are already cached, and is worth up to twice the
+    speed on a slow one, or on the first run after a reboot.
 
 ";
 pub const COUNTING_HELP  :  &str =
@@ -314,7 +313,7 @@ pub const COUNT_GENERATED_HELP  :  &str =
     No arguments in the cmd, but if specified in a configuration file use 'true' or 'yes' to enable,
     or 'no' to disable. Default: no
 
-    A file written by a tool says so in its head, and that is the whole of the test: 'do not edit',
+    A file written by a tool is marked in its head, and the test looks only for 'do not edit',
     'auto-generated', 'autogenerated' or '@generated' anywhere in the first 512 bytes. It catches
     protobuf output, register maps, ORM models and bindings, which nobody wrote and nobody reads.
 
@@ -333,7 +332,7 @@ pub const COUNT_NOT_CODE_HELP  :  &str =
 
     Some files wear a language's extension without holding any code: a make or cargo build fills
     with dependency files ending in '.d' that are not the D language, and every '.pro' of an Android
-    project is a ProGuard configuration and not Prolog. A file whose head has the give-away text
+    project is a ProGuard configuration. A file whose head has the give-away text
     listed per extension in 'language_conflicts.txt' is left out of the counts; this flag turns
     that check off. A file it would have set aside can still be left out by the minified or
     generated checks, each with its own flag. '--no-heuristics' also stops the reading that finds
@@ -379,7 +378,7 @@ pub const NO_SHEBANG_HELP  :  &str =
 ";
 pub const EXPLAIN_HELP  :  &str =
 "--explain
-    show one file line by line instead of printing a report
+    show one file line by line
 
     No arguments, one line number, or two with '..' between them, the way '--diff' separates two
     revisions. Either end can be left off. The target must be exactly one file.
@@ -389,10 +388,10 @@ pub const EXPLAIN_HELP  :  &str =
       mezura src/main.rs --explain 1210..
 
     Given lines, only those are printed and the rest of the file is still read, which is what makes
-    the answer right: a comment that opened above them decides every line in them, and each such
-    line says so. A last line past the end of the file is not a mistake. Two totals are printed
-    instead of one, for the lines shown and for the whole file, since the file's own is the number
-    you came to check.
+    the answer right: a comment that opened above them decides every line in them, and is shown on
+    each such line. A last line past the end of the file is not a mistake. Two totals are printed,
+    for the lines shown and for the whole file, since the file's own is the number you came to
+    check.
 
     Every line is shown with the bucket it lands in, 'code', 'comments' or 'extra', and the class
     that put it there, 'words_in_code' or 'punctuation_in_comment', which is the raw count both
@@ -404,7 +403,7 @@ pub const EXPLAIN_HELP  :  &str =
 
     A file whose extension two languages claim also says what identified it, the line and the
     evidence found there, and the JSON document carries the same under 'identified_by'. A file that
-    a directory scan would leave out as minified, generated or not code says so in a note, and in
+    a directory scan would leave out as minified, generated or not code gets a note, and an entry in
     the document under 'left_out_of_a_scan'; the named file itself is always counted. A line of
     test code is marked 'test code' and counted below the totals, and a file that is test code as a
     whole, or that a '!' pattern of '--tests' took back, names the rule that decided it: a build
@@ -506,7 +505,7 @@ pub const HIDE_HELP  :  &str =
                       leaves after code and comments. The 'list' layout does not print it at
                       all, so there it hides nothing
       blanks          the same column under '--counting region'. Each word belongs to one model,
-                      so naming the other one's hides nothing and says so
+                      so naming the other one's hides nothing and is reported
       size            the size column of the details rows, and the size that closes a 'list' row
       percentages     every percentage of the details rows, keeping the numbers they describe
       files-percentages  one of those four, leaving the other three. This one and the next are
@@ -516,14 +515,14 @@ pub const HIDE_HELP  :  &str =
                       prints this percentage and the next one, and no others
       comments-percentages  how much of them are comments
       change-percentages  the percentages of a '--diff', leaving the absolute move beside each
-                      figure. A file count moves in whole things and never had one
+                      figure. A file count moves in whole things and has no percentage
       overview        the whole percentages section
       bar             only the [|||] bar of the overview, keeping the percentages and the colors
       history         the comparison with previous runs (the same as '--compare 0')
       timing          the execution time line at the bottom
 
     The column names reach every layout except 'matrix', whose three rows stay whole. Hiding the
-    column '--sort' orders by falls back to sorting by lines, and says so.
+    column '--sort' orders by falls back to sorting by lines, and reports it.
 
     A '--diff' comparison obeys them too, taking each change away with its figure, and it has no
     'extra' column to hide.
@@ -595,9 +594,9 @@ pub const SORT_HELP  :  &str =
 
     One argument: 'lines', 'files', 'code', 'comments', 'extra', 'blanks', 'size' or 'name'.
     Default: lines
-    Every column of the details table is one of them, so there is no figure you can see and not
-    order by. The third column is 'extra' under '--counting content' and 'blanks' under
-    '--counting region', and naming the other model's word orders by lines and says so.
+    Every column of the details table is one of them, so the table can be ordered by any figure it
+    shows. The third column is 'extra' under '--counting content' and 'blanks' under
+    '--counting region', and naming the other model's word orders by lines with a warning.
 
     Orders the languages in the \"details\" section, which also decides which of them reach the
     \"overview\" section and which are folded into its 'others' entry.
@@ -675,7 +674,7 @@ pub const LAYOUT_HELP  :  &str =
                 modules compare on the same language. That one number is whatever '--sort'
                 is ordering by, named in a line above the table, and a dash is a language
                 the module does not have. With no module named there is nothing to cross,
-                so it says so and prints 'table' instead.
+                so it reports that and prints 'table'.
 
     The percentage beside 'Files' and 'Lines' is the language's share of the whole scan. The one
     beside 'Code' and 'Comments' is its share of that language's own lines. A percentage that comes
@@ -704,7 +703,7 @@ pub const RESTORE_HELP  :  &str =
     changes over, a fresh directory per run. A shipped theme you edited is put back too, with your
     copy saved the same way. A language file or a theme of your own is never touched, and neither is
     a theme you edited that is no longer shipped, or your default configuration, which is written
-    when absent and never rewritten.
+    only when it is absent.
 
     A 'language_conflicts.txt' you have not edited is brought whole to each new version. An edited
     one is merged: your contest lines are kept as they are, lines for extensions your copy never
@@ -715,9 +714,9 @@ pub const RESTORE_HELP  :  &str =
 ";
 pub const OUTPUT_HELP  :  &str =
 "--output
-    text for a person, markdown for a page, or one JSON document for another program
+    text for a person, markdown for a pull request, one JSON document for a program, or one HTML file
 
-    One argument: 'text', 'markdown' or 'json'. Default: text
+    One argument: 'text', 'markdown', 'json' or 'html'. Default: text
 
     'markdown' prints the report as markdown tables and lists, for a build step to put in a pull
     request or a job summary.
@@ -727,7 +726,7 @@ pub const OUTPUT_HELP  :  &str =
     It is still the report, so '--hide', '--sort', '--top', '--by-file', '--compare' and
     '--layout matrix' all apply. The other '--layout' values draw the same markdown table, and
     the colors and the overview bar are left out as terminal drawings. '--explain' has no
-    markdown form and says so.
+    markdown form, and the run reports it.
 
     A warning that puts the numbers in doubt goes under the table as well as to the error output,
     and so does the note that a test tool the project names found no tests. One about an ignored
@@ -756,6 +755,20 @@ pub const OUTPUT_HELP  :  &str =
     the project names found no tests, so they count as production until '--tests' declares them.
     The list is there even when empty, and a run that found nothing still writes a valid document
     with a total of zero.
+
+    'html' writes the run as one HTML file that opens anywhere, fonts and themes inside it. Open
+    it in a browser or send it as it is.
+
+      mezura ./src --output html > report.html
+
+    The page shows the overview bars, the details per module or flat, and the badge of the run.
+    Modules fold and flatten on the page, and rows sort by any column.
+
+    Every shipped theme is there to switch to, the run's own first. The page carries the document
+    of 'json' for the same command line.
+
+    '--sort', '--top' and the five '--hide' names above cut it as they cut the document. '--diff'
+    and '--explain' are refused with '--output html'.
 
     Cannot be saved in a configuration file.
 
@@ -801,7 +814,7 @@ pub const DIFF_HELP  :  &str =
     git repository URL ('https://...', 'ssh://...', 'git://...' or 'user@host:path', optionally
     ending in '@<revision>').
 
-    The comparison takes the place of the report rather than sitting under it.
+    The comparison takes the place of the report.
 
       mezura ./src --output json > baseline.json
       mezura ./src --diff baseline.json
@@ -840,11 +853,11 @@ pub const DIFF_HELP  :  &str =
     table.
 
     A document records the settings it was counted with, and this run takes them so both sides
-    cover the same tree: a baseline taken with '--exclude target' excludes it here too, and says
-    so. Type a setting yourself and yours wins, with a warning that the two were not taken alike.
+    cover the same tree: a baseline taken with '--exclude target' excludes it here too, and reports
+    it. Type a setting yourself and yours wins, with a warning that the two were not taken alike.
     The same warning covers two documents that disagree, or two counted by different versions.
     '--counting' never warns, since both sides are folded from the same record. '--no-gitignore'
-    cannot reach a revision, and mezura says so. A document written with '--top' is refused, since
+    cannot reach a revision, and mezura reports it. A document written with '--top' is refused, since
     the languages it left out would read as deleted.
 
     With '--output json' the comparison is a document of its own, the same vocabulary as a run's,
@@ -968,7 +981,7 @@ pub const STYLE_HELP  :  &str =
                                The fourth shows only when nothing was folded into 'others'. The
                                color and 'dim' reach the cells; bold and the rest apply to the name
       language-others          the folded 'others' entry, which falls back to 'language-4'
-                               where a theme names that one and not this
+                               where a theme names only that one
 
     The history section, whose figures take the same number tokens as the table:
       history-entry            the '->' of an entry
@@ -1026,16 +1039,16 @@ pub const LOG_HELP  :  &str =
 
     Can take 0..n words as arguments in the cmd.
 
-    The log belongs to a set of settings rather than to a run: with a configuration loaded the entry
-    is appended to that configuration's file in the 'data/logs' directory, and inside a project with
-    a '.mezura' folder it goes to the log in that folder, beside the code. With neither, or when a
-    named configuration declares no target paths or this run counts targets other than its own,
-    there is nothing for the entry to belong to and the command says so instead of writing one. The
-    file is created if it is not there yet, and any words you give are kept with the entry as its
+    The log belongs to a set of settings. With a configuration loaded the entry is appended to that
+    configuration's file in the 'data/logs' directory, and inside a project with a '.mezura' folder
+    it goes to the log in that folder, beside the code. With neither, or when a named configuration
+    declares no target paths or this run counts targets other than its own, there is nothing for
+    the entry to belong to, so no entry is written and a warning gives the reason. The file is
+    created if it is not there yet, and any words you give are kept with the entry as its
     description.
 
     Cannot be saved in a configuration file, so loading one never writes an entry on its own. A
-    '--diff' run is not logged either, and says so instead of writing an entry.
+    '--diff' run writes no entry either, and a warning gives the reason.
 
 ";
 pub const COMPARE_LEVEL_HELP  :  &str =
@@ -1054,8 +1067,8 @@ pub const COMPARE_LEVEL_HELP  :  &str =
     because the point is to say whether it can be trusted: a change of 'targets' means the numbers came
     from another tree, while a change of 'exclude' means part of that tree stopped being counted and
     the rest of it did not move. '--counting' is not among them, since an entry records where every
-    line landed rather than one fold of it and is read under whichever model this run is showing. An
-    entry written by a version that did not record a setting is never reported as having changed it.
+    line landed and is read under whichever model this run is showing. An entry written by a
+    version that did not record a setting is never reported as having changed it.
 
 ";
 pub const BY_FILE_HELP  :  &str =
@@ -1077,20 +1090,20 @@ pub const BY_FILE_HELP  :  &str =
     nothing was left out, and the count of what was is printed above the total. A language that
     '--top' hid has no row for its files to sit under, so they are not printed either.
 
-    A path too wide for its column loses whole directories out of its middle and never a piece of
-    the file's own name. A file's keywords are not counted, so a row is one line whatever the
+    A path too wide for its column loses whole directories out of its middle, and the file's own
+    name stays whole. A file's keywords are not counted, so a row is one line whatever the
     language declares. The JSON document carries the same rows under each language, as 'by_file',
     and a run with modules carries them inside each module's own languages.
 
     Under '--diff' the rows are the files that changed: each carries its move beside its figures,
     and a file only one side has is marked 'new' or 'gone'. The number then keeps the biggest
-    moves of each language instead of the biggest files, measured by whatever '--sort' names, and
-    by lines where it names the file count, since every row here is one file. The two sides pair
+    moves of each language, measured by whatever '--sort' names, and by lines where it names the
+    file count, since every row here is one file. The two sides pair
     their files by name, relative to each side's own targets, so readings whose targets differ in
     shape cannot pair.
     A JSON baseline must have been written with a plain '--by-file': one without rows, or one
-    whose rows a number capped, is missing files that would all read as new, and mezura says so
-    instead of comparing them.
+    whose rows a number capped, is missing files that would all read as new, so the comparison
+    leaves the file rows out and a warning gives the reason.
 
 ";
 pub const TESTS_BREAKDOWN_HELP  :  &str =
@@ -1108,7 +1121,7 @@ pub const TESTS_BREAKDOWN_HELP  :  &str =
                 them, no 'tests' row hangs under it or under the total, and the total adds up
                 the rows. The overview, '--sort', '--top', the keywords and the file rows of
                 '--by-file' follow, a file or a language that is tests whole getting no row.
-                When the whole run is tests, one sentence says so.
+                When the whole run is tests, one sentence reports it.
 
     An HTML page holding a script, and a test page beside it, as each value draws their lines:
 
@@ -1137,8 +1150,8 @@ pub const SAVE_HELP  :  &str =
     the flags it ran with. '--load <name>' brings them back.
 
     Target paths are written only when they were given (or already in a configuration '--load'
-    brought in on the same run), and never into 'default', so a '--save' with no path writes a
-    group of settings that works in any directory.
+    brought in on the same run), so a '--save' with no path writes a group of settings that works
+    in any directory. 'default' holds no target paths at all.
 
     '--save default' adds this run's flags to the settings the default configuration already
     holds. Beside '--no-default-config' it starts the file over with this run's flags only.
@@ -1181,11 +1194,11 @@ pub const SAVE_LOCAL_HELP  :  &str =
     Written where the next run will look for it: into the folder this run found, from wherever
     inside the project the command was typed, and otherwise into a new one at the directory holding
     the targets. What the file already held and you did not type again is kept, so a second
-    '--save-local' adds to the project's settings rather than replacing them.
+    '--save-local' adds to the project's settings.
 
     The targets are part of what a run used, so they are saved with the rest: typing one from inside
     a subdirectory writes that subdirectory as the project's target, and every later run inside the
-    project then counts it and nothing else.
+    project then counts only that subdirectory.
 
 ";
 pub const NO_DEFAULT_CONFIG_HELP  :  &str =
@@ -1275,7 +1288,7 @@ pub const VERSION_HELP  :  &str =
     No arguments.
 
     Prints the version of this binary and the date it was released on, and counts nothing. An
-    unreleased build says so instead of naming a date.
+    unreleased build prints 'unreleased' where the date goes.
 
     Not to be confused with '--hide version', which only leaves the version line off the top of
     a normal run.
@@ -1384,7 +1397,7 @@ impl Formatted for LanguageDirParseError {
     }
 }
 
-// Broken between words and never inside one. The lines the message wrote itself are kept, so a
+// Broken between words only. The lines the message wrote itself are kept, so a
 // message that laid itself out is not laid out twice.
 pub fn wrap_message(message: &str) -> String {
     message.split('\n').map(wrap_one_line).collect::<Vec<_>>().join("\n")
@@ -1475,7 +1488,7 @@ pub fn get_command_names() -> Vec<&'static str> {
     COMMAND_HELP.iter().flat_map(|(_, commands)| commands.iter().map(|(name, _)| *name)).collect()
 }
 
-// Painted where it is printed and never where it is built, so create_help_body stays plain text
+// Painted where it is printed, so create_help_body stays plain text
 // and the README generated from it is unaffected.
 fn paint_the_help(text: &str) -> String {
     let lines = text.lines().map(|line| {
@@ -1542,7 +1555,7 @@ fn paint_the_value_names_in(text: &str, starts_the_line: bool) -> String {
 // Every list the help draws puts one value at the head of a line, indented into the list and with
 // the gap to its description after it: '--style', '--hide', '--layout', '--bar-thickness',
 // '--number-separator', '--progress-bar', '--tests-breakdown' and '--badge' are all written that
-// way. Taking the head of the line and nothing else is what keeps a description out of it, since
+// way. Taking only the head of the line is what keeps a description out of it, since
 // the line explaining 'warning' says only "warnings" and the one explaining 'version' says "the
 // version line at the top".
 //
@@ -1613,7 +1626,7 @@ pub fn print_help_message_for_given_args(args_line: &str) {
         return;
     }
 
-    // The first '--help' is the command being run and not something it was asked about, so it is
+    // The first '--help' is the command being run, so it is
     // skipped once. Past that a name is answered once, however many times it was typed.
     let mut command_itself_skipped = false;
     let mut asked : Vec<&str> = Vec::new();
@@ -1638,8 +1651,7 @@ pub fn print_help_message_for_given_args(args_line: &str) {
         }
     }
 
-    // The entries and not the whole message: the data dir line is always there, so the message is
-    // never empty.
+    // Tested on the entries, because the message always holds the data dir line.
     if entries.is_empty() {
         print_the_command_list();
     } else {
@@ -1648,7 +1660,7 @@ pub fn print_help_message_for_given_args(args_line: &str) {
 }
 
 // On the error output: every caller is a path that returns a failure, and on stdout this text ends
-// up inside a redirected '--output json > stats.json' instead of a document.
+// up inside a redirected '--output json > stats.json' and breaks the document.
 pub fn print_help_message_for_command(arg: &str) {
     if let Some(x) = get_help_msg_of_command(arg) {
         eprintln!("\n{}", paint_the_help(x));
@@ -1745,7 +1757,7 @@ pub fn print_existing_configs() {
     };
     let mut config_names = config_dir.flatten()
             .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-            // Skipped rather than shown lossily: this list exists to be typed back into '--load'
+            // A name that is no valid text is skipped, since this list exists to be typed back into '--load'
             .filter_map(|entry| entry.file_name().into_string().ok())
             .filter(|name| name != "default.txt")
             .collect::<Vec<_>>();
@@ -1803,7 +1815,7 @@ pub fn join_with(items: &[impl AsRef<str>], conjunction: &str) -> String {
 }
 
 // Two files declaring one language is a broken installation, and naming it twice here would read as
-// two languages rather than as the one it is. Their extensions are merged under the one name, since
+// two languages. Their extensions are merged under the one name, since
 // which of the two files was read is not decided by anything the reader can see.
 fn format_supported_languages_message(languages_available: &[Language], conflicts: &ConflictRules) -> String {
     const COLUMNS : usize = 2;
@@ -1839,7 +1851,7 @@ fn format_supported_languages_message(languages_available: &[Language], conflict
             format_in_columns(&entries, COLUMNS), format_lost_extensions_legend(held))
 }
 
-// Named once under the list and not beside each star, since an extension is lost by as many
+// Named once under the list, since an extension is lost by as many
 // languages as claim it and the holder is the same answer for all of them.
 fn format_lost_extensions_legend(mut held: Vec<String>) -> String {
     held.sort();
@@ -1855,7 +1867,7 @@ fn format_lost_extensions_legend(mut held: Vec<String>) -> String {
             MESSAGE_WIDTH - past_the_mark, past_the_mark))
 }
 
-// Filled downwards and not across, so a sorted list reads in order down each column. A list of
+// Filled downwards, so a sorted list reads in order down each column. A list of
 // extensions too long for its column continues under itself, which keeps every column the width of
 // the common case.
 fn format_in_columns(entries: &[(String, Vec<String>)], columns: usize) -> String {
@@ -1887,7 +1899,7 @@ fn format_in_columns(entries: &[(String, Vec<String>)], columns: usize) -> Strin
     lines.join("\n")
 }
 
-// Broken after a comma, so a line that continues below says so at its end.
+// Broken after a comma, so a line that continues below ends with one.
 fn wrap_at_commas(parts: &[String], width: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
@@ -2178,10 +2190,10 @@ mod tests {
                  Regenerate it with MEZURA_UPDATE_GOLDEN=1 cargo test -p mezura commands_document");
     }
 
-    // Asserted on the rule and not on the painted string, because whether anything is painted at
+    // Asserted on the rule, because whether anything is painted at
     // all is a process-wide switch that another test in this binary turns off.
     #[test]
-    fn a_value_is_marked_where_it_names_itself_and_not_where_a_sentence_uses_the_word() {
+    fn a_value_is_marked_only_where_it_names_itself() {
         fn marked(line: &str) -> Vec<&str> {
             let runs = split_into_runs(line);
             find_the_value_names_in(&runs, true).into_iter().map(|at| runs[at]).collect()
@@ -2192,7 +2204,7 @@ mod tests {
         // A description of one word is still a description
         assert_eq!(vec!["warning"], marked("      warning                  warnings"));
         // Values of a command that has nothing to do with the styling, and one whose description
-        // opens with a character rather than a word
+        // opens with a symbol
         assert_eq!(vec!["matrix"], marked("      matrix    languages down, modules across, one number per cell"));
         assert_eq!(vec!["slim"], marked("      slim     |   plain ASCII, so it renders on any terminal"));
         // Several to a line, as the table of style tokens is written
@@ -2202,13 +2214,13 @@ mod tests {
         // Not indented into a list, so the head of the line is text like any other
         assert!(marked("    A style is one or two colors and any number of the attributes").is_empty());
         assert!(marked("        mezura frontend=./web backend=./api").is_empty());
-        // Indented into one, and named after the command it belongs to rather than after a value
+        // Indented into one, and named after the command it belongs to
         assert_eq!(vec!["nothing-of-ours"], marked("      nothing-of-ours          is checked past the head of the line"));
     }
 
     // The help is the only place that lists these, and the README is generated from it. Asked as a
-    // column rather than as a substring: 'version' also sits inside "the version line at the top",
-    // so a plain search passes for a name nobody ever listed. It is the same question the painter
+    // column, because 'version' also sits inside "the version line at the top"
+    // and a plain search passes for a name nobody ever listed. It is the same question the painter
     // asks, so this is also what keeps a name from being reflowed out of its column and quietly
     // printing unpainted.
     #[test]
@@ -2292,7 +2304,7 @@ mod tests {
             let help = get_help_msg_of_command(name).expect("every command has a help entry");
             let summary = help.lines().nth(1).unwrap_or_default().trim();
             assert!(!summary.is_empty(), "'--{name}' says nothing on the second line of its help");
-            assert!(!summary.starts_with("--"), "'--{name}' opens with a command and not a summary");
+            assert!(!summary.starts_with("--"), "'--{name}' opens with a command where its summary belongs");
         }
     }
 
