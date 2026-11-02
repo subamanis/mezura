@@ -15,9 +15,12 @@ const PILL_PADDING : f64 = 5.0;
 const PILL_FONT_SIZE : f64 = 11.0;
 const PILL_LABEL_FILL : &str = "#555555";
 const PILL_LABEL_TEXT : &str = "#ffffff";
-const PILL_VALUE_FILL : &str = "#6ad9bd";
-const PILL_VALUE_TEXT : &str = "#0b3b31";
-const PILL_DIVIDER : &str = "#3fb79a";
+const PILL_LINES_COLORS : (&str, &str) = ("#3a96dd", "#0d2131");
+const PILL_CODE_COLORS : (&str, &str) = ("#b4009e", "#ffffff");
+const PILL_COMMENTS_COLORS : (&str, &str) = ("#6ad9bd", "#17302a");
+const PILL_TESTS_COLORS : (&str, &str) = ("#f9f1a5", "#373524");
+const PILL_FILES_COLORS : (&str, &str) = ("#d7c9f0", "#2f2c35");
+const PILL_LANGUAGES_COLORS : (&str, &str) = ("#b5a98a", "#28251e");
 const CARD_WIDTH : usize = 300;
 const CARD_INSET : usize = 16;
 const CARD_FONT_SIZE : f64 = 12.0;
@@ -57,8 +60,9 @@ const LANGUAGE_COLORS : [(&str, &str); 85] = [
     ("VHDL", "#adb2cb"), ("Verilog", "#b2b7f8"), ("Vim Script", "#199f4b"), ("Visual Basic", "#945db7"),
     ("Vue", "#41b883"), ("WAT", "#04133b"), ("WGSL", "#1a5e9a"), ("Zig", "#ec915c")
 ];
-// Verdana's advance widths in em. 'textLength' on every text of the pill fits the glyphs to the
-// figure, so a width here that is a little off stretches the letters a little and never the layout.
+// Verdana's advance widths in em, and Verdana Bold's for the amount of a figure. 'textLength' on every
+// text of the pill fits the glyphs to the figure, so a width here that is a little off stretches the
+// letters a little and never the layout.
 const VERDANA_WIDTHS : [(char, f64); 66] = [
     (' ', 0.352), ('.', 0.364), (',', 0.364), ('%', 1.076), ('0', 0.636), ('1', 0.636), ('2', 0.636),
     ('3', 0.636), ('4', 0.636), ('5', 0.636), ('6', 0.636), ('7', 0.636), ('8', 0.636), ('9', 0.636),
@@ -70,6 +74,11 @@ const VERDANA_WIDTHS : [(char, f64); 66] = [
     ('J', 0.455), ('K', 0.693), ('L', 0.557), ('M', 0.843), ('N', 0.748), ('O', 0.787), ('P', 0.603),
     ('Q', 0.787), ('R', 0.695), ('S', 0.684), ('T', 0.616), ('U', 0.732), ('V', 0.684), ('W', 0.989),
     ('X', 0.685), ('Y', 0.615), ('Z', 0.685)
+];
+const VERDANA_BOLD_WIDTHS : [(char, f64); 15] = [
+    ('.', 0.361), (',', 0.361), ('%', 1.272), ('0', 0.711), ('1', 0.711), ('2', 0.711), ('3', 0.711),
+    ('4', 0.711), ('5', 0.711), ('6', 0.711), ('7', 0.711), ('8', 0.711), ('9', 0.711), ('k', 0.671),
+    ('M', 0.948)
 ];
 const UNLISTED_GLYPH_WIDTH : f64 = 0.65;
 
@@ -179,6 +188,17 @@ impl BadgeFigure {
             Self::Languages => "languages"
         }
     }
+
+    fn get_pill_fill_and_text(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Lines => PILL_LINES_COLORS,
+            Self::Code => PILL_CODE_COLORS,
+            Self::Comments => PILL_COMMENTS_COLORS,
+            Self::Tests => PILL_TESTS_COLORS,
+            Self::Files => PILL_FILES_COLORS,
+            Self::Languages => PILL_LANGUAGES_COLORS
+        }
+    }
 }
 
 struct DrawnFigure {
@@ -188,12 +208,14 @@ struct DrawnFigure {
 
 impl DrawnFigure {
     fn format(&self, format_count: fn(usize) -> String) -> String {
-        let amount = match self.amount {
+        format!("{} {}", self.format_amount(format_count), self.figure.as_str())
+    }
+
+    fn format_amount(&self, format_count: fn(usize) -> String) -> String {
+        match self.amount {
             Amount::Count(count) => format_count(count),
             Amount::Share(percent) => format!("{}%", get_active().format_percent(percent))
-        };
-
-        format!("{amount} {}", self.figure.as_str())
+        }
     }
 
     fn format_short(&self) -> String {
@@ -232,12 +254,13 @@ fn collect_figures(result: &RunResult, config: &Configuration, spec: &BadgeSpec)
 
 fn render_pill(figures: &[DrawnFigure]) -> String {
     let label_text_width = measure_pill_text(BADGE_LABEL);
-    let texts = figures.iter().map(DrawnFigure::format_short).collect::<Vec<_>>();
-    let text_widths = texts.iter().map(|text| measure_pill_text(text)).collect::<Vec<_>>();
+    let amounts = figures.iter().map(|figure| figure.format_amount(format_short_number)).collect::<Vec<_>>();
+    let text_widths = figures.iter().zip(&amounts).map(|(figure, amount)| measure_bold_text(amount, PILL_FONT_SIZE)
+            + measure_pill_text(&format!(" {}", figure.figure.as_str()))).collect::<Vec<_>>();
     let label_cell_width = calculate_pill_cell_width(label_text_width);
     let cell_widths = text_widths.iter().map(|width| calculate_pill_cell_width(*width)).collect::<Vec<_>>();
     let total_width = label_cell_width + cell_widths.iter().sum::<usize>();
-    let title = escape_xml(&format!("{BADGE_LABEL}: {}", texts.join(", ")));
+    let title = escape_xml(&format!("{BADGE_LABEL}: {}", figures.iter().map(DrawnFigure::format_short).collect::<Vec<_>>().join(", ")));
 
     let mut svg = String::new();
     svg.push_str(&format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{total_width}\" height=\"{PILL_HEIGHT}\" \
@@ -245,20 +268,20 @@ fn render_pill(figures: &[DrawnFigure]) -> String {
     svg.push_str(&format!("<clipPath id=\"r\"><rect width=\"{total_width}\" height=\"{PILL_HEIGHT}\" rx=\"3\"/></clipPath>"));
     svg.push_str("<g clip-path=\"url(#r)\">");
     svg.push_str(&format!("<rect width=\"{label_cell_width}\" height=\"{PILL_HEIGHT}\" fill=\"{PILL_LABEL_FILL}\"/>"));
-    svg.push_str(&format!("<rect x=\"{label_cell_width}\" width=\"{}\" height=\"{PILL_HEIGHT}\" fill=\"{PILL_VALUE_FILL}\"/>",
-            total_width - label_cell_width));
     let mut x = label_cell_width;
-    for width in &cell_widths[..cell_widths.len().saturating_sub(1)] {
-        x += width;
-        svg.push_str(&format!("<line x1=\"{x}\" y1=\"0\" x2=\"{x}\" y2=\"{PILL_HEIGHT}\" stroke=\"{PILL_DIVIDER}\"/>"));
+    for (figure, cell_width) in figures.iter().zip(&cell_widths) {
+        svg.push_str(&format!("<rect x=\"{x}\" width=\"{cell_width}\" height=\"{PILL_HEIGHT}\" fill=\"{}\"/>",
+                figure.figure.get_pill_fill_and_text().0));
+        x += cell_width;
     }
     svg.push_str("</g>");
     svg.push_str(&format!("<g font-family=\"Verdana,Geneva,DejaVu Sans,sans-serif\" font-size=\"{PILL_FONT_SIZE}\" \
             text-anchor=\"middle\">"));
-    write_pill_text(&mut svg, BADGE_LABEL, label_cell_width as f64 / 2.0, label_text_width, PILL_LABEL_TEXT);
+    write_pill_text(&mut svg, &escape_xml(BADGE_LABEL), label_cell_width as f64 / 2.0, label_text_width, PILL_LABEL_TEXT);
     let mut x = label_cell_width;
-    for ((text, text_width), cell_width) in texts.iter().zip(&text_widths).zip(&cell_widths) {
-        write_pill_text(&mut svg, text, x as f64 + *cell_width as f64 / 2.0, *text_width, PILL_VALUE_TEXT);
+    for (((figure, amount), text_width), cell_width) in figures.iter().zip(&amounts).zip(&text_widths).zip(&cell_widths) {
+        let markup = format!("<tspan font-weight=\"bold\">{}</tspan> {}", escape_xml(amount), figure.figure.as_str());
+        write_pill_text(&mut svg, &markup, x as f64 + *cell_width as f64 / 2.0, *text_width, figure.figure.get_pill_fill_and_text().1);
         x += cell_width;
     }
     svg.push_str("</g></svg>");
@@ -266,9 +289,9 @@ fn render_pill(figures: &[DrawnFigure]) -> String {
     svg
 }
 
-fn write_pill_text(svg: &mut String, text: &str, center: f64, width: f64, fill: &str) {
-    svg.push_str(&format!("<text x=\"{}\" y=\"14\" fill=\"{fill}\" textLength=\"{}\" lengthAdjust=\"spacingAndGlyphs\">{}</text>",
-            format_with_one_decimal(center), format_with_one_decimal(width), escape_xml(text)));
+fn write_pill_text(svg: &mut String, markup: &str, center: f64, width: f64, fill: &str) {
+    svg.push_str(&format!("<text x=\"{}\" y=\"14\" fill=\"{fill}\" textLength=\"{}\" lengthAdjust=\"spacingAndGlyphs\">{markup}</text>",
+            format_with_one_decimal(center), format_with_one_decimal(width)));
 }
 
 fn calculate_pill_cell_width(text_width: f64) -> usize {
@@ -355,15 +378,18 @@ fn collect_card_languages(result: &RunResult, config: &Configuration) -> Vec<Car
 fn write_card_bar(svg: &mut String, languages: &[CardLanguage], inner_width: usize) {
     svg.push_str(&format!("<clipPath id=\"b\"><rect x=\"{CARD_INSET}\" y=\"{CARD_BAR_TOP}\" width=\"{inner_width}\" \
             height=\"{CARD_BAR_HEIGHT}\" rx=\"4\"/></clipPath>"));
-    svg.push_str("<g clip-path=\"url(#b)\">");
+    svg.push_str("<g clip-path=\"url(#b)\" shape-rendering=\"crispEdges\">");
     svg.push_str(&format!("<rect x=\"{CARD_INSET}\" y=\"{CARD_BAR_TOP}\" width=\"{inner_width}\" height=\"{CARD_BAR_HEIGHT}\" \
             class=\"tr\"/>"));
-    let mut x = CARD_INSET as f64;
+    let calculate_edge_in_tenths = |share: f64| ((CARD_INSET as f64 + inner_width as f64 * share / 100.0) * 10.0).round() as usize;
+    let mut share_so_far = 0.0;
+    let mut start = calculate_edge_in_tenths(0.0);
     for language in languages {
-        let width = inner_width as f64 * language.share / 100.0;
+        share_so_far += language.share;
+        let end = calculate_edge_in_tenths(share_so_far);
         svg.push_str(&format!("<rect x=\"{}\" y=\"{CARD_BAR_TOP}\" width=\"{}\" height=\"{CARD_BAR_HEIGHT}\" fill=\"{}\"/>",
-                format_with_one_decimal(x), format_with_one_decimal(width), language.fill));
-        x += width;
+                format_with_one_decimal(start as f64 / 10.0), format_with_one_decimal((end - start) as f64 / 10.0), language.fill));
+        start = end;
     }
     svg.push_str("</g>");
 }
@@ -409,8 +435,16 @@ fn measure_pill_text(text: &str) -> f64 {
 }
 
 fn measure_text(text: &str, font_size: f64) -> f64 {
-    text.chars().map(|glyph| VERDANA_WIDTHS.iter().find(|(known, _)| *known == glyph)
-            .map_or(UNLISTED_GLYPH_WIDTH, |(_, width)| *width)).sum::<f64>() * font_size
+    text.chars().map(get_glyph_width).sum::<f64>() * font_size
+}
+
+fn measure_bold_text(text: &str, font_size: f64) -> f64 {
+    text.chars().map(|glyph| VERDANA_BOLD_WIDTHS.iter().find(|(known, _)| *known == glyph)
+            .map_or_else(|| get_glyph_width(glyph), |(_, width)| *width)).sum::<f64>() * font_size
+}
+
+fn get_glyph_width(glyph: char) -> f64 {
+    VERDANA_WIDTHS.iter().find(|(known, _)| *known == glyph).map_or(UNLISTED_GLYPH_WIDTH, |(_, width)| *width)
 }
 
 // '12.3' and '12', never '12.0'

@@ -41,6 +41,7 @@ h1 a:hover { text-decoration: underline; text-underline-offset: .2em; }
 .targets { margin-top: .5rem; font-size: .875rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: .2rem 1.25rem; }
 .targets .path { font-family: var(--font-mono); font-size: .86em; }
 .targets b { font-weight: 600; margin-right: .4em; }
+.more { text-decoration: underline; text-decoration-style: dotted; text-underline-offset: .25em; white-space: nowrap; }
 .lede { margin: 1.5rem 0 0; max-width: 46rem; }
 .lede div { margin: .2rem 0; }
 .lede b { font-weight: 600; font-variant-numeric: tabular-nums; }
@@ -118,7 +119,7 @@ body.print-plain [class*="t-"] { color: inherit !important; background: transpar
 @media print {
   :root, :root[data-base="light"] { --bg: #ffffff !important; --fg: #1a1c20; color-scheme: light; }
   .page { max-width: none; padding: 0; }
-  .options, .badge-help { display: none; }
+  .options, .badge-help, .more { display: none; }
   .details tbody tr.even td, .bar, .bar span { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .tablewrap { overflow: visible; }
   tr, .ov { break-inside: avoid; }
@@ -191,6 +192,8 @@ body.print-plain [class*="t-"] { color: inherit !important; background: transpar
   const SORT_KEYS = [['lines', 'lines'], ['code', 'code'], ['files', 'files'], ['comments', 'comments'], ['third', 'extra'], ['bytes', 'size'], ['name', 'name']];
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   const OVERVIEW_LANGUAGES = 3;
+  const FOLDED_LINES = 2;
+  const TITLE_NAMES = 3;
   const SLOTS = ['language-1', 'language-2', 'language-3', 'language-4'];
   const UNCOLORED_SHADES = [.9, .65, .45, .32];
   const UNCOLORED_OTHERS_SHADE = .22;
@@ -225,7 +228,9 @@ body.print-plain [class*="t-"] { color: inherit !important; background: transpar
     pill: true,
     sort: 'lines',
     background: null,
-    collapsed: new Set()
+    collapsed: new Set(),
+    targetsOpen: false,
+    excludeOpen: false
   };
 
   function esc(text) {
@@ -568,7 +573,7 @@ body.print-plain [class*="t-"] { color: inherit !important; background: transpar
     const named = targets.some((x) => x.module);
     $('version').textContent = 'v' + doc.mezura_version;
     $('when').textContent = formatDate(doc.generated_at);
-    $('targets').innerHTML = targets.map((x) => '<span>' + (named ? '<b class="t-details-module">' + esc(x.module == null ? '(unnamed)' : x.module) + '</b>' : '') + '<span class="path">' + esc(x.path) + '</span></span>').join('');
+    $('targets').innerHTML = targets.map((x) => '<span class="item">' + (named ? '<b class="t-details-module">' + esc(x.module == null ? '(unnamed)' : x.module) + '</b>' : '') + '<span class="path">' + esc(x.path) + '</span></span>').join('') + '<button class="lnk more"></button>';
     const b = (v) => '<b>' + v + '</b>';
     const lines = t.files === 0 ? ['No relevant files were found.'] : [
       b(formatInt(t.lines)) + ' lines in ' + plural(t.files, 'file') + ' of ' + plural(languageCountOf(doc), 'language') + ', ' + b(size.value + ' ' + size.unit) + '.',
@@ -581,9 +586,61 @@ body.print-plain [class*="t-"] { color: inherit !important; background: transpar
     $('lede').innerHTML = lines.map((l) => '<div>' + l + '</div>').join('');
     const scan = doc.scan;
     const parts = [plural(scan.files_found, 'file') + ' found', formatInt(scan.files_of_interest) + ' of interest', formatInt(scan.files_excluded) + ' excluded'];
-    if (doc.scope.exclude && doc.scope.exclude.length) parts.push('excluding ' + doc.scope.exclude.map(esc).join(', '));
-    $('scan').innerHTML = parts.join(', ') + '.';
-    document.title = 'mezura · ' + targets.map((x) => x.module || x.path).join(', ');
+    const exclude = doc.scope.exclude || [];
+    $('scan').innerHTML = exclude.length === 0 ? parts.join(', ') + '.' : parts.join(', ') + ', excluding ' +
+      exclude.map((p, i) => '<span class="item">' + esc(p) + (i < exclude.length - 1 ? ',' : '.') + '</span>').join(' ') + ' <button class="lnk more"></button>';
+    const names = [...new Set(targets.map((x) => x.module || x.path))];
+    document.title = 'mezura · ' + (names.length > TITLE_NAMES ? plural(names.length, named ? 'module' : 'target') : names.join(', '));
+    foldHeader();
+  }
+
+  function foldHeader() {
+    foldToLines($('targets'), state.targetsOpen);
+    foldToLines($('scan'), state.excludeOpen);
+  }
+
+  function foldToLines(box, open) {
+    const items = [...box.querySelectorAll('.item')];
+    const more = box.querySelector('.more');
+    if (!more) return;
+    showFirst(items, items.length, more);
+    more.hidden = true;
+    if (countLines(box) <= FOLDED_LINES) return;
+    more.hidden = false;
+    more.setAttribute('aria-expanded', String(open));
+    if (open) {
+      more.textContent = 'fewer';
+      return;
+    }
+    let low = 0;
+    let high = items.length - 1;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      showFirst(items, middle, more);
+      if (countLines(box) <= FOLDED_LINES) low = middle; else high = middle - 1;
+    }
+    showFirst(items, low, more);
+  }
+
+  function showFirst(items, count, more) {
+    items.forEach((item, i) => { item.hidden = i >= count; });
+    more.textContent = formatInt(items.length - count) + ' more';
+  }
+
+  function countLines(box) {
+    const range = document.createRange();
+    range.selectNodeContents(box);
+    const tops = [...range.getClientRects()].filter((r) => r.height > 0).map((r) => r.top).sort((a, b) => a - b);
+    const tolerance = (parseFloat(getComputedStyle(box).lineHeight) || 16) / 2;
+    let lines = 0;
+    let lineTop = -Infinity;
+    for (const top of tops) {
+      if (top - lineTop > tolerance) {
+        lines++;
+        lineTop = top;
+      }
+    }
+    return lines;
   }
 
   function renderOverview(doc) {
@@ -729,11 +786,25 @@ body.print-plain [class*="t-"] { color: inherit !important; background: transpar
     const options = $('options');
     if (options.open && !options.contains(e.target)) options.open = false;
   });
+  $('targets').addEventListener('click', (e) => {
+    if (!e.target.closest('.more')) return;
+    state.targetsOpen = !state.targetsOpen;
+    foldHeader();
+  });
+  $('scan').addEventListener('click', (e) => {
+    if (!e.target.closest('.more')) return;
+    state.excludeOpen = !state.excludeOpen;
+    foldHeader();
+  });
+  window.addEventListener('resize', foldHeader);
+  document.fonts.ready.then(foldHeader);
 
   let beforePrint = null;
   window.addEventListener('beforeprint', () => {
-    beforePrint = { theme: state.theme, base: state.base, background: state.background };
+    beforePrint = { theme: state.theme, base: state.base, background: state.background, targetsOpen: state.targetsOpen, excludeOpen: state.excludeOpen };
     state.background = null;
+    state.targetsOpen = true;
+    state.excludeOpen = true;
     const sibling = siblingOf(state.theme);
     if (state.theme.endsWith('-light')) {}
     else if (sibling) state.theme = sibling;
