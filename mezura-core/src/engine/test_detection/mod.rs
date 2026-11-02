@@ -4,7 +4,7 @@ mod path_rules;
 mod tool_configuration;
 mod walk;
 
-pub use path_rules::TestPreset;
+pub use path_rules::{DependencyManifest, TestPreset};
 
 pub(crate) use module_graph::{Declaration, FilesOnDisk, ModuleDeclarations, ModuleRow, find_declaring_chain,
         promote_declared_test_modules};

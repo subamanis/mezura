@@ -1416,7 +1416,12 @@ fn a_tools_own_file_turns_its_names_on_under_its_directory_and_the_run_lists_wha
             ("proj/src/parser.test.js", "test('a', () => {});\n"), ("proj/src/parser.js", "export {};\n"),
             ("proj/src/__tests__/render.js", "test('b', () => {});\n"), ("proj/api/phpunit.xml", "<phpunit/>\n"),
             ("proj/api/src/Parser.php", "<?php\n"), ("proj/api/tests/fixture.json", "{}\n"), ("proj/rails/.rspec", ""), ("proj/rails/Gemfile", ""),
-            ("proj/rails/spec/parser_spec.rb", "describe Parser do\nend\n"), ("proj/rails/lib/parser.rb", "class Parser\nend\n")]);
+            ("proj/rails/spec/parser_spec.rb", "describe Parser do\nend\n"), ("proj/rails/lib/parser.rb", "class Parser\nend\n"),
+            ("proj/api/composer.json", "{\"require-dev\": {\"phpunit/phpunit\": \"^9.5\"}}\n"),
+            ("proj/php/composer.json", "{\"name\": \"a/php\", \"require-dev\": {\"phpunit/phpunit\": \"^9.5\"}}\n"),
+            ("proj/php/Tests/ParserTest.php", "<?php\nfinal class ParserTest {}\n"), ("proj/php/src/Parser.php", "<?php\nfinal class Parser {}\n"),
+            ("proj/tools/composer.json", "{\"scripts\": {\"test\": \"phpunit\"}, \"suggest\": {\"phpunit/phpunit\": \"tests\"}}\n"),
+            ("proj/tools/tests/Smoke.php", "<?php\nfinal class Smoke {}\n")]);
     let root_str = root.to_string_lossy().replace('\\', "/");
     let at = |path: &str| format!("{root_str}/{path}");
     let config_of = |target: &str, test_patterns: PathPatterns, detect_tests: bool| EngineConfig { detect_tests,
@@ -1429,19 +1434,22 @@ fn a_tools_own_file_turns_its_names_on_under_its_directory_and_the_run_lists_wha
 
     let whole = count_with_shipped_languages(&config_of(&at("proj"), PathPatterns::of(&[] as &[&str]), true));
     assert_eq!(vec![row("jest", "proj", "jest.config.js", true), row("phpunit", "proj/api", "phpunit.xml", false),
-            row("rspec", "proj/rails", ".rspec", true)], listed(&whole), "a folder with no counted file under it counts as matched");
+            row("phpunit", "proj/php", "composer.json", true), row("rspec", "proj/rails", ".rspec", true)], listed(&whole),
+            "a folder with no counted file under it counts as matched, or a composer.json beside a phpunit.xml was listed too");
     assert_eq!(Some((2, 2, 42, 2)), tests_of(&whole, "JavaScript"));
     assert_eq!(Some((1, 2, 23, 1)), tests_of(&whole, "Ruby"));
-    assert_eq!(None, tests_of(&whole, "PHP"));
+    assert_eq!(Some((1, 2, 32, 1)), tests_of(&whole, "PHP"), "a composer.json naming phpunit outside its requirements turned it on");
 
     let taken_back = count_with_shipped_languages(&config_of(&at("proj"), PathPatterns::of(["!*.js"]), true));
     assert_eq!(vec![row("jest", "proj", "jest.config.js", false), row("phpunit", "proj/api", "phpunit.xml", false),
-            row("rspec", "proj/rails", ".rspec", true)], listed(&taken_back), "a preset a '!' overruled on every file counts as matched");
+            row("phpunit", "proj/php", "composer.json", true), row("rspec", "proj/rails", ".rspec", true)], listed(&taken_back),
+            "a preset a '!' overruled on every file counts as matched");
     assert_eq!(None, tests_of(&taken_back, "JavaScript"));
     let ruby_only = count_with_shipped_languages(&EngineConfig { languages_of_interest: vec!["Ruby".to_owned()].into(),
             ..config_of(&at("proj"), PathPatterns::of(&[] as &[&str]), true) });
     assert_eq!(vec![row("jest", "proj", "jest.config.js", false), row("phpunit", "proj/api", "phpunit.xml", false),
-            row("rspec", "proj/rails", ".rspec", true)], listed(&ruby_only), "a preset of a language left out counts as matched");
+            row("phpunit", "proj/php", "composer.json", false), row("rspec", "proj/rails", ".rspec", true)], listed(&ruby_only),
+            "a preset of a language left out counts as matched");
 
     let below = count_with_shipped_languages(&config_of(&at("proj/src"), PathPatterns::of(&[] as &[&str]), true));
     assert_eq!(vec![row("jest", "proj", "jest.config.js", true)], listed(&below), "the folders above the target were not climbed");

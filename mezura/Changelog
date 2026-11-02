@@ -18,6 +18,8 @@ Main changes:
       followed by a note on saving it as a file ('> report.html'). A pipe or a redirect never
       sees the note.
   -> '--sort' now orders the modules as well as the languages inside each module.
+  -> A 'composer.json' requiring 'phpunit/phpunit' now turns the '@phpunit' preset on under its
+      folder, the way a 'phpunit.xml' does.
 
 Bugfixes:
   -> '--log' and '--compare' typed beside '--output json' or '--output html' now say they are

@@ -201,7 +201,8 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     A preset also turns itself on under a folder holding the tool's own file, the jest one under
     a 'jest.config.ts', and a pattern typed here comes after it, so a '!' corrects it there too.
     Pytest's configuration files are read for 'testpaths' and 'python_files', which scope and
-    rename what its preset takes. '--show-presets' lists the presets, and '--save-preset' keeps a
+    rename what its preset takes. A 'composer.json' requiring 'phpunit/phpunit' turns the phpunit
+    preset on under its folder. '--show-presets' lists the presets, and '--save-preset' keeps a
     list of your own under a name. A folder whose name starts with '@' is written as a place or
     after '**/': './@types/' or '**/@types/'.
 

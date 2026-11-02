@@ -89,7 +89,8 @@ inspecting the file with `--explain`, which checks neighboring files on disk).
 
 In ecosystems where the build file does not fix a test location (JavaScript/TypeScript, Python, Ruby,
 PHP), mezura looks for the test runner's own config file. When found, it enables that runner's
-default test file patterns under the folder containing the config file.
+default test file patterns under the folder containing the config file. For PHPUnit a
+`composer.json` requiring `phpunit/phpunit` in `require-dev` or `require` does the same.
 
 For example, if `frontend/jest.config.ts` exists, `__tests__/` and `*.test.ts` inside `frontend/`
 are counted as tests, without affecting other folders in a monorepo.
@@ -103,7 +104,7 @@ Run `--show-presets` to see all available presets:
 | `@mocha` | `.mocharc.*` | `test/` |
 | `@pytest` | `conftest.py`, or `testpaths` in a pytest config (`pytest.toml`, `.pytest.toml`, `pytest.ini`, `.pytest.ini`, `pyproject.toml`, `tox.ini`, `setup.cfg`) | `test_*.py`, `*_test.py`, `conftest.py` |
 | `@rspec` | `.rspec` (when a `Gemfile` is in the same folder) | `spec/` |
-| `@phpunit` | `phpunit.xml`, `phpunit.xml.dist`, `phpunit.dist.xml` | `tests/`, `Tests/`, `test/` |
+| `@phpunit` | `phpunit.xml`, `phpunit.xml.dist`, `phpunit.dist.xml`, or a `composer.json` requiring `phpunit/phpunit` | `tests/`, `Tests/`, `test/` |
 | `@gradle` | `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts` | `src/*Test/`, `src/testFixtures/` |
 | `@xt` | `Makefile.PL`, `Build.PL`, `dist.ini` | `xt/` |
 | `@unittest` | Manual only (`--tests "@unittest"`) | `test*.py` |
@@ -278,7 +279,8 @@ etc.). Test files placed outside those directories require `--tests`.
 
 **Detected:** Via [test tool presets](#test-tool-presets) when a runner config file (`jest.config.*`,
 `vitest.config.*`, `vite.config.*`, `.mocharc.*`, `conftest.py`, `pytest.ini` with `testpaths`,
-`.rspec` next to `Gemfile`, `phpunit.xml`) is present in the project, or manually via `--tests`.
+`.rspec` next to `Gemfile`, `phpunit.xml`, a `composer.json` requiring `phpunit/phpunit`) is present
+in the project, or manually via `--tests`.
 In-source framework calls (`describe(...)`, `it(...)`, C++ `TEST_CASE(...)`) are not parsed from
 file contents.
 

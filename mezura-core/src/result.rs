@@ -529,14 +529,14 @@ pub struct UnreadableDirDetails {
 }
 
 /// A [`crate::TestPreset`] the scan turned on under one directory, because the listing of that
-/// directory held one of the preset's trigger files.
+/// directory held one of the preset's trigger files, or its dependency manifest requiring the tool.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppliedPreset {
     /// The preset's name, `jest`.
     pub name: String,
     /// The directory whose listing held the tool's file. Absolute, with forward slashes.
     pub directory: String,
-    /// The tool's file that turned the preset on, `jest.config.ts`.
+    /// The tool's file that turned the preset on, `jest.config.ts` or `composer.json`.
     pub trigger_file: String,
     /// Whether a counted file was judged test code through it. False where the tool is present
     /// and no counted file under its directory has a name of its tests, and false where a `!`

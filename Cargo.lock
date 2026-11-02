@@ -546,6 +546,7 @@ dependencies = [
  "libc",
  "memchr",
  "memmap2",
+ "serde_json",
 ]
 
 [[package]]

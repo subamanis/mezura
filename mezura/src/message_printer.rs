@@ -131,7 +131,8 @@ pub const TESTS_HELP  :  &str =
     A preset also turns itself on under a folder holding the tool's own file, the jest one under
     a 'jest.config.ts', and a pattern typed here comes after it, so a '!' corrects it there too.
     Pytest's configuration files are read for 'testpaths' and 'python_files', which scope and
-    rename what its preset takes. '--show-presets' lists the presets, and '--save-preset' keeps a
+    rename what its preset takes. A 'composer.json' requiring 'phpunit/phpunit' turns the phpunit
+    preset on under its folder. '--show-presets' lists the presets, and '--save-preset' keeps a
     list of your own under a name. A folder whose name starts with '@' is written as a place or
     after '**/': './@types/' or '**/@types/'.
 
@@ -1952,6 +1953,10 @@ fn format_test_presets_message(presets_dir: &str) -> String {
         let turned_on_by = match preset.files_declaring_tests {
             [] => turned_on_by,
             files => format!("{turned_on_by}, or {} declaring testpaths", files.join(", "))
+        };
+        let turned_on_by = match preset.dependency_manifest {
+            Some(manifest) => format!("{turned_on_by}, or a {} requiring {}", manifest.file_name, manifest.package),
+            None => turned_on_by
         };
         message.push_str(&format_entry(preset.name, &[("turned on by", turned_on_by),
                 ("patterns", preset.patterns.join(", "))]));

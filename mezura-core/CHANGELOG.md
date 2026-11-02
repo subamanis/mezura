@@ -12,6 +12,9 @@ New:
 - `Threads::default` obeys process CPU affinity on Windows and cgroups v2 CPU quotas on Linux.
 - MATLAB counts GNU Octave's `#` line comments and `#{` / `#}` block comments, and recognises `##`
   headers when settling `.m` files.
+- `TestPreset::dependency_manifest` and `DependencyManifest`, a list of a project's dependencies that
+  turns a preset on under its directory when it requires the tool. The `phpunit` preset is turned on
+  by a `composer.json` requiring `phpunit/phpunit`.
 
 Fixes:
 
@@ -19,6 +22,11 @@ Fixes:
   `EngineConfig::should_search_in_dotted` is set, and always skip `.git`.
 - Blank and comment lines between the closing brace of a test-marked `if` arm and its `else` stay in
   the test extent when code follows the `else` arm on its closing line.
+
+Other:
+
+- `serde_json` is a new dependency, for reading a `composer.json` and other json build config files 
+   that will probably come in the future.
 
 ## 2.0.0, 2026-10-29
 

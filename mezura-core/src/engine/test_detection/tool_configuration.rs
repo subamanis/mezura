@@ -5,6 +5,8 @@ use crate::engine::file_parser::BYTE_ORDER_MARK;
 use crate::engine::path_patterns::{PathPatternMatcher, TakingBack, is_a_path_pattern};
 use crate::engine::targets::spell_out;
 
+use super::path_rules::DependencyManifest;
+
 // In pytest's own order of precedence. The first file present decides, and the first four decide
 // even when they hold nothing. A '[pytest]' table and '[tool.pytest]' take TOML lists only, since
 // pytest 9 refuses a string there. '[tool.pytest.ini_options]' splits a string as an ini value is.
@@ -58,6 +60,13 @@ pub(crate) fn read_pytest_configuration(directory: &Path, is_present: impl Fn(&s
         }
     }
     None
+}
+
+// Only a key of a wanted section counts, since the package is also named under 'suggest' and 'scripts'
+pub(crate) fn manifest_requires_package(directory: &Path, manifest: &DependencyManifest) -> bool {
+    let Ok(bytes) = fs::read(directory.join(manifest.file_name)) else { return false };
+    let json = bytes.strip_prefix(BYTE_ORDER_MARK).unwrap_or(&bytes);
+    find_required_package(json, manifest.sections, manifest.package).unwrap_or(false)
 }
 
 struct ConfigurationFile {
@@ -505,6 +514,13 @@ fn is_test_shaped(name: &str) -> bool {
     name.as_bytes().windows(4).any(|window| window.eq_ignore_ascii_case(b"test"))
 }
 
+fn find_required_package(json: &[u8], sections: &[&str], package: &str) -> Option<bool> {
+    let document = serde_json::from_slice::<serde_json::Value>(json).ok()?;
+    let document = document.as_object()?;
+    Some(sections.iter().filter_map(|section| document.get(*section)?.as_object())
+            .any(|required| required.keys().any(|name| name.eq_ignore_ascii_case(package))))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -664,5 +680,18 @@ mod tests {
         assert!(read_pytest_configuration(&root.join("bom"), |_| false).is_none(), "a file the listing does not hold was read");
 
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_package_is_required_only_as_a_key_of_a_wanted_section() {
+        let requires = |json: &str| find_required_package(json.as_bytes(), &["require-dev", "require"], "phpunit/phpunit");
+        assert_eq!(Some(true), requires(r#"{"require-dev": {"phpunit/phpunit": "^9.5"}}"#));
+        assert_eq!(Some(true), requires(r#"{"name": "a/b", "require": {"php": ">=7.3", "PHPUnit/PHPUnit": "*"}}"#));
+        assert_eq!(Some(false), requires(r#"{"suggest": {"phpunit/phpunit": "tests"}, "conflict": {"phpunit/phpunit": "<8"}}"#));
+        assert_eq!(Some(false), requires(r#"{"description": "runs phpunit/phpunit", "scripts": {"test": "phpunit/phpunit"}}"#));
+        assert_eq!(Some(false), requires(r#"{"require-dev": [], "require": {"php": ">=8"}}"#), "an empty section written as a list");
+        assert_eq!(None, requires(r#"{"require-dev": {"phpunit/phpunit": "^9.5""#), "an unterminated file was believed");
+        assert_eq!(None, requires(""));
+        assert_eq!(None, requires("[]"));
     }
 }

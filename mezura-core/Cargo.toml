@@ -18,6 +18,7 @@ ignore = "0.4.20"
 glob = "0.3.3"
 crossbeam-deque = "0.8.7"
 include_dir = "0.6.2"
+serde_json = { version = "1", default-features = false, features = ["std"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

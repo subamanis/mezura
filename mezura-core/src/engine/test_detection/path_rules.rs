@@ -11,7 +11,7 @@ use crate::engine::is_the_same_name;
 use crate::engine::path_patterns::{PathPatternMatcher, PatternMatch, TakingBack};
 use crate::engine::targets::spell_out;
 
-use super::tool_configuration::{CONFTEST, PYTEST_CONFIGURATION_FILE_NAMES, read_pytest_configuration};
+use super::tool_configuration::{CONFTEST, PYTEST_CONFIGURATION_FILE_NAMES, manifest_requires_package, read_pytest_configuration};
 
 // Every file of a row has to be present, since an Octave package carries a DESCRIPTION too.
 // 'src/test' is the one directory two levels down, and the walk holds the 'src' as 'JvmSources'.
@@ -48,37 +48,47 @@ const JEST_PATTERNS : [&str; 17] = ["__tests__/", "*.test.js", "*.test.jsx", "*.
 const VITEST_PATTERNS : [&str; 16] = ["*.test.js", "*.test.jsx", "*.test.ts", "*.test.tsx", "*.test.mjs", "*.test.cjs",
         "*.test.mts", "*.test.cts", "*.spec.js", "*.spec.jsx", "*.spec.ts", "*.spec.tsx", "*.spec.mjs", "*.spec.cjs",
         "*.spec.mts", "*.spec.cts"];
+const COMPOSER_REQUIRING_PHPUNIT : DependencyManifest = DependencyManifest { file_name: "composer.json",
+        sections: &["require-dev", "require"], package: "phpunit/phpunit" };
 // A trigger names its tool without being read. It is the tool's own file, a gradle or Perl build
 // file, or vite's, which vitest reads. A 'package.json' says nothing about where the tests are
-// without being read. Pytest's configuration files are the one kind read, and only for the folders
-// and names they declare. '.rspec' needs the 'Gemfile' beside it, or the one in a home directory
-// makes every 'spec' under it test code.
+// without being read. Pytest's configuration files are read for the folders and names they
+// declare, and a 'composer.json' for whether it requires PHPUnit. '.rspec' needs the 'Gemfile'
+// beside it, or the one in a home directory makes every 'spec' under it test code.
 pub(crate) const TEST_PRESETS : [TestPreset; 13] = [
     TestPreset { name: "jest", trigger_files: &["jest.config.js", "jest.config.ts", "jest.config.mjs", "jest.config.mts",
             "jest.config.cjs", "jest.config.cts", "jest.config.json"], companion_file: None, files_declaring_tests: &[],
-            patterns: &JEST_PATTERNS },
+            dependency_manifest: None, patterns: &JEST_PATTERNS },
     TestPreset { name: "vitest", trigger_files: &["vitest.config.js", "vitest.config.mjs", "vitest.config.cjs",
             "vitest.config.ts", "vitest.config.mts", "vitest.config.cts", "vitest.workspace.js", "vitest.workspace.mjs",
             "vitest.workspace.cjs", "vitest.workspace.ts", "vitest.workspace.mts", "vitest.workspace.cts",
             "vitest.workspace.json", "vite.config.js", "vite.config.mjs", "vite.config.cjs", "vite.config.ts",
-            "vite.config.mts", "vite.config.cts"], companion_file: None, files_declaring_tests: &[], patterns: &VITEST_PATTERNS },
+            "vite.config.mts", "vite.config.cts"], companion_file: None, files_declaring_tests: &[], dependency_manifest: None,
+            patterns: &VITEST_PATTERNS },
     TestPreset { name: "mocha", trigger_files: &[".mocharc.cjs", ".mocharc.js", ".mocharc.mjs", ".mocharc.yaml",
-            ".mocharc.yml", ".mocharc.jsonc", ".mocharc.json"], companion_file: None, files_declaring_tests: &[], patterns: &["test/"] },
+            ".mocharc.yml", ".mocharc.jsonc", ".mocharc.json"], companion_file: None, files_declaring_tests: &[],
+            dependency_manifest: None, patterns: &["test/"] },
     TestPreset { name: "pytest", trigger_files: &[CONFTEST], companion_file: None, files_declaring_tests: &PYTEST_CONFIGURATION_FILE_NAMES,
-            patterns: &["test_*.py", "*_test.py", CONFTEST] },
-    TestPreset { name: "unittest", trigger_files: &[], companion_file: None, files_declaring_tests: &[], patterns: &["test*.py"] },
+            dependency_manifest: None, patterns: &["test_*.py", "*_test.py", CONFTEST] },
+    TestPreset { name: "unittest", trigger_files: &[], companion_file: None, files_declaring_tests: &[], dependency_manifest: None,
+            patterns: &["test*.py"] },
     TestPreset { name: "rspec", trigger_files: &[".rspec"], companion_file: Some("Gemfile"), files_declaring_tests: &[],
-            patterns: &["spec/"] },
-    TestPreset { name: "minitest", trigger_files: &[], companion_file: None, files_declaring_tests: &[], patterns: &["test/"] },
+            dependency_manifest: None, patterns: &["spec/"] },
+    TestPreset { name: "minitest", trigger_files: &[], companion_file: None, files_declaring_tests: &[], dependency_manifest: None,
+            patterns: &["test/"] },
     TestPreset { name: "phpunit", trigger_files: &["phpunit.xml", "phpunit.xml.dist", "phpunit.dist.xml"],
-            companion_file: None, files_declaring_tests: &[], patterns: &["tests/", "Tests/", "test/"] },
-    TestPreset { name: "dotnet", trigger_files: &[], companion_file: None, files_declaring_tests: &[], patterns: &["*Tests/", "*.Test/"] },
+            companion_file: None, files_declaring_tests: &[], dependency_manifest: Some(COMPOSER_REQUIRING_PHPUNIT),
+            patterns: &["tests/", "Tests/", "test/"] },
+    TestPreset { name: "dotnet", trigger_files: &[], companion_file: None, files_declaring_tests: &[], dependency_manifest: None,
+            patterns: &["*Tests/", "*.Test/"] },
     TestPreset { name: "gradle", trigger_files: &["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
-            companion_file: None, files_declaring_tests: &[], patterns: &["src/*Test/", "src/testFixtures/"] },
-    TestPreset { name: "jvm", trigger_files: &[], companion_file: None, files_declaring_tests: &[], patterns: &["src/test/"] },
+            companion_file: None, files_declaring_tests: &[], dependency_manifest: None, patterns: &["src/*Test/", "src/testFixtures/"] },
+    TestPreset { name: "jvm", trigger_files: &[], companion_file: None, files_declaring_tests: &[], dependency_manifest: None,
+            patterns: &["src/test/"] },
     TestPreset { name: "xt", trigger_files: &["Makefile.PL", "Build.PL", "dist.ini"], companion_file: None, files_declaring_tests: &[],
-            patterns: &["xt/"] },
-    TestPreset { name: "odin", trigger_files: &[], companion_file: None, files_declaring_tests: &[], patterns: &["*_test.odin"] },
+            dependency_manifest: None, patterns: &["xt/"] },
+    TestPreset { name: "odin", trigger_files: &[], companion_file: None, files_declaring_tests: &[], dependency_manifest: None,
+            patterns: &["*_test.odin"] },
 ];
 const TRIGGER_NAME_LENGTHS : [u64; 256] = build_trigger_name_lengths();
 const BUILD_NAME_LENGTHS : [u64; 256] = build_build_name_lengths();
@@ -86,7 +96,8 @@ const BUILD_NAME_LENGTHS : [u64; 256] = build_build_name_lengths();
 /// A test tool's default names for its test files, as the tool's documentation gives them.
 ///
 /// The walk applies a preset on its own under the directory holding one of its
-/// [`trigger_files`](Self::trigger_files), and reports that in [`crate::RunResult::applied_presets`].
+/// [`trigger_files`](Self::trigger_files), or a [`dependency_manifest`](Self::dependency_manifest)
+/// requiring the tool, and reports that in [`crate::RunResult::applied_presets`].
 /// A caller can also offer a preset by [`name`](Self::name) and put its
 /// [`patterns`](Self::patterns) into [`crate::EngineConfig::test_patterns`], which a preset with
 /// no trigger file is for. The shipped presets come from [`crate::get_test_presets`].
@@ -106,9 +117,24 @@ pub struct TestPreset {
     /// place of [`patterns`](Self::patterns). Only pytest's are read, so the field is empty for every
     /// other tool.
     pub files_declaring_tests: &'static [&'static str],
+    /// A file listing the project's dependencies that turns the preset on when it requires the tool,
+    /// read only where none of the [`trigger_files`](Self::trigger_files) is present.
+    pub dependency_manifest: Option<DependencyManifest>,
     /// The patterns, in the shape [`crate::EngineConfig::test_patterns`] takes. `*.test.ts` is a
     /// file name and `__tests__/` a directory name, both matched at any depth under the trigger.
     pub patterns: &'static [&'static str],
+}
+
+/// The file listing a project's dependencies, and the package in it that says a test tool is in use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct DependencyManifest {
+    /// `composer.json`.
+    pub file_name: &'static str,
+    /// The top-level objects whose keys are the packages required, `require-dev` and `require`.
+    pub sections: &'static [&'static str],
+    /// The tool's package, `phpunit/phpunit`.
+    pub package: &'static str,
 }
 
 // What the path rules said of a file before it is read. Under 'TakenBack' the markers that open
@@ -551,7 +577,14 @@ impl TriggerFilesSeen {
                 let declared = configuration.python_files.clone().map(|names| (names, configuration.file));
                 turned_on.push(build_active_preset(configuration.file, declared, scopes.clone()));
             }
-            let Some(trigger_file) = preset.trigger_files.iter().find(|file| self.holds(file)) else { continue };
+            let trigger_file = match preset.trigger_files.iter().find(|file| self.holds(file)) {
+                Some(file) => *file,
+                None => match preset.dependency_manifest {
+                    Some(manifest) if self.holds(manifest.file_name) && manifest_requires_package(directory, &manifest) =>
+                            manifest.file_name,
+                    _ => continue
+                }
+            };
             if preset.companion_file.is_some_and(|companion| !self.holds(companion)) {
                 continue;
             }
@@ -674,6 +707,9 @@ const fn build_trigger_name_lengths() -> [u64; 256] {
             mark_name_lengths(&mut table, &[companion]);
         }
         mark_name_lengths(&mut table, TEST_PRESETS[preset].files_declaring_tests);
+        if let Some(manifest) = TEST_PRESETS[preset].dependency_manifest {
+            mark_name_lengths(&mut table, &[manifest.file_name]);
+        }
         preset += 1;
     }
     table
@@ -706,7 +742,7 @@ fn has_a_listed_shape(name: &[u8], lengths: &[u64; 256]) -> bool {
 
 fn collect_noted_files() -> impl Iterator<Item = &'static str> {
     TEST_PRESETS.iter().flat_map(|preset| preset.trigger_files.iter().copied().chain(preset.companion_file)
-            .chain(preset.files_declaring_tests.iter().copied()))
+            .chain(preset.files_declaring_tests.iter().copied()).chain(preset.dependency_manifest.map(|manifest| manifest.file_name)))
 }
 
 // Compiled once, since a monorepo turns one preset on in many directories
