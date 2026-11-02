@@ -71,6 +71,12 @@ Change in commands:
   -> A configuration file that declares test patterns, the project's own, a loaded one or the
       default, now silences both the list of applied test presets and the note about a test tool
       whose tests were not found; a '--tests' typed on the command line silences the note only.
+  -> Each argument is now one target, so 'mezura ./src ./tests' counts two directories and a path
+      holding spaces needs quotation marks ('mezura "C:/My Projects"'). A name covers only the
+      paths of its own argument, so 'tests=./a, ./b' leaves './b' unnamed while 'tests=./a,./b'
+      is one module. '--exclude' and '--tests' also take patterns separated by spaces.
+  -> In a configuration's '===> targets' block a line ending in a comma no longer continues onto
+      the next line.
 
 Other:
   -> The first column header of the Details table now shows the number of counted languages or

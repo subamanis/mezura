@@ -117,8 +117,8 @@ Grab the one for your platform from the [latest release](https://github.com/suba
 ```bash
 mezura                                   # count the current directory
 mezura ./src                             # count one directory
-mezura ./src, ./tests                    # count two; commas separate targets
-mezura frontend=./web, backend=./api     # group the report by part (modules)
+mezura ./src ./tests                     # count two directories
+mezura frontend=./web backend=./api      # group the report by part (modules)
 mezura @v3.2.0                           # count a local git tag, branch, or commit
 mezura https://github.com/owner/repo     # count a remote git repository (or ...@v1.0)
 mezura ./src --diff main                 # what changed since main
@@ -222,12 +222,13 @@ Give a target a name and the report is grouped by that name as well as by langua
 ```bash
 mezura frontend=./web backend=./api
 mezura ./project tests=./project/tests
+mezura tests=./api/tests,./web/tests
 ```
 
 Every file belongs to exactly one module and the most specific path wins, so the second example
 means "the tests there, the rest of the project here". Targets that were not explicitly claimed by a module
-are shown under a row called `(unnamed)`. A comma continues a module and a space ends it,
-so `tests=./api/tests,./web/tests` is one module of two directories.
+are shown under a row called `(unnamed)`. Each argument is one target, and a name covers only the paths
+of its own argument. So the third example is one module of two directories.
 
 Each module gets its own block of rows, with its own languages and totals, and the history section
 then records how each module grew.

@@ -60,6 +60,11 @@ pub fn plain_result_of(per_language: HashMap<String, Stats>, modules: Vec<Module
     }
 }
 
+// A command line typed as one string, split the way a shell splits it when no argument holds a space
+pub fn split_typed_line(line: &str) -> Vec<String> {
+    line.split_whitespace().map(str::to_owned).collect()
+}
+
 pub fn install_local_ssh_helper() -> LocalSshGuard {
     let path = if cfg!(windows) {
         let path = std::env::temp_dir().join("mezura-test-git-ssh.bat");

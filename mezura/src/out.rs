@@ -35,6 +35,8 @@ pub fn write_line(args: Arguments) {
             let _ = text.write_fmt(args);
             text.push('\n');
         },
+        // cargo test captures only 'print!' and 'println!', so a test that reaches a printer goes through them
+        None if cfg!(test) => println!("{args}"),
         None => {
             let mut out = std::io::stdout().lock();
             let _ = out.write_fmt(args);
@@ -47,6 +49,7 @@ pub fn write(args: Arguments) {
     let mut held = lock_the_held_text();
     match held.as_mut() {
         Some(text) => { let _ = text.write_fmt(args); },
+        None if cfg!(test) => print!("{args}"),
         None => { let _ = std::io::stdout().write_fmt(args); }
     }
 }

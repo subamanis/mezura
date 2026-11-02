@@ -5,27 +5,62 @@ use mezura_core::{ForcedLanguages, format_module_scope, split_off_module_scope};
 
 use crate::config_manager::ExplainedLines;
 
-// A command line, where a space separates one target from the next only once a module is named. It
-// cannot separate them unconditionally: by the time the arguments arrive the shell has split them
-// and eaten the quotes, so a space inside a path and a space between two paths look identical, and
-// whoever names no module needs a path with a space in it to go on working.
-pub fn parse_targets(s: &str) -> Result<Vec<(Option<String>, String)>, String> {
-    let separated = split_targets(s, char::is_whitespace);
-    let declares_a_module = separated.iter().flat_map(|token| split_at_commas_outside_braces(token))
-            .any(|piece| split_off_module_name(piece.trim()).is_some());
+// A token is one argument of the command line or one line of a configuration file's '===> targets'
+// block. Commas inside it list paths, and a name holds for the paths after it up to the next name or
+// the end of the token. The error is the piece that could not be read, always a name with nothing
+// after it.
+pub fn parse_targets(tokens: &[String]) -> Result<Vec<(Option<String>, String)>, String> {
+    let mut targets = Vec::new();
+    for token in tokens {
+        let mut module: Option<String> = None;
+        for piece in split_at_commas_outside_braces(token) {
+            let piece = piece.trim();
+            if piece.is_empty() {
+                continue;
+            }
 
-    if declares_a_module {
-        parse_target_tokens(separated)
-    } else {
-        parse_target_tokens(vec![s.to_owned()])
+            let path = match split_off_module_name(piece) {
+                Some((name, path)) => {
+                    module = Some(name.to_owned());
+                    path
+                },
+                None => piece
+            };
+
+            match clean_path(path) {
+                Some(path) => targets.push((module.clone(), path)),
+                None => return Err(piece.to_owned())
+            }
+        }
     }
+
+    Ok(targets)
 }
 
-// The '===> targets' block of a configuration file, where the line separates one target from the
-// next and a space never does. That is the way out of the one thing a command line cannot express:
-// a spaced path in a run that names modules. A trailing comma continues the list onto the next line.
-pub fn parse_targets_in_block(block: &str) -> Result<Vec<(Option<String>, String)>, String> {
-    parse_target_tokens(split_targets(block, |character| character == '\n'))
+pub struct Command<'a> {
+    pub name: &'a str,
+    pub arguments: &'a [String]
+}
+
+// An argument that starts with '--' begins a command, and the arguments before the first one are
+// the targets
+pub fn split_into_commands(args: &[String]) -> (&[String], Vec<Command<'_>>) {
+    let starts = args.iter().enumerate().filter(|(_, arg)| arg.starts_with("--")).map(|(i, _)| i).collect::<Vec<_>>();
+    let leading = &args[..starts.first().copied().unwrap_or(args.len())];
+    let commands = starts.iter().enumerate().map(|(position, &at)| {
+        let end = starts.get(position + 1).copied().unwrap_or(args.len());
+        Command { name: &args[at][2..], arguments: &args[at + 1..end] }
+    }).collect();
+    (leading, commands)
+}
+
+pub fn has_command(args: &[String], name: &str) -> bool {
+    args.iter().any(|arg| arg.strip_prefix("--") == Some(name))
+}
+
+pub fn find_argument_of<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
+    let at = args.iter().position(|arg| arg.strip_prefix("--") == Some(name))?;
+    args.get(at + 1).map(String::as_str)
 }
 
 // 'rust,ios/swift'. Kept in the written form, module and all, so that a configuration file's block
@@ -123,65 +158,6 @@ pub fn get_trimmed_if_not_empty(str: &str) -> Option<String> {
     else {Some(str.to_owned())}
 }
 
-// Where a command begins: '--' at the start of the line or after whitespace. A '--' inside a word
-// belongs to the word, since folder names that encode a hierarchy carry them, and splitting on the
-// substring would cut such a target into a piece that does not exist and a command that does not
-// parse. The pieces come back shaped as `line.split("--")` shapes them: one leading piece before any
-// command, then one piece per command.
-pub fn split_into_command_segments(line: &str) -> Vec<&str> {
-    let bytes = line.as_bytes();
-    let mut boundaries = Vec::new();
-    let mut at_token_start = true;
-    let mut i = 0;
-    while i < bytes.len() {
-        if at_token_start && bytes[i..].starts_with(b"--") {
-            boundaries.push(i);
-            i += 2;
-            at_token_start = false;
-            continue;
-        }
-        // Multibyte characters have no ASCII whitespace inside them, so walking bytes cannot split
-        // one, and '-' itself is ASCII
-        at_token_start = bytes[i].is_ascii_whitespace();
-        i += 1;
-    }
-
-    let mut segments = Vec::with_capacity(boundaries.len() + 1);
-    segments.push(&line[..boundaries.first().copied().unwrap_or(line.len())]);
-    for (position, boundary) in boundaries.iter().enumerate() {
-        let end = boundaries.get(position + 1).copied().unwrap_or(line.len());
-        segments.push(&line[boundary + 2..end]);
-    }
-    segments
-}
-
-// The position of '--name' written as a command: after whitespace or at the start, and with
-// whitespace or the end after the name, so that a path containing the text never matches and
-// '--help' does not answer for '--helpme'.
-pub fn find_command(line: &str, name: &str) -> Option<usize> {
-    let mut from = 0;
-    while let Some(found) = line[from..].find("--") {
-        let at = from + found;
-        let starts_a_token = at == 0 || line[..at].chars().last().is_some_and(char::is_whitespace);
-        let after_marker = &line[at + 2..];
-        if starts_a_token && after_marker.starts_with(name) {
-            let after_name = &after_marker[name.len()..];
-            if after_name.is_empty() || after_name.chars().next().is_some_and(char::is_whitespace) {
-                return Some(at);
-            }
-        }
-        from = at + 2;
-    }
-    None
-}
-
-// The word after '--name', when the command is on the line and a word follows it. The '+ 2' is the
-// '--' the position above points at.
-pub fn find_argument_of<'a>(line: &'a str, name: &str) -> Option<&'a str> {
-    let at = find_command(line, name)?;
-    line[at + name.len() + 2..].split_whitespace().next()
-}
-
 fn parse_end_of_a_range(text: &str, when_left_off: usize) -> Option<usize> {
     let text = text.trim();
     if text.is_empty() {
@@ -189,73 +165,6 @@ fn parse_end_of_a_range(text: &str, when_left_off: usize) -> Option<usize> {
     }
 
     text.parse::<usize>().ok()
-}
-
-// A name holds for the rest of the comma list it opened, so 'frontend=./web,./ui' is one module of
-// two directories, and it stops where that list ends so nothing after a named target joins it by
-// accident. Inside the list a name still starts a new one, which is what lets a saved configuration
-// write 'frontend=./web,backend=./api' and read it back as the two targets it was. The error is the
-// piece that could not be read, always a name with nothing after it.
-fn parse_target_tokens(tokens: Vec<String>) -> Result<Vec<(Option<String>, String)>, String> {
-    let mut targets = Vec::new();
-    for token in tokens {
-        let mut module: Option<String> = None;
-        for piece in split_at_commas_outside_braces(&token) {
-            let piece = piece.trim();
-            if piece.is_empty() {
-                continue;
-            }
-
-            let path = match split_off_module_name(piece) {
-                Some((name, path)) => {
-                    module = Some(name.to_owned());
-                    path
-                },
-                None => piece
-            };
-
-            match clean_path(path) {
-                Some(path) => targets.push((module.clone(), path)),
-                None => return Err(piece.to_owned())
-            }
-        }
-    }
-
-    Ok(targets)
-}
-
-// One target ends and the next begins at a separator, while a comma continues the list of paths
-// that belong to the same one. A comma with a gap around it is still a comma, so that gap does not
-// separate: 'tests=./a, ./b' keeps both paths under 'tests' instead of losing the second one to
-// nobody. Which character separates is the caller's to say, since only the caller knows where the
-// text came from.
-fn split_targets(s: &str, is_separator: impl Fn(char) -> bool) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
-    let mut gap = false;
-
-    for character in s.chars() {
-        if character == '"' {
-            in_quotes = !in_quotes;
-        } else if !in_quotes && is_separator(character) {
-            gap = !current.is_empty();
-            continue;
-        }
-
-        if gap {
-            gap = false;
-            if character != ',' && !current.ends_with(',') {
-                tokens.push(std::mem::take(&mut current));
-            }
-        }
-        current.push(character);
-    }
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-
-    tokens
 }
 
 // 'frontend=./web'. The name is whatever comes before the first '=', and only when it could not be
@@ -298,29 +207,37 @@ fn remove_dot_prefix(str: &str) -> &str {
 mod tests {
     use super::*;
 
-    #[test]
-    fn commands_begin_at_token_boundaries_and_nowhere_else() {
-        assert_eq!(vec!["./src ", "threads 2 8 ", "top 5"],
-                split_into_command_segments("./src --threads 2 8 --top 5"));
-        assert_eq!(vec!["", "help"], split_into_command_segments("--help"));
-        assert_eq!(vec!["./src"], split_into_command_segments("./src"));
-
-        assert_eq!(vec!["C:/t/D--dev-Rusty-mezura/scratch"],
-                split_into_command_segments("C:/t/D--dev-Rusty-mezura/scratch"));
-        assert_eq!(vec!["C:/t/my--project ", "threads 1 2"],
-                split_into_command_segments("C:/t/my--project --threads 1 2"));
-        assert_eq!(vec!["", "targets C:/t/a--b, C:/t/c--d ", "top 3"],
-                split_into_command_segments("--targets C:/t/a--b, C:/t/c--d --top 3"));
+    fn args(line: &str) -> Vec<String> {
+        crate::test_support::split_typed_line(line)
     }
 
     #[test]
-    fn a_command_is_found_only_as_a_whole_word() {
-        assert_eq!(Some(0), find_command("--help", "help"));
-        assert_eq!(Some(6), find_command("./src --help style", "help"));
-        assert_eq!(None, find_command("./a--version-dir", "version"));
-        assert_eq!(None, find_command("./x/some--help-docs", "help"));
-        assert_eq!(None, find_command("--helpme", "help"));
-        assert_eq!(None, find_command("--save-theme dark", "save"));
+    fn an_argument_opening_with_two_dashes_begins_a_command_and_nothing_else_does() {
+        let described = |args: &[String]| {
+            let (leading, commands) = split_into_commands(args);
+            (leading.to_vec(), commands.iter().map(|c| (c.name.to_owned(), c.arguments.to_vec())).collect::<Vec<_>>())
+        };
+        let (leading, commands) = described(&args("./src --threads 2 8 --top 5"));
+        assert_eq!(args("./src"), leading);
+        assert_eq!(vec![("threads".to_owned(), args("2 8")), ("top".to_owned(), args("5"))], commands);
+
+        let (leading, commands) = described(&args("--help"));
+        assert!(leading.is_empty());
+        assert_eq!(vec![("help".to_owned(), Vec::new())], commands);
+
+        let (leading, commands) = described(&args("C:/t/my--project --threads 1 2"));
+        assert_eq!(args("C:/t/my--project"), leading);
+        assert_eq!(1, commands.len());
+
+        let (_, commands) = described(&["--log".to_owned(), "a note --about it".to_owned()]);
+        assert_eq!(vec![("log".to_owned(), vec!["a note --about it".to_owned()])], commands);
+
+        assert!(has_command(&args("./src --help style"), "help"));
+        assert!(!has_command(&args("./a--version-dir"), "version"));
+        assert!(!has_command(&args("--helpme"), "help"));
+        assert!(!has_command(&args("--save-theme dark"), "save"));
+        assert_eq!(Some("full"), find_argument_of(&args("--changelog full"), "changelog"));
+        assert_eq!(None, find_argument_of(&args("./src --output"), "output"));
     }
 
     #[test]
@@ -349,44 +266,28 @@ mod tests {
         }
     }
 
-    fn targets(s: &str) -> Vec<(Option<String>, String)> {
-        parse_targets(s).unwrap()
-    }
-
     #[test]
-    pub fn a_space_separates_targets_only_once_one_of_them_is_named() {
+    pub fn each_token_is_one_target_and_a_name_covers_the_paths_after_it_in_its_own_token() {
+        let targets = |tokens: &[&str]| parse_targets(&tokens.iter().map(|x| x.to_string()).collect::<Vec<_>>()).unwrap();
         let named = |name: &str, path: &str| (Some(name.to_owned()), path.to_owned());
         let plain = |path: &str| (None, path.to_owned());
 
-        assert_eq!(vec![plain("C:/Users/John Smith/proj")], targets("C:/Users/John Smith/proj"));
-        assert_eq!(vec![plain("a/a"), plain("b/b")], targets("a/a, b/b"));
-        assert_eq!(vec![plain("./src ./tests")], targets("./src ./tests"));
-        assert_eq!(vec![plain("./py/{src,tests}"), named("web", "./{ui,api}")], targets("./py/{src,tests}, web=./{ui,api}"));
+        assert_eq!(vec![plain("C:/Users/John Smith/proj")], targets(&["C:/Users/John Smith/proj"]));
+        assert_eq!(vec![plain("a/a"), plain("b/b")], targets(&["a/a, b/b"]));
+        assert_eq!(vec![plain("a/a"), plain("b/b")], targets(&["a/a,", "b/b"]));
+        assert_eq!(vec![plain("./src"), plain("./tests")], targets(&["./src", "./tests"]));
+        assert_eq!(vec![plain("./py/{src,tests}"), named("web", "./{ui,api}")], targets(&["./py/{src,tests}, web=./{ui,api}"]));
 
-        assert_eq!(vec![named("frontend", "./web"), named("backend", "./api")],
-                targets("frontend=./web backend=./api"));
-        assert_eq!(vec![plain("./project"), named("tests", "./project/tests")],
-                targets("./project tests=./project/tests"));
-        assert_eq!(vec![named("tests", "./project/tests"), plain("./project")],
-                targets("tests=./project/tests ./project"));
-        assert_eq!(vec![named("f", "./web"), named("f", "./ui"), named("b", "./api")],
-                targets("f=./web,./ui b=./api"));
-        assert_eq!(vec![named("f", "./web"), named("f", "./ui")], targets("f=./web, ./ui"));
-    }
-
-    #[test]
-    pub fn a_line_is_what_ends_a_target_in_a_configuration_block() {
-        let parsed = |s: &str| parse_targets_in_block(s).unwrap();
-        assert_eq!(vec![(Some("frontend".to_owned()), "C:/my path/web".to_owned()),
-                        (Some("backend".to_owned()), "C:/my path/api".to_owned())],
-                parsed("frontend=C:/my path/web\nbackend=C:/my path/api"));
-
-        assert_eq!(vec![(None, "C:/Users/John Smith/proj".to_owned()), (None, "D:/other".to_owned())],
-                parsed("C:/Users/John Smith/proj,D:/other"));
-
-        assert_eq!(vec![(Some("tests".to_owned()), "./api/tests".to_owned()),
-                        (Some("tests".to_owned()), "./web/tests".to_owned())],
-                parsed("tests=./api/tests,\n./web/tests"));
+        assert_eq!(vec![named("frontend", "./web"), named("backend", "./api")], targets(&["frontend=./web", "backend=./api"]));
+        assert_eq!(vec![plain("./project"), named("tests", "./project/tests")], targets(&["./project", "tests=./project/tests"]));
+        assert_eq!(vec![named("tests", "./project/tests"), plain("./project")], targets(&["tests=./project/tests", "./project"]));
+        assert_eq!(vec![named("f", "./web"), named("f", "./ui"), named("b", "./api")], targets(&["f=./web,./ui", "b=./api"]));
+        assert_eq!(vec![named("f", "./web"), named("f", "./ui")], targets(&["f=./web, ./ui"]));
+        assert_eq!(vec![named("f", "./web"), plain("./ui")], targets(&["f=./web,", "./ui"]));
+        assert_eq!(vec![named("frontend", "C:/my path/web"), named("backend", "C:/my path/api")],
+                targets(&["frontend=C:/my path/web", "backend=C:/my path/api"]));
+        assert_eq!(vec![plain("C:/my path/web"), plain("D:/other")], targets(&["\"C:/my path/web\"", "D:/other"]));
+        assert_eq!(Err("code=".to_owned()), parse_targets(&["code=".to_owned()]));
     }
 
     #[test]

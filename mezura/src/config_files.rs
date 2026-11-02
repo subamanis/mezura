@@ -89,11 +89,11 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
 
             match id.as_str() {
                 config_manager::TARGETS => {
-                    // The line ends a target here and a space never does, so a path with one in it
-                    // needs no quoting. A target that does not parse would silently not be counted,
-                    // so it stops the run rather than warning.
+                    // A line is one target, as an argument is on the command line, so a path with a
+                    // space in it needs no quoting. A target that does not parse would silently not be
+                    // counted, so it stops the run.
                     let declared = read_lines_from_file_to_vec(&mut reader, &mut buf, |line| vec![line.trim().to_owned()]);
-                    match super::args::parse_targets_in_block(&declared.join("\n")) {
+                    match super::args::parse_targets(&declared) {
                         Ok(parsed) if !parsed.is_empty() => builder.targets = Some(parsed.into_iter()
                                 .map(|(module, path)| Target { module, path }).collect()),
                         Ok(_) => {},
@@ -534,7 +534,7 @@ mod tests {
                 --count-not-code --no-heuristics --no-shebang --tests-breakdown split \
                 --tests spec, !spec/fixtures, ./gen, @xt \
                 --style code-number=green,comments-label=magenta bold,arrow=default dim".to_string();
-        let mut config_builder = config_manager::create_config_builder_from_args(&command).unwrap();
+        let mut config_builder = config_manager::create_config_builder_from_args(&crate::test_support::split_typed_line(&command)).unwrap();
 
         std::fs::create_dir_all(SCRATCH_CONFIG_DIR)?;
         let test_config_dir = Some(SCRATCH_CONFIG_DIR.to_owned());
@@ -778,7 +778,7 @@ mod tests {
         std::fs::write(&path, "===> targets\ntests=D:/x/api/tests,\nD:/x/web/tests\n")?;
         let (options, _) = parse_config_file(Some("targets-block"), Some(dir.clone())).unwrap();
         assert_eq!(Some(vec![Target::named("tests", "D:/x/api/tests"),
-                Target::named("tests", "D:/x/web/tests")]), options.targets);
+                Target::of("D:/x/web/tests")]), options.targets);
 
         std::fs::write(&path, "===> targets\nfrontend=\n")?;
         let (options, issues) = parse_config_file(Some("targets-block"), Some(dir)).unwrap();

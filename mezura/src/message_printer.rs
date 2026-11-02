@@ -28,8 +28,8 @@ pub const TARGETS_HELP  :  &str =
 "--targets
     the directories and files to count, and the names to group them under (modules)
 
-    1..n paths to directories or files, separated by commas:
-    '--targets <path1>, <path2>'
+    1..n paths to directories or files, separated by spaces or commas, as in
+    '--targets <path1> <path2>'.
 
     A path can be a glob pattern (* ? [..]), so 'services/*/src' is a target. A path that
     exists exactly as written is taken literally, so a directory named with one of those characters
@@ -46,8 +46,7 @@ pub const TARGETS_HELP  :  &str =
     like any other found path (see '--no-gitignore', '--search-in-dotted', '--count-minified',
     '--count-generated' and '--count-not-code').
 
-    In Windows Powershell the commas need a backtick, or the whole list needs quotation marks:
-    <path1>`, <path2>`, <path3>   or   \"<path1>, <path2>, <path3>\"
+    A path holding spaces goes in quotation marks, as in mezura \"C:/My Projects/app\" ./lib.
 
     Targets can also be given as the first arguments of the program, or in a configuration file.
 
@@ -58,9 +57,10 @@ pub const TARGETS_HELP  :  &str =
         mezura frontend=./web backend=./api
         mezura ./project tests=./project/tests
 
-    A comma continues one module and a space ends it, so 'tests=./api/tests,./web/tests' is one
-    module of two directories while 'frontend=./web ./ui' is the module and a separate unnamed
-    target. Repeating a name adds to it, and one path under two names is refused.
+    Each argument is one target, and a name covers only the paths of its own argument. So
+    'tests=./api/tests,./web/tests' is one module of two directories, and in
+    'frontend=./web ./ui' the './ui' is unnamed. Repeating a name adds to it, and one path under
+    two names is refused.
 
     Every file belongs to one module and the most specific path wins, so the second example means
     'the tests there, the rest of the project here' in either order. Files that were not claimed by
@@ -68,16 +68,12 @@ pub const TARGETS_HELP  :  &str =
     columns in 'matrix') as well as the languages inside each module; under '--sort name' and on
     ties '(unnamed)' comes last.
 
-    Once anything is named a space ends a target, so a path holding spaces cannot be written
-    beside modules: the shell takes the quotation marks away before mezura sees them. Put those
-    in a configuration file, one target per line.
-
 ";
 pub const EXCLUDE_HELP  :  &str =
 "--exclude
     paths to leave out, as glob patterns
 
-    1..n glob patterns separated by commas.
+    1..n glob patterns separated by spaces or commas.
 
     What a pattern names is left out whole, and a directory left out is never entered. A pattern
     starting with './' or '../', or carrying a root or a drive, names one place and everything
@@ -98,17 +94,13 @@ pub const EXCLUDE_HELP  :  &str =
     In a project's own configuration the patterns are read from the project directory, so they
     say the same thing from wherever inside the project the command is typed.
 
-    If you are using Windows Powershell, you will need to escape the commas with a backtick: `
-    or surround all the arguments with quotation marks:
-    <arg1>`, <arg2>`, <arg3>   or   \"<arg1>, <arg2>, <arg3>\"
-
 ";
 pub const TESTS_HELP  :  &str =
 "--tests
     files and directories to count as test code, as glob patterns
 
-    1..n glob patterns separated by commas. A '!' in front of one takes back what an earlier
-    pattern, a preset, a build tool or a toolchain's file name declared.
+    1..n glob patterns separated by spaces or commas. A '!' in front of one takes back what an
+    earlier pattern, a preset, a build tool or a toolchain's file name declared.
 
     What a pattern names is counted as test code whole, the files of a directory included. A
     pattern starting with './' or '../', or carrying a root or a drive, names one place and
@@ -140,11 +132,8 @@ pub const TESTS_HELP  :  &str =
     say the same thing from wherever inside the project the command is typed. '--hide tests'
     turns the detection off, patterns included.
 
-    If you are using Windows Powershell, you will need to escape the commas with a backtick: `
-    or surround all the arguments with quotation marks:
-    <arg1>`, <arg2>`, <arg3>   or   \"<arg1>, <arg2>, <arg3>\"
-    A preset goes in quotation marks there too, \"@pytest\", since PowerShell reads a word
-    starting with '@' as a variable and passes nothing.
+    In PowerShell a preset goes in quotation marks, \"@pytest\". PowerShell reads a word starting
+    with '@' as a variable and passes nothing.
 
     In bash and zsh a pattern holding '!' goes in single quotes, --tests 'spec,!spec/fixtures',
     since inside double quotes those shells read '!' as a history lookup, \"event not found\".
@@ -1618,10 +1607,10 @@ fn print_the_help(body: &str) {
     outln!("{msg}");
 }
 
-pub fn print_help_message_for_given_args(args_line: &str) {
-    let options = crate::args::split_into_command_segments(args_line).into_iter().skip(1).collect::<Vec<_>>();
-    if options.len() == 1 {
-        match options[0].split_whitespace().nth(1) {
+pub fn print_help_message_for_given_args(args: &[String]) {
+    let (_, commands) = crate::args::split_into_commands(args);
+    if commands.len() == 1 {
+        match commands[0].arguments.first().map(String::as_str) {
             Some("full") => print_whole_help_message(),
             _ => print_the_command_list(),
         }
@@ -1632,8 +1621,8 @@ pub fn print_help_message_for_given_args(args_line: &str) {
     // skipped once. Past that a name is answered once, however many times it was typed.
     let mut command_itself_skipped = false;
     let mut asked : Vec<&str> = Vec::new();
-    for option in options {
-        let Some(name) = option.split_whitespace().next() else { continue };
+    for command in commands {
+        let name = command.name;
         if name == HELP && !command_itself_skipped {
             command_itself_skipped = true;
             continue;

@@ -81,7 +81,7 @@ fn main() -> ExitCode {
     // and a typed target beats the one a configuration names, so no configuration could supply the
     // targets of a run that names none. The working directory answers for that run inside
     // 'create_config_builder_from_args', after every configuration has had its say.
-    let args_str = measure(Step::Args, read_args_as_str);
+    let args = measure(Step::Args, read_args);
 
     // Forced here so that finding the data directory is a step of its own.
     measure(Step::Paths, || LazyLock::force(&crate::paths::PERSISTENT_APP_PATHS));
@@ -89,7 +89,7 @@ fn main() -> ExitCode {
     // Before the languages are read, or the run that performs it counts with the old files and the
     // change takes two runs to arrive. Skipped for '--restore', which performs this same pass
     // itself and exists in order to report it.
-    let restore_was_asked_for = crate::args::find_command(&args_str, RESTORE).is_some();
+    let restore_was_asked_for = crate::args::has_command(&args, RESTORE);
     let outcome = measure(Step::Migration, || if restore_was_asked_for {MigrationOutcome::default()}
             else {migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, false)});
     for message in [outcome.format_restored(), outcome.format_replaced(), outcome.format_updated(),
@@ -101,11 +101,11 @@ fn main() -> ExitCode {
     let languages_available = measure(Step::Languages,
             || read_available_languages(&outcome, restore_was_asked_for));
 
-    if let Some(code) = handle_message_only_command(&args_str, &languages_available) {
+    if let Some(code) = handle_message_only_command(&args, &languages_available) {
         return code;
     }
 
-    let mut config = match measure(Step::Config, || config_manager::create_config_from_args(&args_str)) {
+    let mut config = match measure(Step::Config, || config_manager::create_config_from_args(&args)) {
         Ok(config) => config,
         Err(x) => {
             eprintln!("\n{}\n",x.format());
@@ -498,18 +498,18 @@ fn open_in_browser(path: &str) {
     }
 }
 
-fn read_args_as_str() -> String {
+fn read_args() -> Vec<String> {
     std::env::args().skip(1)
             .filter_map(|arg| crate::args::get_trimmed_if_not_empty(&arg))
-            .collect::<Vec<String>>().join(" ")
+            .collect()
 }
 
 // These commands take no configuration, so nothing could hide the version line from them, and they
 // are the only place the version of an installed binary can be read. 'None' means the arguments are
 // not one of them and not that nothing went wrong: three of the branches below report a mistake and
 // stop the run with a failure.
-fn handle_message_only_command(args_str: &str, languages_available: &[Language]) -> Option<ExitCode> {
-    let is_present = |command: &str| crate::args::find_command(args_str, command).is_some();
+fn handle_message_only_command(args: &[String], languages_available: &[Language]) -> Option<ExitCode> {
+    let is_present = |command: &str| crate::args::has_command(args, command);
     // The one list that decides which command answers when several were typed: the first one
     // present wins, the refusal below names it, and the match below runs it.
     let message_command = [HELP, VERSION, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, RESTORE,
@@ -519,7 +519,7 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
     // thing written: 'mezura --output json --version > stats.json' leaves a file named for a document
     // that holds a version line, and nothing says it is not one until something tries to parse it.
     // The help is the one exception, since a command typed beside '--help' is what it is asked about.
-    if message_command != HELP && let Some(document) = find_document_asked_for(args_str) {
+    if message_command != HELP && let Some(document) = find_document_asked_for(args) {
         eprintln!("\n{}\n", crate::theme::get_active().error.paint(&crate::message_printer::wrap_message(&format!(
                 "'--{message_command}' prints a message to read and '{document}' writes a document, and both \
                         of them go to the output, so only one of the two can be asked for at a time."))));
@@ -538,10 +538,10 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
 
     match message_command {
         HELP => {
-            crate::message_printer::print_help_message_for_given_args(args_str);
+            crate::message_printer::print_help_message_for_given_args(args);
             Some(ExitCode::SUCCESS)
         },
-        CHANGELOG => match crate::args::find_argument_of(args_str, CHANGELOG) {
+        CHANGELOG => match crate::args::find_argument_of(args, CHANGELOG) {
             Some("full") => {
                 crate::message_printer::print_changelog(true);
                 Some(ExitCode::SUCCESS)
@@ -618,12 +618,12 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
             // The preview follows '--layout' and '--counting', so that what it shows is what a run
             // would print. Read here by hand, because a message-only command runs before there is a
             // configuration to ask.
-            let layout = crate::args::find_argument_of(args_str, LAYOUT)
+            let layout = crate::args::find_argument_of(args, LAYOUT)
                     .and_then(config_manager::Layout::parse).unwrap_or_default();
-            let counting = crate::args::find_argument_of(args_str, COUNTING)
+            let counting = crate::args::find_argument_of(args, COUNTING)
                     .and_then(CountingModel::parse).unwrap_or_default();
 
-            match crate::args::find_argument_of(args_str, SHOW_THEMES) {
+            match crate::args::find_argument_of(args, SHOW_THEMES) {
                 Some(arg) if !arg.starts_with("--") => match config_manager::BarThickness::parse(arg) {
                     Some(thickness) => {
                         crate::message_printer::print_existing_themes(thickness, layout, counting);
@@ -647,11 +647,11 @@ fn handle_message_only_command(args_str: &str, languages_available: &[Language])
 }
 
 // The command that makes the output a document, when one was typed
-fn find_document_asked_for(args_str: &str) -> Option<&'static str> {
-    match crate::args::find_argument_of(args_str, OUTPUT).and_then(OutputFormat::parse) {
+fn find_document_asked_for(args: &[String]) -> Option<&'static str> {
+    match crate::args::find_argument_of(args, OUTPUT).and_then(OutputFormat::parse) {
         Some(OutputFormat::Json) => Some("--output json"),
         Some(OutputFormat::Html) => Some("--output html"),
-        _ => crate::args::find_command(args_str, BADGE).map(|_| "--badge")
+        _ => crate::args::has_command(args, BADGE).then_some("--badge")
     }
 }
 
@@ -662,16 +662,17 @@ mod tests {
 
     #[test]
     fn a_document_is_asked_for_by_output_json_or_html_or_by_badge() {
-        assert_eq!(Some("--output json"), crate::find_document_asked_for("./src --output json"));
-        assert_eq!(Some("--output json"), crate::find_document_asked_for("--output JSON --version"));
-        assert_eq!(Some("--output html"), crate::find_document_asked_for("./src --output html --version"));
-        assert_eq!(Some("--badge"), crate::find_document_asked_for("./src --badge card --version"));
-        assert_eq!(None, crate::find_document_asked_for("./src --output text --version"));
-        assert_eq!(None, crate::find_document_asked_for("./src --version"));
-        assert_eq!(None, crate::find_document_asked_for("./src --output jsonn --version"));
-        assert_eq!(None, crate::find_document_asked_for("./src --badges --version"));
+        let asked_for = |line: &str| crate::find_document_asked_for(&crate::test_support::split_typed_line(line));
+        assert_eq!(Some("--output json"), asked_for("./src --output json"));
+        assert_eq!(Some("--output json"), asked_for("--output JSON --version"));
+        assert_eq!(Some("--output html"), asked_for("./src --output html --version"));
+        assert_eq!(Some("--badge"), asked_for("./src --badge card --version"));
+        assert_eq!(None, asked_for("./src --output text --version"));
+        assert_eq!(None, asked_for("./src --version"));
+        assert_eq!(None, asked_for("./src --output jsonn --version"));
+        assert_eq!(None, asked_for("./src --badges --version"));
         // '--output' written last of all, with nothing to read after it
-        assert_eq!(None, crate::find_document_asked_for("./src --output"));
+        assert_eq!(None, asked_for("./src --output"));
     }
 
     fn java_and_csharp() -> Vec<Language> {

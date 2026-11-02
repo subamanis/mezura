@@ -1216,9 +1216,9 @@ impl ConfigurationBuilder {
     }
 }
 
-// An empty line is a run that typed nothing at all, which names no target and no command.
-pub fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
-    let builder = create_config_builder_from_args(line)?;
+// No arguments at all is a run that typed nothing, which names no target and no command.
+pub fn create_config_from_args(args: &[String]) -> Result<Configuration, ArgParsingError> {
+    let builder = create_config_builder_from_args(args)?;
     let config = builder.build();
     if let Some(name) = &builder.preset_name_to_save {
         save_the_test_preset(name, &config.engine.test_patterns.patterns);
@@ -1339,15 +1339,15 @@ pub fn is_default_config_name(name: &str) -> bool {
     name.trim().eq_ignore_ascii_case(DEFAULT_CONFIG_LABEL)
 }
 
-pub fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilder, ArgParsingError> {
-    create_config_builder_from_args_with_configs_in(line, &crate::paths::PERSISTENT_APP_PATHS.config_dir)
+pub fn create_config_builder_from_args(args: &[String]) -> Result<ConfigurationBuilder, ArgParsingError> {
+    create_config_builder_from_args_with_configs_in(args, &crate::paths::PERSISTENT_APP_PATHS.config_dir)
 }
 
-fn create_config_builder_from_args_with_configs_in(line: &str, config_dir: &str)
+fn create_config_builder_from_args_with_configs_in(args: &[String], config_dir: &str)
 -> Result<ConfigurationBuilder, ArgParsingError>
 {
     let ParsedCommandLine { builder: mut config_builder, name_to_load, name_to_save, load_is_default, save_is_default,
-            save_local, no_local, no_default_config } = parse_command_line(line)?;
+            save_local, no_local, no_default_config } = parse_command_line(args)?;
     let saves_another_config = config_builder.config_name_to_save.is_some();
     let names_another_config = config_builder.config_name_to_load.is_some() || saves_another_config;
     let mut custom_config = name_to_load.as_deref().map(|name| parse_named_config_file(name, config_dir)).transpose()?;
@@ -1568,29 +1568,25 @@ struct ParsedCommandLine {
     no_default_config:  bool
 }
 
-fn parse_command_line(line: &str) -> Result<ParsedCommandLine, ArgParsingError> {
+fn parse_command_line(args: &[String]) -> Result<ParsedCommandLine, ArgParsingError> {
     let mut config_builder = ConfigurationBuilder::default();
-    let mut options = super::args::split_into_command_segments(line).into_iter();
+    let (leading, commands) = super::args::split_into_commands(args);
 
-    // The first segment holds the targets when they were written without '--targets'. It is empty
-    // for a line that opens with a command, and for a line that is empty because nothing at all was
-    // typed, and both of those leave the targets for a configuration file to name.
-    if line.trim().starts_with("--") {
-        options.next();
-    } else {
-        let parsed = parse_targets(options.next().unwrap_or_default())?;
-        if !parsed.is_empty() {
-            config_builder.targets = Some(parsed);
-        }
+    // The arguments before the first command are the targets, when any were typed. None at all
+    // leaves the targets for a configuration file to name.
+    let parsed = parse_targets(leading)?;
+    if !parsed.is_empty() {
+        config_builder.targets = Some(parsed);
     }
 
     let (mut save_local, mut no_local, mut no_default_config) = (false, false, false);
     let mut seen_commands = HashSet::new();
-    for command in options {
-        let (command_name, arguments) = match command.find(" ") {
-            Some(index) => command.split_at(index),
-            None => (command.trim(), "")
-        };
+    for command in commands {
+        let command_name = command.name;
+        // '--targets', '--exclude' and '--tests' read each argument as a list of its own, and every
+        // other command reads its arguments joined into one text
+        let joined = command.arguments.join(" ");
+        let arguments = joined.as_str();
         if !seen_commands.insert(command_name.to_owned()) {
             return Err(ArgParsingError::RepeatedCommand(command_name.to_owned()));
         }
@@ -1600,7 +1596,7 @@ fn parse_command_line(line: &str) -> Result<ParsedCommandLine, ArgParsingError> 
                     return Err(ArgParsingError::DoublePath);
                 }
 
-                let parsed = parse_targets(arguments)?;
+                let parsed = parse_targets(command.arguments)?;
                 if parsed.is_empty() {
                     message_printer::print_help_message_for_command(TARGETS);
                     return Err(refuse_argument(arguments, TARGETS.to_owned()));
@@ -1608,9 +1604,9 @@ fn parse_command_line(line: &str) -> Result<ParsedCommandLine, ArgParsingError> 
                 config_builder.targets = Some(parsed)
             },
             EXCLUDE => config_builder.exclude_patterns = Some(PathPatterns::of(
-                    parse_patterns_or_refuse(EXCLUDE, arguments, check_exclude_patterns)?.patterns)),
+                    parse_patterns_or_refuse(EXCLUDE, command.arguments, check_exclude_patterns)?.patterns)),
             TESTS => {
-                let expanded = parse_patterns_or_refuse(TESTS, arguments, expand_and_check_test_patterns)?;
+                let expanded = parse_patterns_or_refuse(TESTS, command.arguments, expand_and_check_test_patterns)?;
                 config_builder.test_patterns = Some(PathPatterns::of(expanded.patterns));
                 config_builder.test_patterns_from_presets = expanded.from_presets;
             },
@@ -1624,12 +1620,12 @@ fn parse_command_line(line: &str) -> Result<ParsedCommandLine, ArgParsingError> 
                     |x| super::args::parse_two_usize_values(x, Threads::MIN_PRODUCERS, Threads::MAX_PRODUCERS,
                             Threads::MIN_CONSUMERS, Threads::MAX_CONSUMERS).map(Threads::from))?),
             COUNTING => config_builder.counting = Some(parse_or_refuse(COUNTING, arguments, CountingModel::parse)?),
-            SEARCH_IN_DOTTED => config_builder.should_search_in_dotted = Some(take_flag(command, SEARCH_IN_DOTTED)?),
-            COUNT_MINIFIED => config_builder.count_minified = Some(take_flag(command, COUNT_MINIFIED)?),
-            COUNT_GENERATED => config_builder.count_generated = Some(take_flag(command, COUNT_GENERATED)?),
-            COUNT_NOT_CODE => config_builder.count_not_code = Some(take_flag(command, COUNT_NOT_CODE)?),
-            SHOW_FAULTY_FILES => config_builder.should_show_faulty_files = Some(take_flag(command, SHOW_FAULTY_FILES)?),
-            SHOW_SKIPPED => config_builder.should_show_skipped_files = Some(take_flag(command, SHOW_SKIPPED)?),
+            SEARCH_IN_DOTTED => config_builder.should_search_in_dotted = Some(take_flag(arguments,SEARCH_IN_DOTTED)?),
+            COUNT_MINIFIED => config_builder.count_minified = Some(take_flag(arguments,COUNT_MINIFIED)?),
+            COUNT_GENERATED => config_builder.count_generated = Some(take_flag(arguments,COUNT_GENERATED)?),
+            COUNT_NOT_CODE => config_builder.count_not_code = Some(take_flag(arguments,COUNT_NOT_CODE)?),
+            SHOW_FAULTY_FILES => config_builder.should_show_faulty_files = Some(take_flag(arguments,SHOW_FAULTY_FILES)?),
+            SHOW_SKIPPED => config_builder.should_show_skipped_files = Some(take_flag(arguments,SHOW_SKIPPED)?),
             HIDE => {
                 if arguments.trim().is_empty() {
                     message_printer::print_help_message_for_command(HIDE);
@@ -1643,10 +1639,10 @@ fn parse_command_line(line: &str) -> Result<ParsedCommandLine, ArgParsingError> 
                     }
                 }
             },
-            NO_GITIGNORE => config_builder.no_gitignore = Some(take_flag(command, NO_GITIGNORE)?),
-            NO_IGNORE_FILES => config_builder.no_ignore_files = Some(take_flag(command, NO_IGNORE_FILES)?),
-            NO_HEURISTICS => config_builder.no_heuristics = Some(take_flag(command, NO_HEURISTICS)?),
-            NO_SHEBANG => config_builder.no_shebang = Some(take_flag(command, NO_SHEBANG)?),
+            NO_GITIGNORE => config_builder.no_gitignore = Some(take_flag(arguments,NO_GITIGNORE)?),
+            NO_IGNORE_FILES => config_builder.no_ignore_files = Some(take_flag(arguments,NO_IGNORE_FILES)?),
+            NO_HEURISTICS => config_builder.no_heuristics = Some(take_flag(arguments,NO_HEURISTICS)?),
+            NO_SHEBANG => config_builder.no_shebang = Some(take_flag(arguments,NO_SHEBANG)?),
             THEME => {
                 let name = take_name(THEME, arguments)?;
                 if super::theme_files::load_theme(&name, &crate::paths::PERSISTENT_APP_PATHS.themes_dir).is_none() {
@@ -1701,9 +1697,9 @@ fn parse_command_line(line: &str) -> Result<ParsedCommandLine, ArgParsingError> 
                     |x| Some(x.trim().to_owned()).filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case(STOCK_LOOK_THEME)))?),
             SAVE_PRESET => config_builder.preset_name_to_save = Some(parse_or_refuse(SAVE_PRESET, arguments,
                     |x| Some(x.trim().to_owned()).filter(|name| can_name_a_preset(name) && !is_a_shipped_name(name)))?),
-            SAVE_LOCAL => save_local = take_flag(command, SAVE_LOCAL)?,
-            NO_LOCAL => no_local = take_flag(command, NO_LOCAL)?,
-            NO_DEFAULT_CONFIG => no_default_config = take_flag(command, NO_DEFAULT_CONFIG)?,
+            SAVE_LOCAL => save_local = take_flag(arguments,SAVE_LOCAL)?,
+            NO_LOCAL => no_local = take_flag(arguments,NO_LOCAL)?,
+            NO_DEFAULT_CONFIG => no_default_config = take_flag(arguments,NO_DEFAULT_CONFIG)?,
             _ => return Err(ArgParsingError::UnrecognisedCommand(command_name.to_owned()))
         }
     }
@@ -1747,11 +1743,12 @@ fn parse_or_refuse<T>(command: &str, arguments: &str,
 }
 
 // A place is stored absolute, as a target is, so a saved configuration names it from anywhere
-fn parse_patterns_or_refuse(command: &str, arguments: &str,
+fn parse_patterns_or_refuse(command: &str, arguments: &[String],
         check: impl FnOnce(Vec<String>) -> Result<ExpandedPatterns, String>) -> Result<ExpandedPatterns, ArgParsingError>
 {
-    parse_or_refuse(command, arguments, |arguments| {
-        let written = Some(super::args::parse_paths_to_vec(arguments)).filter(|vec| !vec.is_empty())?;
+    parse_or_refuse(command, &arguments.join(" "), |_| {
+        let written = Some(arguments.iter().flat_map(|argument| super::args::parse_paths_to_vec(argument))
+                .collect::<Vec<_>>()).filter(|vec| !vec.is_empty())?;
         match check(written) {
             Ok(checked) => Some(ExpandedPatterns { patterns: absolutize_path_patterns(&checked.patterns),
                     from_presets: absolutize_path_patterns(&checked.from_presets) }),
@@ -1829,8 +1826,8 @@ fn build_the_look_of(config: &ConfigurationBuilder) -> Theme {
             config.styles.as_deref().unwrap_or_default())
 }
 
-fn take_flag(segment: &str, command: &str) -> Result<bool, ArgParsingError> {
-    if has_any_args(segment) {
+fn take_flag(arguments: &str, command: &str) -> Result<bool, ArgParsingError> {
+    if !arguments.is_empty() {
         message_printer::print_help_message_for_command(command);
         return Err(ArgParsingError::UnexpectedCommandArgs(command.to_owned()));
     }
@@ -2378,15 +2375,11 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(builder: &Config
     }
 }
 
-fn has_any_args(command: &str) -> bool {
-    command.split(' ').skip(1).filter_map(super::args::get_trimmed_if_not_empty).count() != 0
-}
-
 // Only the half of resolution that no setting can change, so a typed path that names nothing is
 // refused the moment it was typed. Patterns are expanded by the run itself, under the flags of the
 // merged configuration it is handed.
-fn parse_targets(s: &str) -> Result<Vec<Target>, ArgParsingError> {
-    let declared = super::args::parse_targets(s).map_err(ArgParsingError::MalformedTarget)?
+fn parse_targets(tokens: &[String]) -> Result<Vec<Target>, ArgParsingError> {
+    let declared = super::args::parse_targets(tokens).map_err(ArgParsingError::MalformedTarget)?
             .into_iter().map(|(module, path)| Target { module, path }).collect::<Vec<_>>();
     let mut resolved = Vec::with_capacity(declared.len());
     for mut target in declared {
@@ -2603,11 +2596,25 @@ mod tests {
     use super::super::theme::Style;
     use super::*;
 
+    // The entry points taking the command line as one typed line, so that a test reads the way the
+    // command is typed. No test here holds a path with a space in it.
+    fn create_config_from_args(line: &str) -> Result<Configuration, ArgParsingError> {
+        super::create_config_from_args(&crate::test_support::split_typed_line(line))
+    }
+
+    fn create_config_builder_from_args(line: &str) -> Result<ConfigurationBuilder, ArgParsingError> {
+        super::create_config_builder_from_args(&crate::test_support::split_typed_line(line))
+    }
+
+    fn create_config_builder_from_args_with_configs_in(line: &str, config_dir: &str) -> Result<ConfigurationBuilder, ArgParsingError> {
+        super::create_config_builder_from_args_with_configs_in(&crate::test_support::split_typed_line(line), config_dir)
+    }
+
     // Rendered back into the form they were declared in, so that a test reads the same way whether
     // the target was named or not. Nothing is expanded: that belongs to the run and is asserted in
     // the engine's own tests.
     fn parse_targets(s: &str) -> Result<Vec<String>, ArgParsingError> {
-        super::parse_targets(s).map(|targets| targets.iter().map(Target::to_string).collect())
+        super::parse_targets(&crate::test_support::split_typed_line(s)).map(|targets| targets.iter().map(Target::to_string).collect())
     }
 
     // The counting driven the way 'main' drives it, with the language files read from the checkout
@@ -2648,8 +2655,8 @@ mod tests {
     #[test]
     fn every_way_a_command_line_can_be_wrong_is_reported_as_its_own_mistake() {
         assert_eq!(Err(ArgParsingError::InvalidPath("random".to_owned())), create_config_from_args("random"));
-        assert_eq!(Err(ArgParsingError::InvalidPath("./ random".to_owned())), create_config_from_args("./ random"));
-        assert_eq!(Err(ArgParsingError::InvalidPath("./ -show-faulty-files".to_owned())), create_config_from_args("--targets ./ -show-faulty-files"));
+        assert_eq!(Err(ArgParsingError::InvalidPath("random".to_owned())), create_config_from_args("./ random"));
+        assert_eq!(Err(ArgParsingError::InvalidPath("-show-faulty-files".to_owned())), create_config_from_args("--targets ./ -show-faulty-files"));
         assert_eq!(Err(ArgParsingError::UnrecognisedCommand("random".to_owned())), create_config_from_args("--random"));
         assert_eq!(Err(ArgParsingError::UnrecognisedCommand("random".to_owned())), create_config_from_args("--targets ./ --random"));
         assert_eq!(Err(ArgParsingError::DoublePath), create_config_from_args("./ --targets ./"));
@@ -2718,6 +2725,8 @@ mod tests {
                 create_config_from_args("./ --show-faulty-files").unwrap());
         assert_eq!(conf("./", |c| {c.engine.exclude_patterns = PathPatterns::of(["a", "b", "c"]); c.typed_explicitly.exclude = true;}),
                 create_config_from_args("./ --exclude a,b ,  c ").unwrap());
+        assert_eq!(conf("./", |c| {c.engine.exclude_patterns = PathPatterns::of(["a", "b"]); c.typed_explicitly.exclude = true;}),
+                create_config_from_args("./ --exclude a b").unwrap(), "a space did not separate two exclusions the way it separates two targets");
         assert_eq!(conf("./", |c| {c.engine.exclude_patterns = PathPatterns::of(["a/path", "b/path"]); c.typed_explicitly.exclude = true;}),
                 create_config_from_args("./ --exclude \"a/path\", \"b/path\"").unwrap());
         let cwd = crate::paths::normalise_separators(&std::env::current_dir().unwrap().to_string_lossy()).into_owned();
@@ -2878,20 +2887,9 @@ mod tests {
     }
 
     #[test]
-    fn a_command_followed_by_nothing_but_spaces_was_given_no_arguments() {
-        assert!(has_any_args("cmnd a"));
-        assert!(has_any_args("cmnd    a"));
-        assert!(has_any_args("cmnd    a   "));
-        assert!(has_any_args("cmnd a a"));
-
-        assert!(!has_any_args("cmnd"));
-        assert!(!has_any_args("cmnd    "));
-    }
-
-    #[test]
     fn a_target_is_absolutized_and_one_that_is_not_there_is_refused() {
         assert_eq!(Err(ArgParsingError::InvalidPath("a".to_owned())), parse_targets("a"));
-        assert_eq!(Err(ArgParsingError::InvalidPath("a b c".to_owned())), parse_targets("a b c"));
+        assert_eq!(Err(ArgParsingError::InvalidPath("a".to_owned())), parse_targets("a b c"));
 
         assert_eq!(vec![mezura_core::convert_to_absolute("./")], parse_targets("./").unwrap());
         assert_eq!(vec![mezura_core::convert_to_absolute("./src")], parse_targets("\"./src\"").unwrap());
@@ -2901,9 +2899,13 @@ mod tests {
         assert_eq!(vec![mezura_core::convert_to_absolute("./"), mezura_core::convert_to_absolute(".././")],
                 parse_targets("./, .././").unwrap());
 
-        // A space is not a separator while no module is named, so a path is allowed to contain one
-        assert_eq!(Err(ArgParsingError::InvalidPath("./tests ./src".to_owned())), parse_targets("./tests ./src"));
-        assert_eq!(vec![mezura_core::convert_to_absolute("./")], parse_targets(&std::env::current_dir().unwrap().to_string_lossy()).unwrap());
+        assert_eq!(vec![mezura_core::convert_to_absolute("./tests"), mezura_core::convert_to_absolute("./src")],
+                parse_targets("./tests ./src").unwrap());
+        assert_eq!(Err(ArgParsingError::InvalidPath("./nope".to_owned())), parse_targets("./tests ./nope"));
+
+        let working_dir = std::env::current_dir().unwrap().to_string_lossy().into_owned();
+        assert_eq!(vec![mezura_core::convert_to_absolute("./")],
+                super::parse_targets(&[working_dir]).unwrap().iter().map(Target::to_string).collect::<Vec<_>>());
     }
 
     #[test]

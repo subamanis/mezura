@@ -281,10 +281,9 @@ fn join_the_warnings_to(finished: mezura_cli::Output) -> String {
     format!("{}\n\nmezura also reported:\n{}", finished.text, finished.warnings)
 }
 
-// Nothing is quoted, and quoting was tried: mezura joins its arguments back into one line and reads
-// the target as everything before the first command, so a space inside a path arrives whole on its
-// own. A comma is the one character that cannot arrive at all, since it separates one path from the
-// next wherever it appears, and saying so beats handing over half a path.
+// Nothing is quoted, since mezura reads each argument as one target and a space inside a path arrives
+// whole. A comma is the one character that cannot arrive at all, since it separates one path from
+// the next wherever it appears, and saying so beats handing over half a path.
 fn as_a_path(value: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() {
@@ -328,19 +327,14 @@ fn as_a_name(value: &str) -> Result<&str, String> {
     Ok(name)
 }
 
-// mezura is given its arguments and joins them back into one line, where a '--' at the start or
-// after a space begins a command. So a value carrying one is not a value: '--restore' rewrites the
-// data directory, and 'src --output json' turns the report into a document. The rule is the one
-// mezura's own reader uses, in 'args::split_into_command_segments'.
+// mezura reads an argument that starts with '--' as a command, so such a value would run one, and
+// '--restore' rewrites the data directory. The rule is the one of 'args::split_into_commands'.
 fn is_read_as_a_command(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.starts_with(b"--") || bytes.windows(3)
-            .any(|window| window[0].is_ascii_whitespace() && window[1] == b'-' && window[2] == b'-')
+    value.starts_with("--")
 }
 
 fn format_refusal_of_a_command(value: &str) -> String {
-    format!("'{value}' holds '--', which mezura reads as the start of a command rather than as \
-            part of a value, so it cannot be given")
+    format!("'{value}' starts with '--', which mezura reads as the start of a command, so it cannot be given")
 }
 
 #[cfg(test)]
@@ -382,29 +376,27 @@ mod tests {
     }
 
     // Without this the whole tool is a way of running mezura with any command at all: '--restore'
-    // rewrites the data directory, '--save-theme' writes a file, and 'src --output json' turns the
-    // report tool into the document one, all of which were reachable and are now refused.
+    // rewrites the data directory and '--save-theme' writes a file
     #[test]
     fn a_value_carrying_a_command_is_refused_before_the_binary_is_started() {
-        for value in ["--restore", "./src --output json", "./src\t--diff HEAD~1"] {
-            let arguments = CountArguments {path: value.to_owned(), ..every_option_set()};
-            assert!(arguments.to_command_line().unwrap_err().contains("holds '--'"),
-                    "'{value}' was handed over as a path");
+        let arguments = CountArguments {path: "--restore".to_owned(), ..every_option_set()};
+        assert!(arguments.to_command_line().unwrap_err().contains("starts with '--'"));
+
+        let pattern = CountArguments {exclude: Some(vec!["--no-gitignore".to_owned()]), ..every_option_set()};
+        assert!(pattern.to_command_line().unwrap_err().contains("starts with '--'"));
+
+        let language = CountArguments {languages: Some(vec!["--restore".to_owned()]), ..every_option_set()};
+        assert!(language.to_command_line().unwrap_err().contains("starts with '--'"));
+
+        let diff = CountArguments {diff: Some("--restore".to_owned()), ..every_option_set()};
+        assert!(diff.to_command_line().unwrap_err().contains("starts with '--'"));
+
+        // Only an argument opening with '--' is a command to mezura, so two dashes inside a value
+        // belong to the value, and a path holding ' --' is one argument and one path
+        for ordinary in ["./my--dir", "./src --output json"] {
+            let arguments = CountArguments {path: ordinary.to_owned(), ..every_option_set()};
+            assert!(arguments.to_command_line().is_ok(), "'{ordinary}' was refused");
         }
-
-        let pattern = CountArguments {exclude: Some(vec!["x --no-gitignore".to_owned()]), ..every_option_set()};
-        assert!(pattern.to_command_line().unwrap_err().contains("holds '--'"));
-
-        let language = CountArguments {languages: Some(vec!["rust --restore".to_owned()]), ..every_option_set()};
-        assert!(language.to_command_line().unwrap_err().contains("holds '--'"));
-
-        let diff = CountArguments {diff: Some("HEAD --restore".to_owned()), ..every_option_set()};
-        assert!(diff.to_command_line().unwrap_err().contains("holds '--'"));
-
-        // A path is allowed to have two dashes inside a name, since only a '--' opening a word is
-        // a command, and refusing more than mezura does would be refusing real directories
-        let ordinary = CountArguments {path: "./my--dir".to_owned(), ..every_option_set()};
-        assert!(ordinary.to_command_line().is_ok());
     }
 
     // '--top 0' is refused by mezura with twenty five lines of its own help, while '--by-file 0'
