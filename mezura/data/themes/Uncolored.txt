@@ -9,15 +9,15 @@ warning = default
 error = default bold
 
 details-language-name = default bold
-percent = default italic dim
+percent = default italic
 
 nested-name = default
-nested-percent = default italic dim
+nested-percent = default italic
 
-production-percent = default italic dim
+production-percent = default italic
 
 tests-name = default italic
-tests-percent = default italic dim
+tests-percent = default italic
 tests-files = default italic
 tests-lines = default italic
 tests-code = default italic
@@ -26,7 +26,7 @@ tests-extra = default italic
 tests-size = default italic
 tests-size-unit = default italic
 
-file-percent = default italic dim
+file-percent = default italic
 
 change-up = default
 change-down = default
