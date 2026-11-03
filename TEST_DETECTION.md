@@ -131,7 +131,6 @@ report, unless a configuration file already declares test patterns:
 Test presets applied:
   @jest      under ./frontend (jest.config.ts)
   @pytest    under ./tools, ./scripts and 3 more (conftest.py)
-To disable a test preset: '--tests "!@<name>"'. To disable test detection: '--hide tests'.
 ```
 
 A `package.json`, `pyproject.toml`, `Gemfile` or `composer.json` can name a test tool of which no

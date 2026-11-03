@@ -9,16 +9,17 @@ use mezura_core::language_file::ConflictBlock;
 
 use crate::config_manager::VERSION_ID;
 use crate::message_printer::wrap_message;
+use crate::message_printer::UNRELEASED;
 use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOGS_DIR_NAME,
         TEST_PRESETS_DIR_NAME, THEMES_DIR_NAME};
 use crate::startup_timing::{Step, measure};
 use crate::theme::Theme;
 use crate::theme_files::STOCK_LOOK_THEME;
 
-const MANIFEST_FILE_NAME : &str = "installed.txt";
+const INSTALL_MANIFEST_FILE_NAME : &str = "installed.txt";
 const REPLACED_DIR_NAME : &str = "replaced";
 const TOKENS_LINE_START : &str = "tokens: ";
-// What a record written before it listed its tokens knew, since 3.1 and 3.2 knew the same ones
+// What a manifest written before it listed its tokens knew, since 3.1 and 3.2 knew the same ones
 const TOKENS_KNOWN_TO_3_2 : [&str; 78] = [
         "version", "heading", "separator-total", "separator-header", "sort-marker", "arrow",
         "bar-frame", "percent", "files-number", "files-label", "lines-number", "lines-label",
@@ -225,13 +226,13 @@ impl MigrationOutcome {
 pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
     let mut outcome = MigrationOutcome::default();
     let directories = [LANGUAGES_DIR_NAME, THEMES_DIR_NAME, CONFIG_DIR_NAME, LOGS_DIR_NAME];
-    // Two stretches under one name, since the record of what was last written and the listing of
+    // Two stretches under one name, since the manifest of what was last written and the listing of
     // what is there now are both reads of the data directory
-    let recorded = measure(Step::MigrationCheck, || read_manifest(data_dir));
+    let installed = measure(Step::MigrationCheck, || InstallManifest::read(data_dir));
 
     let (shipped, carried) = measure(Step::MigrationHash, || {
-        // The priority file belongs here although it is never replaced: this is the record of what
-        // was last shipped, and without it a release that adds a rule and no language matches every
+        // The priority file belongs here although it is never replaced. The manifest holds what was
+        // last shipped, and without it a release that adds a rule and no language matches every
         // hash, returns below, and never reaches the merge.
         let shipped = get_shipped_files();
         let carried = shipped.iter().map(|(relative, contents)| (relative.clone(), *contents))
@@ -246,8 +247,8 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
     let everything_is_there = measure(Step::MigrationCheck, || {
         // Asked of every file rather than of the folder holding it: one language file left behind by
         // a quarantine answers "the folder is not empty" while sixty-six others are missing. And
-        // asked of what this version ships rather than of what the record remembers, since a file
-        // that could not be written is absent from both and the record would call it present.
+        // asked of what this version ships, since a file that could not be written is absent from
+        // the manifest too, which would call it present.
         let listed = DataDirListing::of(data_dir, &[LANGUAGES_DIR_NAME, THEMES_DIR_NAME, CONFIG_DIR_NAME]);
         shipped.iter()
                 .all(|(relative, _)| listed.find_length_of(relative).is_some_and(|length| length > 0))
@@ -265,10 +266,10 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
     // own. Above the return, so an installation whose files are all in place gets it too.
     let _ = std::fs::create_dir_all(data_dir.to_owned() + TEST_PRESETS_DIR_NAME);
 
-    // Asks whether the record describes the files this binary carries. The version string answers
+    // Asks whether the manifest describes the files this binary carries. The version string answers
     // another question, since every build made between releases changes the files and keeps
     // 'VERSION_ID'.
-    if !force && recorded == carried && everything_is_there {
+    if !force && installed.files == carried && everything_is_there {
         return outcome;
     }
 
@@ -281,16 +282,16 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
         let path = data_dir.to_owned() + name;
         let was_there = std::path::Path::new(&path).exists();
         if outcome.attempt(name, std::fs::create_dir_all(&path)) && !was_there {
-            note_written_file(&mut outcome, name.to_owned() + "/", !recorded.is_empty());
+            note_written_file(&mut outcome, name.to_owned() + "/", !installed.files.is_empty());
         }
     }
     // A file enters the manifest only once it is really on disk with the contents this version
     // ships, so one that could not be written is retried by the next run
-    let mut manifest = HashMap::new();
+    let mut files_now = HashMap::new();
     for (relative, contents) in shipped {
         let target = data_dir.to_owned() + &relative;
         let shipped_hash = content_hash(contents);
-        let was_recorded = recorded.contains_key(&relative);
+        let was_installed = installed.files.contains_key(&relative);
 
         let on_disk = std::fs::read(&target).ok();
         // There and unreadable is not missing: writing over it would destroy what it holds without
@@ -301,20 +302,20 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
         }
         let Some(on_disk) = on_disk else {
             if outcome.attempt(&relative, std::fs::write(&target, contents)) {
-                manifest.insert(relative.clone(), shipped_hash);
-                note_written_file(&mut outcome, relative, was_recorded);
+                files_now.insert(relative.clone(), shipped_hash);
+                note_written_file(&mut outcome, relative, was_installed);
             }
             continue;
         };
 
         let on_disk_hash = content_hash(&on_disk);
         if on_disk_hash == shipped_hash {
-            manifest.insert(relative, shipped_hash);
+            files_now.insert(relative, shipped_hash);
             continue;
         }
-        if recorded.get(&relative) == Some(&on_disk_hash) || means_the_same(&on_disk, contents) {
+        if installed.files.get(&relative) == Some(&on_disk_hash) || means_the_same(&on_disk, contents) {
             if outcome.attempt(&relative, std::fs::write(&target, contents)) {
-                manifest.insert(relative.clone(), shipped_hash);
+                files_now.insert(relative.clone(), shipped_hash);
                 outcome.updated.push(relative);
             }
             continue;
@@ -339,7 +340,7 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
             }
             continue;
         }
-        manifest.insert(relative, shipped_hash);
+        files_now.insert(relative, shipped_hash);
     }
 
     // Weighed against everything we ship rather than against what this pass manages: a file that
@@ -348,20 +349,20 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
             .chain(get_written_once_files())
             .collect::<HashSet<_>>();
     // A file shipped as 'go.txt' and now as 'Go.txt' is one file on Windows and macOS, so the new
-    // name was written over the old while the record still names the old, and deleting by name
+    // name was written over the old while the manifest still names the old, and deleting by name
     // would take away what was written a moment ago. Where the two names really are two files, the
     // old one holds its old bytes and is withdrawn.
-    let ours_now = manifest.values().copied().collect::<HashSet<_>>();
-    for (relative, hash) in recorded.iter().filter(|(relative, _)| !still_shipped.contains(*relative)) {
+    let ours_now = files_now.values().copied().collect::<HashSet<_>>();
+    for (relative, hash) in installed.files.iter().filter(|(relative, _)| !still_shipped.contains(*relative)) {
         let target = data_dir.to_owned() + relative;
-        // Only "already gone" ends it. Anything else keeps the record for the next run to try
-        // again: the manifest is the only thing that remembers a file was ever ours, and dropping
-        // it over one failed delete leaves the file installed for good, past '--restore' too.
+        // Only "already gone" ends it. Anything else keeps the file in the manifest for the next run
+        // to try again, since the manifest is the only thing that remembers a file was ever ours.
+        // Dropping it over one failed delete leaves the file installed for good, past '--restore' too.
         let on_disk = match std::fs::read(&target) {
             Ok(on_disk) => on_disk,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
-                manifest.insert(relative.clone(), *hash);
+                files_now.insert(relative.clone(), *hash);
                 outcome.could_not_withdraw(relative, &error);
                 continue;
             }
@@ -370,7 +371,7 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
         if ours_now.contains(&on_disk_hash) {
             continue;
         }
-        // A theme they edited stays where it is, and dropping it from the record makes it theirs for good
+        // A theme they edited stays where it is, and dropping it from the manifest makes it theirs for good
         if relative.starts_with(THEMES_DIR_NAME) && on_disk_hash != *hash {
             continue;
         }
@@ -378,56 +379,56 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
                 .and_then(|_| std::fs::remove_file(&target)) {
             Ok(()) => outcome.withdrawn.push(relative.clone()),
             Err(error) => {
-                manifest.insert(relative.clone(), *hash);
+                files_now.insert(relative.clone(), *hash);
                 outcome.could_not_withdraw(relative, &error);
             }
         }
     }
 
     // A theme is taste, so an edited one is kept where an edited language file is replaced, and the
-    // record is what tells an edited one from a theme nobody ever touched.
-    let record_predates_themes = !recorded.is_empty()
-            && !recorded.keys().any(|relative| relative.starts_with(THEMES_DIR_NAME));
-    let tokens_the_record_knew = read_tokens_known_to_the_record(data_dir);
-    let known = tokens_the_record_knew.iter().map(String::as_str).collect::<HashSet<_>>();
+    // manifest is what tells an edited one from a theme nobody ever touched.
+    let manifest_predates_themes = !installed.files.is_empty()
+            && !installed.files.keys().any(|relative| relative.starts_with(THEMES_DIR_NAME));
+    let known = installed.tokens.iter().map(String::as_str).collect::<HashSet<_>>();
     let stock_look = format!("{THEMES_DIR_NAME}/{STOCK_LOOK_THEME}.txt");
     let mut a_merge_waits = false;
     for (relative, contents) in get_shipped_theme_files() {
         let target = data_dir.to_owned() + &relative;
         let shipped_hash = content_hash(contents);
-        let was_recorded = recorded.contains_key(&relative);
+        let was_installed = installed.files.contains_key(&relative);
 
         let Some(on_disk) = std::fs::read(&target).ok() else {
             if !std::path::Path::new(&target).exists()
                     && outcome.attempt(&relative, std::fs::write(&target, contents)) {
-                manifest.insert(relative.clone(), shipped_hash);
-                note_written_file(&mut outcome, relative, was_recorded || record_predates_themes);
+                files_now.insert(relative.clone(), shipped_hash);
+                note_written_file(&mut outcome, relative, was_installed || manifest_predates_themes);
             }
             continue;
         };
 
         let on_disk_hash = content_hash(&on_disk);
         if on_disk_hash == shipped_hash {
-            manifest.insert(relative, shipped_hash);
+            files_now.insert(relative, shipped_hash);
             continue;
         }
-        if recorded.get(&relative) == Some(&on_disk_hash) {
+        if installed.files.get(&relative) == Some(&on_disk_hash) {
             if outcome.attempt(&relative, std::fs::write(&target, contents)) {
-                manifest.insert(relative.clone(), shipped_hash);
+                files_now.insert(relative.clone(), shipped_hash);
                 outcome.restyled.push(relative);
             }
             continue;
         }
-        // Theirs, and '--restore' is how ours is asked for back. An unrecorded one predates the
-        // record and could be either, so it is brought up to date once with theirs kept beside it
+        // Theirs, and '--restore' is how ours is asked for back. One the manifest never listed
+        // predates it and could be either, so it is brought up to date once with theirs kept beside it
         // Merged only by a version that ships the theme differently. An edited stock look is no longer
         // the stock look, so a version that changes it replaces it as it does a language file.
-        if was_recorded && !force && (recorded[&relative] == shipped_hash || relative != stock_look) {
-            let settled = recorded[&relative] == shipped_hash || merge_the_theme(data_dir, &archived_under,
+        if was_installed && !force && (installed.files[&relative] == shipped_hash || relative != stock_look) {
+            let settled = installed.files[&relative] == shipped_hash || merge_the_theme(data_dir, &archived_under,
                     &relative, &on_disk, contents, &known, &mut outcome);
             a_merge_waits |= !settled;
-            // Recording theirs would have the next run read it back as untouched and take it away
-            manifest.insert(relative.clone(), if settled {shipped_hash} else {recorded[&relative]});
+            // Listing theirs in the manifest would have the next run read it back as untouched and
+            // take it away
+            files_now.insert(relative.clone(), if settled {shipped_hash} else {installed.files[&relative]});
             continue;
         }
         let copied = match archive(data_dir, &archived_under, &relative, &on_disk) {
@@ -445,7 +446,7 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
             }
             continue;
         }
-        manifest.insert(relative, shipped_hash);
+        files_now.insert(relative, shipped_hash);
     }
 
     let default_config = format!("{data_dir}{CONFIG_DIR_NAME}/{DEFAULT_CONFIG_NAME}");
@@ -453,29 +454,38 @@ pub fn migrate_data_files(data_dir: &str, force: bool) -> MigrationOutcome {
     if !std::path::Path::new(&default_config).exists()
             && outcome.attempt(&default_relative,
                     std::fs::write(&default_config, read_baked_in_default_config_contents())) {
-        note_written_file(&mut outcome, default_relative, !recorded.is_empty());
+        note_written_file(&mut outcome, default_relative, !installed.files.is_empty());
     }
-    merge_the_conflicts_file(data_dir, &archived_under, &recorded, &mut manifest, &mut outcome);
+    merge_the_conflicts_file(data_dir, &archived_under, &installed.files, &mut files_now, &mut outcome);
 
-    // While a merge waits for the next run, the record keeps the tokens that merge is weighed against
-    let tokens_now = if a_merge_waits {tokens_the_record_knew.iter().map(String::as_str).collect()}
+    // While a merge waits for the next run, the manifest keeps the tokens that merge is weighed against
+    let tokens_now = if a_merge_waits {installed.tokens.iter().map(String::as_str).collect()}
             else {Theme::get_token_names().to_vec()};
-    // Last, and holding only what reached the disk, so whatever failed is absent from the record,
+    // Last, and holding only what reached the disk, so whatever failed is absent from the manifest,
     // missing from the completeness check, and tried again by the next run
-    outcome.attempt(MANIFEST_FILE_NAME, write_manifest(data_dir, &manifest, &tokens_now));
+    outcome.attempt(INSTALL_MANIFEST_FILE_NAME, InstallManifest::write(data_dir, &files_now, &tokens_now));
 
     outcome
+}
+
+// A manifest an unreleased build wrote never answers, so a build under work never stops an installed one.
+pub fn find_newer_release_in_manifest(data_dir: &str) -> Option<String> {
+    let line = InstallManifest::read(data_dir).version_line?;
+    if line.ends_with(UNRELEASED) {
+        return None;
+    }
+    (parse_version(&line)? > parse_version(VERSION_ID)?).then_some(line)
 }
 
 pub(crate) fn get_shipped_theme_files() -> Vec<(String, &'static [u8])> {
     include_dir!("data/themes").files.iter().map(|file| build_relative_path(THEMES_DIR_NAME, file)).collect()
 }
 
-// A file the manifest never recorded is one this version brings and not one that was lost. The
-// default configuration is outside the manifest, so for it the question is only whether this
-// installation existed before, and a theme asks the same where the record is older than themes.
-fn note_written_file(outcome: &mut MigrationOutcome, relative: String, was_recorded: bool) {
-    if was_recorded {
+// A file the manifest never listed is one this version brings, and a file that was lost is one it
+// did list. The default configuration is outside the manifest, so for it the question is only whether
+// this installation existed before, and a theme asks the same where the manifest is older than themes.
+fn note_written_file(outcome: &mut MigrationOutcome, relative: String, was_installed: bool) {
+    if was_installed {
         outcome.restored.push(relative);
     } else {
         outcome.added.push(relative);
@@ -484,10 +494,10 @@ fn note_written_file(outcome: &mut MigrationOutcome, relative: String, was_recor
 
 // The one shipped file that is neither replaced nor left alone: replacing it throws away the answer
 // somebody gave to a contested extension, and leaving it alone hides everything a new version adds.
-// What enters the manifest is the shipped copy's hash and never the merged file's, since the record
-// says what was last brought while the file on disk is theirs and ours together.
-fn merge_the_conflicts_file(data_dir: &str, archived_under: &str, recorded: &HashMap<String, u64>,
-        manifest: &mut HashMap<String, u64>, outcome: &mut MigrationOutcome)
+// What enters the manifest is the shipped copy's hash and never the merged file's, since the manifest
+// holds what was last brought while the file on disk is theirs and ours together.
+fn merge_the_conflicts_file(data_dir: &str, archived_under: &str, installed_files: &HashMap<String, u64>,
+        files_now: &mut HashMap<String, u64>, outcome: &mut MigrationOutcome)
 {
     let path = data_dir.to_owned() + LANGUAGE_CONFLICTS_FILE_NAME;
     let ours = read_baked_in_conflict_rules_contents();
@@ -498,9 +508,9 @@ fn merge_the_conflicts_file(data_dir: &str, archived_under: &str, recorded: &Has
         // that is there and unreadable, and writing over it would destroy it without a copy.
         Err(_) if !std::path::Path::new(&path).exists() => {
             if outcome.attempt(LANGUAGE_CONFLICTS_FILE_NAME, std::fs::write(&path, &ours)) {
-                manifest.insert(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), brought);
+                files_now.insert(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), brought);
                 note_written_file(outcome, LANGUAGE_CONFLICTS_FILE_NAME.to_owned(),
-                        recorded.contains_key(LANGUAGE_CONFLICTS_FILE_NAME));
+                        installed_files.contains_key(LANGUAGE_CONFLICTS_FILE_NAME));
             }
             return;
         },
@@ -512,19 +522,19 @@ fn merge_the_conflicts_file(data_dir: &str, archived_under: &str, recorded: &Has
 
     // Never edited by them, so there is no answer to keep, and the merge below could not bring an
     // updated marker list whose extension their copy already carries a line for.
-    if recorded.get(LANGUAGE_CONFLICTS_FILE_NAME) == Some(&content_hash(theirs.as_bytes())) {
+    if installed_files.get(LANGUAGE_CONFLICTS_FILE_NAME) == Some(&content_hash(theirs.as_bytes())) {
         if !reads_the_same(&theirs, &ours) {
             if !outcome.attempt(LANGUAGE_CONFLICTS_FILE_NAME, std::fs::write(&path, &ours)) {
                 return;
             }
             outcome.updated.push(LANGUAGE_CONFLICTS_FILE_NAME.to_owned());
         }
-        manifest.insert(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), brought);
+        files_now.insert(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), brought);
         return;
     }
 
     let Some(merged) = merge_conflict_files(&theirs, &ours) else {
-        manifest.insert(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), brought);
+        files_now.insert(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), brought);
         return;
     };
     let copied = match archive(data_dir, archived_under, LANGUAGE_CONFLICTS_FILE_NAME, theirs.as_bytes()) {
@@ -543,7 +553,7 @@ fn merge_the_conflicts_file(data_dir: &str, archived_under: &str, recorded: &Has
         }
         return;
     }
-    manifest.insert(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), brought);
+    files_now.insert(LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), brought);
     outcome.merged.push(LANGUAGE_CONFLICTS_FILE_NAME.to_owned());
 }
 
@@ -668,7 +678,7 @@ fn find_key_of_rule(opens: Option<ConflictBlock>, rule: &str) -> String {
             .unwrap_or_else(|| format!("could not be read: {}", rule.trim().to_ascii_lowercase()))
 }
 
-// False when the copy or the write failed, so the record keeps the older version for the next run
+// False when the copy or the write failed, so the manifest keeps the older version for the next run
 fn merge_the_theme(data_dir: &str, archived_under: &str, relative: &str, theirs: &[u8], ours: &[u8],
         known: &HashSet<&str>, outcome: &mut MigrationOutcome) -> bool
 {
@@ -782,44 +792,54 @@ fn content_hash(bytes: &[u8]) -> u64 {
     hash
 }
 
-// One 'path hash' line per file. The version on its own line is not read back: it is there for
-// whoever opens the file. A missing or unreadable manifest is a fresh installation, which is what
-// makes this self-healing.
-fn read_manifest(data_dir: &str) -> HashMap<String, u64> {
-    let mut entries = HashMap::new();
-    let Ok(contents) = std::fs::read_to_string(data_dir.to_owned() + MANIFEST_FILE_NAME) else {
-        return entries;
-    };
+// 'installed.txt', in this order after its comment lines. The version of the build that wrote it, the
+// theme tokens that build knew, then one 'path hash' line per file it installed. A missing or
+// unreadable one is a fresh installation, which is what makes the pass self-healing.
+struct InstallManifest {
+    version_line: Option<String>,
+    tokens: Vec<String>,
+    files: HashMap<String, u64>
+}
 
-    for line in contents.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')) {
-        // From the right, because a file name is allowed to hold spaces and a hash is not
-        if let Some((path, hash)) = line.rsplit_once(' ') && let Ok(hash) = hash.trim().parse::<u64>() {
-            entries.insert(path.trim().to_owned(), hash);
+impl InstallManifest {
+    fn read(data_dir: &str) -> Self {
+        let contents = std::fs::read_to_string(data_dir.to_owned() + INSTALL_MANIFEST_FILE_NAME).unwrap_or_default();
+        let lines = || contents.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#'));
+
+        InstallManifest {
+            version_line: lines().next().map(str::to_owned),
+            tokens: lines().find_map(|line| line.strip_prefix(TOKENS_LINE_START))
+                    .map(|tokens| tokens.split_whitespace().map(str::to_owned).collect())
+                    .unwrap_or_else(|| TOKENS_KNOWN_TO_3_2.iter().map(|token| (*token).to_owned()).collect()),
+            // From the right, because a file name is allowed to hold spaces and a hash is not
+            files: lines().filter_map(|line| line.rsplit_once(' '))
+                    .filter_map(|(path, hash)| Some((path.trim().to_owned(), hash.trim().parse::<u64>().ok()?)))
+                    .collect()
         }
     }
 
-    entries
+    // Every version's reader skips the line of tokens and the version line of an unreleased build,
+    // since the last word of neither is a hash
+    fn write(data_dir: &str, files: &HashMap<String, u64>, tokens: &[&str]) -> Result<(), std::io::Error> {
+        let mut sorted = files.iter().collect::<Vec<_>>();
+        sorted.sort();
+        let body = sorted.into_iter().map(|(path, hash)| format!("{path} {hash}")).collect::<Vec<_>>().join("\n");
+        let marker = if crate::message_printer::find_release_date().is_none() {format!(" {UNRELEASED}")}
+                else {String::new()};
+
+        std::fs::write(data_dir.to_owned() + INSTALL_MANIFEST_FILE_NAME,
+                format!("# Written by mezura. It records which files it installed and what they looked like,\n\
+                        # so that an update can tell a file you edited from one it wrote itself. Delete it and the next\n\
+                        # run has no way to tell, so every file of ours that you have changed is moved into 'replaced' and\n\
+                        # written again from the copies inside the program.\n{VERSION_ID}{marker}\n{TOKENS_LINE_START}{}\n{body}\n",
+                        tokens.join(" ")))
+    }
 }
 
-// Every version's reader skips the line of tokens, since its last word is no hash
-fn write_manifest(data_dir: &str, entries: &HashMap<String, u64>, tokens: &[&str]) -> Result<(), std::io::Error> {
-    let mut sorted = entries.iter().collect::<Vec<_>>();
-    sorted.sort();
-    let body = sorted.into_iter().map(|(path, hash)| format!("{path} {hash}")).collect::<Vec<_>>().join("\n");
-
-    std::fs::write(data_dir.to_owned() + MANIFEST_FILE_NAME,
-            format!("# Written by mezura. It records which files it installed and what they looked like,\n\
-                    # so that an update can tell a file you edited from one it wrote itself. Delete it and the next\n\
-                    # run has no way to tell: every file of ours that you have changed is moved into 'replaced' and\n\
-                    # written again from the copies inside the program.\n{VERSION_ID}\n{TOKENS_LINE_START}{}\n{body}\n",
-                    tokens.join(" ")))
-}
-
-fn read_tokens_known_to_the_record(data_dir: &str) -> Vec<String> {
-    std::fs::read_to_string(data_dir.to_owned() + MANIFEST_FILE_NAME).ok()
-            .and_then(|contents| contents.lines().find_map(|line| line.strip_prefix(TOKENS_LINE_START))
-                    .map(|tokens| tokens.split_whitespace().map(str::to_owned).collect()))
-            .unwrap_or_else(|| TOKENS_KNOWN_TO_3_2.iter().map(|token| (*token).to_owned()).collect())
+fn parse_version(text: &str) -> Option<(u64, u64, u64)> {
+    let mut numbers = text.strip_prefix('v')?.split('.').map(|number| number.parse::<u64>().ok());
+    let version = (numbers.next()??, numbers.next()??, numbers.next()??);
+    numbers.next().is_none().then_some(version)
 }
 
 fn build_relative_path(dir_name: &str, file: &File<'static>) -> (String, &'static [u8]) {
@@ -936,8 +956,10 @@ fn read_baked_in_conflict_rules_contents() -> String {
 mod tests {
     use mezura_core::Language;
     use crate::config_manager::VERSION_ID;
-    use crate::migration::{MANIFEST_FILE_NAME, TOKENS_LINE_START, content_hash, merge_conflict_files,
-            migrate_data_files, read_manifest, write_manifest};
+    use crate::message_printer::UNRELEASED;
+    use crate::migration::InstallManifest;
+    use crate::migration::{INSTALL_MANIFEST_FILE_NAME, TOKENS_LINE_START, content_hash, find_newer_release_in_manifest,
+            merge_conflict_files, migrate_data_files, parse_version};
     use crate::paths::test_paths::SCRATCH_DIR;
     use crate::theme::Theme;
 
@@ -1014,10 +1036,10 @@ mod tests {
 
         let older = "heading = ff0000\n";
         std::fs::write(path("Dracula"), older).unwrap();
-        let mut manifest = read_manifest(&dir);
-        manifest.insert("themes/Dracula.txt".to_owned(), content_hash(older.as_bytes()));
-        manifest.remove("themes/Forest.txt");
-        write_manifest(&dir, &manifest, Theme::get_token_names()).unwrap();
+        let mut files = InstallManifest::read(&dir).files;
+        files.insert("themes/Dracula.txt".to_owned(), content_hash(older.as_bytes()));
+        files.remove("themes/Forest.txt");
+        InstallManifest::write(&dir, &files, Theme::get_token_names()).unwrap();
         std::fs::write(path("Ocean"), "heading = 00ff00\n").unwrap();
         std::fs::write(path("Forest"), "heading = 0000ff\n").unwrap();
 
@@ -1032,7 +1054,7 @@ mod tests {
 
         assert_eq!("heading = 00ff00\n", held("Ocean"), "a theme they edited was taken away");
 
-        assert_eq!(forest, held("Forest"), "a theme older than the record was left behind");
+        assert_eq!(forest, held("Forest"), "a theme older than the manifest was left behind");
         assert_eq!(vec!["themes/Forest.txt".to_owned()], pass.replaced);
         assert_eq!("heading = 0000ff\n", std::fs::read_to_string(format!(
                 "{dir}replaced/{}/{}/themes/Forest.txt", VERSION_ID, pass.archived_under)).unwrap());
@@ -1059,12 +1081,12 @@ mod tests {
         let (ours, mine, left_out) = ("heading = cba6f7 reverse bold", "heading = ff0000 bold", "language-1 = ff759c\n");
         let theirs = older_release.replace(ours, mine).replace(left_out, "");
         std::fs::write(&path, &theirs).unwrap();
-        let mut manifest = read_manifest(&dir);
-        manifest.insert("themes/Catppuccin.txt".to_owned(), content_hash(older_release.as_bytes()));
-        write_manifest(&dir, &manifest, Theme::get_token_names()).unwrap();
-        let as_3_2_wrote_it = std::fs::read_to_string(dir.clone() + MANIFEST_FILE_NAME).unwrap().lines()
+        let mut files = InstallManifest::read(&dir).files;
+        files.insert("themes/Catppuccin.txt".to_owned(), content_hash(older_release.as_bytes()));
+        InstallManifest::write(&dir, &files, Theme::get_token_names()).unwrap();
+        let as_3_2_wrote_it = std::fs::read_to_string(dir.clone() + INSTALL_MANIFEST_FILE_NAME).unwrap().lines()
                 .filter(|line| !line.starts_with(TOKENS_LINE_START)).collect::<Vec<_>>().join("\n");
-        std::fs::write(dir.clone() + MANIFEST_FILE_NAME, as_3_2_wrote_it).unwrap();
+        std::fs::write(dir.clone() + INSTALL_MANIFEST_FILE_NAME, as_3_2_wrote_it).unwrap();
 
         let writable = std::fs::metadata(&path).unwrap().permissions();
         let mut read_only = writable.clone();
@@ -1100,9 +1122,9 @@ mod tests {
         let shipped = std::fs::read_to_string(&path).unwrap();
         let theirs = "heading = ff0000 bold\n";
         std::fs::write(&path, theirs).unwrap();
-        let mut manifest = read_manifest(&dir);
-        manifest.insert("themes/Mezura.txt".to_owned(), content_hash(b"heading = cyan bold\n"));
-        write_manifest(&dir, &manifest, Theme::get_token_names()).unwrap();
+        let mut files = InstallManifest::read(&dir).files;
+        files.insert("themes/Mezura.txt".to_owned(), content_hash(b"heading = cyan bold\n"));
+        InstallManifest::write(&dir, &files, Theme::get_token_names()).unwrap();
 
         let pass = migrate_data_files(&dir, false);
         assert_eq!(vec!["themes/Mezura.txt".to_owned()], pass.replaced);
@@ -1125,17 +1147,17 @@ mod tests {
         let (untouched, edited) = (dir.clone() + "themes/Gone.txt", dir.clone() + "themes/Kept.txt");
         std::fs::write(&untouched, shipped_once).unwrap();
         std::fs::write(&edited, "heading = 00ff00\n").unwrap();
-        let mut manifest = read_manifest(&dir);
-        manifest.insert("themes/Gone.txt".to_owned(), content_hash(shipped_once.as_bytes()));
-        manifest.insert("themes/Kept.txt".to_owned(), content_hash(shipped_once.as_bytes()));
-        write_manifest(&dir, &manifest, Theme::get_token_names()).unwrap();
+        let mut files = InstallManifest::read(&dir).files;
+        files.insert("themes/Gone.txt".to_owned(), content_hash(shipped_once.as_bytes()));
+        files.insert("themes/Kept.txt".to_owned(), content_hash(shipped_once.as_bytes()));
+        InstallManifest::write(&dir, &files, Theme::get_token_names()).unwrap();
 
         let pass = migrate_data_files(&dir, false);
         assert_eq!(vec!["themes/Gone.txt".to_owned()], pass.withdrawn);
         assert!(!std::path::Path::new(&untouched).exists());
         assert_eq!("heading = 00ff00\n", std::fs::read_to_string(&edited).unwrap());
-        assert!(!read_manifest(&dir).contains_key("themes/Kept.txt"),
-                "a theme left to them is still on the record, so a later version could take it");
+        assert!(!InstallManifest::read(&dir).files.contains_key("themes/Kept.txt"),
+                "a theme left to them is still in the manifest, so a later version could take it");
 
         let again = migrate_data_files(&dir, true);
         assert!(again.withdrawn.is_empty() && again.replaced.is_empty());
@@ -1145,15 +1167,15 @@ mod tests {
     }
 
     #[test]
-    fn a_theme_lost_from_an_installation_older_than_the_record_was_lost_and_not_brought() {
-        let dir = SCRATCH_DIR.to_owned() + "migration-older-record/";
+    fn a_theme_lost_from_an_installation_older_than_the_manifest_is_restored() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-older-manifest/";
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         migrate_data_files(&dir, false);
 
-        let mut manifest = read_manifest(&dir);
-        manifest.retain(|relative, _| !relative.starts_with("themes"));
-        write_manifest(&dir, &manifest, Theme::get_token_names()).unwrap();
+        let mut files = InstallManifest::read(&dir).files;
+        files.retain(|relative, _| !relative.starts_with("themes"));
+        InstallManifest::write(&dir, &files, Theme::get_token_names()).unwrap();
         std::fs::remove_file(dir.clone() + "themes/Ocean.txt").unwrap();
 
         let pass = migrate_data_files(&dir, false);
@@ -1244,10 +1266,10 @@ mod tests {
         let older_release = "===> contested-extensions\nm       MATLAB, Objective-C\n\n\
                 ===> not-code-when-a-line-contains\nd       .o:\n";
         std::fs::write(&path, older_release).unwrap();
-        let mut recorded = read_manifest(&dir);
-        recorded.insert(mezura_core::LANGUAGE_CONFLICTS_FILE_NAME.to_owned(),
+        let mut files = InstallManifest::read(&dir).files;
+        files.insert(mezura_core::LANGUAGE_CONFLICTS_FILE_NAME.to_owned(),
                 content_hash(older_release.as_bytes()));
-        write_manifest(&dir, &recorded, Theme::get_token_names()).unwrap();
+        InstallManifest::write(&dir, &files, Theme::get_token_names()).unwrap();
 
         let outcome = migrate_data_files(&dir, false);
         assert!(outcome.merged.is_empty(), "a file they never edited was merged instead of replaced");
@@ -1277,11 +1299,11 @@ mod tests {
         let path = dir.clone() + mezura_core::LANGUAGE_CONFLICTS_FILE_NAME;
         let theirs = "How this file worked back then.\n\n===> contested-extensions\nm       Objective-C, MATLAB\nlpr     Lazarus, Pascal\n";
         std::fs::write(&path, theirs).unwrap();
-        // and the record that version left, holding the hash of some other text under this name.
-        // That record is the only thing that can say a release changed this file.
-        let mut recorded = read_manifest(&dir);
-        recorded.insert(mezura_core::LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), 1);
-        write_manifest(&dir, &recorded, Theme::get_token_names()).unwrap();
+        // and the manifest that version left, holding the hash of some other text under this name.
+        // That manifest is the only thing that can say a release changed this file.
+        let mut files = InstallManifest::read(&dir).files;
+        files.insert(mezura_core::LANGUAGE_CONFLICTS_FILE_NAME.to_owned(), 1);
+        InstallManifest::write(&dir, &files, Theme::get_token_names()).unwrap();
 
         let outcome = migrate_data_files(&dir, false);
         assert_eq!(vec![mezura_core::LANGUAGE_CONFLICTS_FILE_NAME.to_owned()], outcome.merged);
@@ -1326,8 +1348,8 @@ mod tests {
         std::fs::write(&withdrawn, "a language of an earlier version").unwrap();
         std::fs::write(&theirs, "a language of my own").unwrap();
         let manifest = dir.clone() + "installed.txt";
-        let recorded = std::fs::read_to_string(&manifest).unwrap();
-        std::fs::write(&manifest, recorded + "languages/Gone.txt 1\n").unwrap();
+        let contents = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, contents + "languages/Gone.txt 1\n").unwrap();
 
         let outcome = migrate_data_files(&dir, true);
         assert_eq!(vec!["languages/Gone.txt".to_owned()], outcome.withdrawn);
@@ -1377,8 +1399,8 @@ mod tests {
 
         // What an earlier version would have recorded had it shipped the name in another case
         let manifest = dir.clone() + "installed.txt";
-        let recorded = std::fs::read_to_string(&manifest).unwrap();
-        std::fs::write(&manifest, recorded + "languages/RUST.txt 1\n").unwrap();
+        let contents = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, contents + "languages/RUST.txt 1\n").unwrap();
 
         let outcome = migrate_data_files(&dir, true);
         assert!(std::path::Path::new(&(dir.clone() + "languages/Rust.txt")).exists(),
@@ -1494,8 +1516,8 @@ mod tests {
 
         // as the manifest of a version that did not ship Zig yet
         let manifest = dir.clone() + "installed.txt";
-        let recorded = std::fs::read_to_string(&manifest).unwrap();
-        std::fs::write(&manifest, recorded.lines().filter(|line| !line.contains("Zig.txt"))
+        let contents = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, contents.lines().filter(|line| !line.contains("Zig.txt"))
                 .collect::<Vec<_>>().join("\n")).unwrap();
         std::fs::remove_file(dir.clone() + "languages/Zig.txt").unwrap();
 
@@ -1525,7 +1547,7 @@ mod tests {
 
         // Everything the pass had left to do after the directory it could not make
         assert!(std::path::Path::new(&(dir.clone() + "config/default.txt")).exists(), "the pass stopped at the themes");
-        assert!(std::path::Path::new(&(dir.clone() + MANIFEST_FILE_NAME)).exists(), "the manifest was never written");
+        assert!(std::path::Path::new(&(dir.clone() + INSTALL_MANIFEST_FILE_NAME)).exists(), "the manifest was never written");
         // Against what the binary carries and not against today's number, or adding a language
         // breaks a test about a directory that could not be written
         assert_eq!(mezura_core::languages::get_shipped_language_files_raw().len(),
@@ -1554,9 +1576,9 @@ mod tests {
         let lua = dir.clone() + "languages/Lua.txt";
         let older = std::fs::read_to_string(&lua).unwrap().replace("Lua", "Lua5");
         std::fs::write(&lua, &older).unwrap();
-        let mut recorded = read_manifest(&dir);
-        recorded.insert("languages/Lua.txt".to_owned(), content_hash(older.as_bytes()));
-        write_manifest(&dir, &recorded, Theme::get_token_names()).unwrap();
+        let mut files = InstallManifest::read(&dir).files;
+        files.insert("languages/Lua.txt".to_owned(), content_hash(older.as_bytes()));
+        InstallManifest::write(&dir, &files, Theme::get_token_names()).unwrap();
 
         // Not forced, because the case to see is a build whose language files changed while the
         // version string did not
@@ -1588,7 +1610,7 @@ mod tests {
 
         let outcome = migrate_data_files(&dir, true);
         assert_eq!(1, outcome.failed.len(), "writing the manifest over a directory succeeded");
-        assert!(outcome.failed[0].starts_with(MANIFEST_FILE_NAME), "the failure does not name the file: {:?}",
+        assert!(outcome.failed[0].starts_with(INSTALL_MANIFEST_FILE_NAME), "the failure does not name the file: {:?}",
                 outcome.failed);
         assert!(outcome.every_language_file_is_in_place(), "a manifest that could not be written blamed the languages");
         assert_eq!(vec!["languages/Lua.txt".to_owned()], outcome.replaced);
@@ -1611,8 +1633,8 @@ mod tests {
 
         // as an earlier version of the code recorded them, before they were left alone
         let manifest = dir.clone() + "installed.txt";
-        let recorded = std::fs::read_to_string(&manifest).unwrap();
-        std::fs::write(&manifest, recorded + "themes/Dracula.txt 1\nconfig/default.txt 2\n").unwrap();
+        let contents = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, contents + "themes/Dracula.txt 1\nconfig/default.txt 2\n").unwrap();
 
         let outcome = migrate_data_files(&dir, true);
         assert!(outcome.withdrawn.is_empty(), "still shipped, and taken away: {:?}", outcome.withdrawn);
@@ -1622,7 +1644,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // The trigger is whether the record describes the files this binary carries, and the version
+    // The trigger is whether the manifest describes the files this binary carries, and the version
     // string it also holds decides nothing: between two releases the files change and the string
     // does not.
     #[test]
@@ -1646,12 +1668,12 @@ mod tests {
                     "a manifest recording '{version}' made the pass work although every file was in place");
         }
 
-        // A record that does not describe what this binary carries makes it run, whichever way it
+        // A manifest that does not describe what this binary carries makes it run, whichever way it
         // differs
         for (broken, why) in [(String::new(), "an unreadable manifest"),
                 (whole.replace(&a_language(&whole), "languages/Zig.txt 1"), "a file we ship, recorded as another"),
                 (whole.lines().filter(|line| !line.contains("Zig.txt")).collect::<Vec<_>>().join("\n"),
-                        "a file this binary brings and the record never saw"),
+                        "a file this binary brings and the manifest never saw"),
                 (whole.clone() + "languages/Gone.txt 1\n", "a file recorded that we no longer ship")] {
             std::fs::write(&manifest, &broken).unwrap();
             std::fs::remove_file(dir.clone() + "languages/Zig.txt").unwrap();
@@ -1662,9 +1684,66 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    // Dropping the record leaves the file installed for good: a language a release took away keeps
-    // being loaded, and '--restore' cannot help, since nothing tells it from a language of the
-    // user's own any more. A directory in the way is how a removal is made to fail on every system.
+    #[test]
+    fn only_a_newer_release_is_found_in_the_manifest() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-newer-release/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(None, find_newer_release_in_manifest(&dir), "a directory with no manifest");
+
+        let write_with_version_line = |version_line: &str| std::fs::write(dir.clone() + INSTALL_MANIFEST_FILE_NAME,
+                format!("# Written by mezura.\n{version_line}\n{TOKENS_LINE_START}version\nlanguages/C.txt 42\n")).unwrap();
+        for (version_line, found) in [("v99.0.0", Some("v99.0.0")), (VERSION_ID, None), ("v0.0.1", None),
+                ("v99.0.0 unreleased", None), ("not a version", None), ("languages/C.txt 42", None)] {
+            write_with_version_line(version_line);
+            assert_eq!(found.map(str::to_owned), find_newer_release_in_manifest(&dir),
+                    "the manifest's version line was '{version_line}'");
+        }
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_manifest_opens_with_the_version_of_the_build_that_wrote_it() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-version-line/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        migrate_data_files(&dir, false);
+
+        let expected = match crate::message_printer::find_release_date() {
+            Some(_) => VERSION_ID.to_owned(),
+            None => format!("{VERSION_ID} {UNRELEASED}"),
+        };
+        assert_eq!(Some(expected), InstallManifest::read(&dir).version_line);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_version_line_of_an_unreleased_build_is_no_file_to_the_reader() {
+        let dir = SCRATCH_DIR.to_owned() + "migration-unreleased-version-line/";
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.clone() + INSTALL_MANIFEST_FILE_NAME,
+                format!("# Written by mezura.\nv99.0.0 unreleased\n{TOKENS_LINE_START}version\nlanguages/C.txt 42\n")).unwrap();
+
+        assert_eq!(vec!["languages/C.txt".to_owned()], InstallManifest::read(&dir).files.into_keys().collect::<Vec<_>>());
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_version_is_compared_number_by_number() {
+        assert!(parse_version("v3.10.0") > parse_version("v3.9.0"));
+        assert!(parse_version("v4.0.0") > parse_version("v3.99.99"));
+        assert_eq!(None, parse_version("v3.4"));
+        assert_eq!(None, parse_version("3.4.0"));
+        assert_eq!(None, parse_version("v3.4.0.1"));
+    }
+
+    // Dropping it from the manifest leaves the file installed for good. A language a release took away
+    // keeps being loaded, and '--restore' cannot help, since nothing tells it from a language the user
+    // wrote any more. A directory in the way is how a removal is made to fail on every system.
     #[test]
     fn a_withdrawal_that_could_not_finish_is_tried_again_by_the_next_run() {
         let dir = SCRATCH_DIR.to_owned() + "migration-withdrawal-failed/";
@@ -1676,8 +1755,8 @@ mod tests {
         std::fs::create_dir(&withdrawn).unwrap();
         std::fs::write(withdrawn.clone() + "/inside.txt", "not going anywhere").unwrap();
         let manifest = dir.clone() + "installed.txt";
-        let recorded = std::fs::read_to_string(&manifest).unwrap();
-        std::fs::write(&manifest, recorded + "languages/Gone.txt 1\n").unwrap();
+        let contents = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, contents + "languages/Gone.txt 1\n").unwrap();
 
         let outcome = migrate_data_files(&dir, true);
         assert!(outcome.withdrawn.is_empty(), "a removal that failed was reported as done");
@@ -1685,14 +1764,14 @@ mod tests {
         assert!(outcome.every_language_file_is_in_place(),
                 "a file being taken away put the language files in doubt, so the run would count \
                  from the binary over one file it wanted to delete");
-        assert_eq!(Some(&1), read_manifest(&dir).get("languages/Gone.txt"),
-                "the record was dropped, so nothing will ever try to withdraw it again");
+        assert_eq!(Some(&1), InstallManifest::read(&dir).files.get("languages/Gone.txt"),
+                "the manifest dropped it, so nothing will ever try to withdraw it again");
 
-        // and once the way is clear it goes, which is what the record was kept for
+        // and once the way is clear it goes, which is what the manifest kept it for
         std::fs::remove_dir_all(&withdrawn).unwrap();
         std::fs::write(&withdrawn, "a language of an earlier version").unwrap();
         assert_eq!(vec!["languages/Gone.txt".to_owned()], migrate_data_files(&dir, true).withdrawn);
-        assert!(!read_manifest(&dir).contains_key("languages/Gone.txt"));
+        assert!(!InstallManifest::read(&dir).files.contains_key("languages/Gone.txt"));
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

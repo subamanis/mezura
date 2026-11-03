@@ -651,8 +651,8 @@ your own, add themes, or edit the default configuration.
 
 Set `MEZURA_DATA_DIR` and that folder is used instead, created and filled on the first run there
 exactly as the usual one was. It is what you need when two versions of mezura have to run on the
-same machine without treading on each other, since each one rewrites the shared folder into the
-shape it expects. A run using it prints a line about it every time, because a variable set once and forgotten
+same machine. A newer version rewrites a shared folder into the shape it expects. From 3.4 on, an
+older one refuses to run in a folder that a newer release wrote. A run using it prints a line about it every time, because a variable set once and forgotten
 hides every configuration and theme you saved.
 
 Installing a new version updates the language files there, so a correction to a language reaches
@@ -774,9 +774,9 @@ On Windows 11, the same machine and the same tree:
 
 | tool | time | vs fastest | lines/s | files | lines |
 |---|---|---|---|---|---|
-| mezura 3.2.0 | 197 ms ± 12 | 1.00x | 182.5M | 63,767 | 36,017,775 |
-| scc 4.1.0 | 526 ms ± 29 | 2.67x | 68.5M | 63,767 | 36,017,775 |
-| tokei 15.0.0 | 617 ms ± 19 | 3.13x | 58.4M | 63,822 | 36,026,522 |
+| mezura 3.3.0 | 190 ms ± 15 | 1.00x | 189.8M | 63,770 | 36,017,862 |
+| scc 4.1.0 | 526 ms ± 29 | 2.77x | 68.5M | 63,767 | 36,017,775 |
+| tokei 15.0.0 | 617 ms ± 19 | 3.25x | 58.4M | 63,822 | 36,026,522 |
 
 The comparison is doing equal work: the same languages over the same tree for all three,
 mezura pinned to the same counting model the other two use, the gitignore not taken into

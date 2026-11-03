@@ -22,18 +22,9 @@ Main changes:
       folder, the way a 'phpunit.xml' does.
 
 Bugfixes:
-  -> '--log' and '--compare' typed beside '--output json' or '--output html' now say they are
-      ignored, since a document run writes no log and shows no history; the log entry used to be
-      left unwritten without a word.
-  -> The note that a test tool named in 'package.json', 'pyproject.toml', 'Gemfile' or
-      'composer.json' found no tests now prints under '--output json' and '--output markdown'
-      too, names the file that names the tool, and reaches the JSON 'warnings' (code
-      'test-preset-unapplied') and the markdown page.
-  -> '--output markdown' now prints on the error output that nothing was found, that every file
-      was left out, and which project settings applied, as a text run does.
-  -> Long file paths under '--by-file' now keep their trailing folders ('.../Services/file.php')
-      when the first folder does not fit, and use the full width of the column when a long file
-      name has already widened it.
+  -> '--log' and '--compare' typed beside '--output json' now say they are ignored, since a
+      document run writes no log and shows no history; the log entry used to be left unwritten
+      without a word.
   -> Counting a subfolder or targets other than the project's or loaded configuration's own (or
       loading a settings-only configuration with no target paths) no longer compares against or
       logs into that project's or configuration's history.
@@ -51,10 +42,15 @@ Bugfixes:
       stay in the test extent when code follows the 'else' arm on its closing line.
   -> Glob target patterns no longer match files inside dotted directories that the wildcards walked
       into (unless '--search-in-dotted' is set). Nothing inside '.git' is ever matched.
+  -> '--version', '--help' and '--changelog' no longer write to the data directory, so asking an
+      older build for its version leaves the files of a newer one in place.
+  -> A mezura older than the release that last wrote the data directory now stops with a message
+      and leaves the newer files in place. '--restore' still rewrites them with its own.
 
 Change in commands:
   -> '--output markdown' now also renders '--layout matrix', the 'Overview' percentage table, and
-      the 'History' section under '--compare'.
+      the 'History' section under '--compare', and prints on the error output that nothing was
+      found, that every file was left out, and which project settings applied, as a text run does.
   -> '--help' beside '--output json' now prints the help of '--output'. The two together were
       refused before.
   -> '--save <name>' now writes target paths only when they were explicitly given (or already in a
@@ -66,8 +62,11 @@ Change in commands:
   -> '--load default' and '--save default' inside a project now keep the project's settings, and
       '--load default' together with '--no-default-config' is refused.
   -> '--hide modules' prints a configuration or run with named modules as a single flat report.
-  -> '--hide' on the command line now adds to the sections hidden by a loaded configuration instead
-      of replacing them.
+  -> '--hide' on the command line now adds to the sections hidden by a loaded configuration.
+  -> The note that a test tool named in 'package.json', 'pyproject.toml', 'Gemfile' or
+      'composer.json' found no tests now prints under '--output json' and '--output markdown'
+      too, names the file that names the tool, and reaches the JSON 'warnings' (code
+      'test-preset-unapplied') and the markdown page.
   -> A configuration file that declares test patterns, the project's own, a loaded one or the
       default, now silences both the list of applied test presets and the note about a test tool
       whose tests were not found; a '--tests' typed on the command line silences the note only.
@@ -79,6 +78,9 @@ Change in commands:
       the next line.
 
 Other:
+  -> Long file paths under '--by-file' now keep their trailing folders ('.../Services/file.php')
+      when the first folder does not fit, and use the full width of the column when a long file
+      name has already widened it.
   -> The first column header of the Details table now shows the number of counted languages or
       modules ('Language (N)' / 'Module (N)') when more than one is present.
   -> MATLAB now also counts GNU Octave's '#' line comments and '#{' / '#}' block comments, and

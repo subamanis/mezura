@@ -56,7 +56,7 @@ use crate::config_manager::{Configuration, OutputFormat};
 use crate::config_manager::{BADGE, CHANGELOG, COUNTING, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
         SHOW_LANGUAGES, SHOW_PRESETS, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
 use crate::message_printer::Formatted;
-use crate::migration::{MigrationOutcome, migrate_data_files};
+use crate::migration::{MigrationOutcome, find_newer_release_in_manifest, migrate_data_files};
 use crate::startup_timing::{Report, Step, measure, record, record_language_files, stamp};
 
 fn main() -> ExitCode {
@@ -86,22 +86,37 @@ fn main() -> ExitCode {
     // Forced here so that finding the data directory is a step of its own.
     measure(Step::Paths, || LazyLock::force(&crate::paths::PERSISTENT_APP_PATHS));
 
+    let message_command = find_message_command(&args);
+    if let Some(code) = message_command
+            .and_then(|command| refuse_a_message_beside_a_document(&args, command)) {
+        return code;
+    }
+    // Before the migration, since a tool asking a build for its version would otherwise bring the
+    // data directory to that build. '--restore' is that migration itself.
+    if let Some(code) = message_command.and_then(|command| answer_before_the_migration(&args, command)) {
+        return code;
+    }
+
+    // A newer release wrote the data directory, so this build leaves it to that release
+    if let Some(newer) = find_newer_release_in_manifest(&crate::paths::PERSISTENT_APP_PATHS.data_dir) {
+        print_failure(&format_refusal_of_a_newer_release(&newer));
+        return ExitCode::FAILURE;
+    }
+
     // Before the languages are read, or the run that performs it counts with the old files and the
-    // change takes two runs to arrive. Skipped for '--restore', which performs this same pass
-    // itself and exists in order to report it.
-    let restore_was_asked_for = crate::args::has_command(&args, RESTORE);
-    let outcome = measure(Step::Migration, || if restore_was_asked_for {MigrationOutcome::default()}
-            else {migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, false)});
+    // change takes two runs to arrive
+    let outcome = measure(Step::Migration,
+            || migrate_data_files(&crate::paths::PERSISTENT_APP_PATHS.data_dir, false));
     for message in [outcome.format_restored(), outcome.format_replaced(), outcome.format_updated(),
             outcome.format_restyled(), outcome.format_withdrawn(), outcome.format_merged(),
             outcome.format_merged_themes(), outcome.format_failures()].into_iter().flatten() {
         eprintln!("{message}");
     }
 
-    let languages_available = measure(Step::Languages,
-            || read_available_languages(&outcome, restore_was_asked_for));
+    let languages_available = measure(Step::Languages, || read_available_languages(&outcome));
 
-    if let Some(code) = handle_message_only_command(&args, &languages_available) {
+    if let Some(code) = message_command
+            .and_then(|command| answer_after_the_migration(&args, command, &languages_available)) {
         return code;
     }
 
@@ -221,7 +236,7 @@ fn main() -> ExitCode {
                     ExitCode::SUCCESS
                 },
                 Err(complaint) => {
-                    eprintln!("\n{}\n", crate::theme::get_active().error.paint(&crate::message_printer::wrap_message(&complaint)));
+                    print_failure(&complaint);
                     ExitCode::FAILURE
                 }
             };
@@ -229,7 +244,7 @@ fn main() -> ExitCode {
         Ok(Some(crate::diff::DiffRequest::AgainstThisRun(baseline_only))) => Some(baseline_only),
         Ok(None) => None,
         Err(complaint) => {
-            eprintln!("\n{}\n", crate::theme::get_active().error.paint(&crate::message_printer::wrap_message(&complaint)));
+            print_failure(&complaint);
             return ExitCode::FAILURE;
         }
     };
@@ -247,7 +262,7 @@ fn main() -> ExitCode {
     let counted_baseline = match baseline_only.map(|x| x.count_baseline(&config, &conflict_rules)) {
         Some(Ok(x)) => Some(x),
         Some(Err(complaint)) => {
-            eprintln!("\n{}\n", crate::theme::get_active().error.paint(&crate::message_printer::wrap_message(&complaint)));
+            print_failure(&complaint);
             return ExitCode::FAILURE;
         },
         None => None
@@ -328,24 +343,19 @@ fn main() -> ExitCode {
 
 // The pass that ran before this just wrote the data directory and its outcome is the only thing
 // that knows whether it is whole, so nothing here asks the same question a second time.
-fn read_available_languages(outcome: &MigrationOutcome, restore_was_asked_for: bool) -> Vec<Language> {
+fn read_available_languages(outcome: &MigrationOutcome) -> Vec<Language> {
     if !outcome.every_language_file_is_in_place() {
         let shipped = mezura_core::languages::parse_shipped_languages();
         record_language_files(shipped.len());
         return shipped;
     }
     match mezura_core::language_file::parse_languages_in_dir(&crate::paths::PERSISTENT_APP_PATHS.languages_dir) {
-        // A directory that cannot be read is not a reason to refuse to run, and refusing would
-        // be worst of all for the command that repairs it: '--restore' does not perform the
-        // startup pass, so a deleted 'languages' folder would kill the run right here.
+        // A directory that cannot be read is no reason to refuse a run, since the copies inside the
+        // program count without it
         Err(x) => {
-            // Not offered to somebody who is already running it, who is two lines away from the
-            // report of the restore this same run is about to perform
-            let way_out = if restore_was_asked_for {String::new()}
-                    else {format!("\nRun with '--{RESTORE}' to write them now. \
-                            Your configurations, themes and logs are left alone.")};
             eprintln!("\n{}\n", crate::message_printer::wrap_message(&format!(
-                    "{}\nCounting with the copies inside the program until it is there again.{way_out}",
+                    "{}\nCounting with the copies inside the program until it is there again.\nRun with \
+                            '--{RESTORE}' to write them now. Your configurations, themes and logs are left alone.",
                     x.format())).yellow());
             let shipped = mezura_core::languages::parse_shipped_languages();
             record_language_files(shipped.len());
@@ -504,80 +514,57 @@ fn read_args() -> Vec<String> {
             .collect()
 }
 
-// These commands take no configuration, so nothing could hide the version line from them, and they
-// are the only place the version of an installed binary can be read. 'None' means the arguments are
-// not one of them and not that nothing went wrong: three of the branches below report a mistake and
-// stop the run with a failure.
-fn handle_message_only_command(args: &[String], languages_available: &[Language]) -> Option<ExitCode> {
-    let is_present = |command: &str| crate::args::has_command(args, command);
-    // The one list that decides which command answers when several were typed: the first one
-    // present wins, the refusal below names it, and the match below runs it.
-    let message_command = [HELP, VERSION, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, RESTORE,
-            THEME_EDITOR, SHOW_THEMES, SHOW_PRESETS].into_iter().find(|x| is_present(x))?;
-
-    // Refused rather than answered, and before the banner below, which would otherwise be the first
-    // thing written: 'mezura --output json --version > stats.json' leaves a file named for a document
-    // that holds a version line, and nothing says it is not one until something tries to parse it.
-    // The help is the one exception, since a command typed beside '--help' is what it is asked about.
-    if message_command != HELP && let Some(document) = find_document_asked_for(args) {
-        eprintln!("\n{}\n", crate::theme::get_active().error.paint(&crate::message_printer::wrap_message(&format!(
-                "'--{message_command}' prints a message to read and '{document}' writes a document, and both \
-                        of them go to the output, so only one of the two can be asked for at a time."))));
-        return Some(ExitCode::FAILURE);
+// A message beside a document is refused before anything is written. The banner would otherwise open
+// 'stats.json' in 'mezura --output json --version > stats.json', and nothing tells that file from a
+// document until something tries to parse it. The help is the one exception, since a command typed
+// beside '--help' is what it is asked about.
+fn refuse_a_message_beside_a_document(args: &[String], message_command: &str) -> Option<ExitCode> {
+    if message_command == HELP {
+        return None;
     }
+    let document = find_document_asked_for(args)?;
+    print_failure(&format!("'--{message_command}' prints a message to read and '{document}' writes a document, \
+            and both of them go to the output, so only one of the two can be asked for at a time."));
+    Some(ExitCode::FAILURE)
+}
 
-    // '--version' prints the line itself, with the release date next to it, so it is answered before
-    // the plain banner every other message-only command opens with. With '--help' beside it, the
-    // question is about the command and belongs to the help, which 'HELP' standing first in the
-    // list above already decides.
-    if message_command == VERSION {
-        crate::message_printer::print_version();
-        return Some(ExitCode::SUCCESS);
-    }
-    outln!("\n{}", crate::theme::get_active().version.paint(VERSION_ID));
-
+// The message commands take no configuration, so nothing could hide the version line from them, and
+// they are the only place the version of an installed binary can be read. 'None' from either of the
+// two functions means the command is answered by the other one.
+fn answer_before_the_migration(args: &[String], message_command: &str) -> Option<ExitCode> {
     match message_command {
+        // '--version' prints the line itself, with the release date next to it, so it opens with no
+        // banner. With '--help' beside it, the question is about the command and belongs to the help,
+        // which 'HELP' standing first in 'find_message_command' already decides.
+        VERSION => {
+            crate::message_printer::print_version();
+            Some(ExitCode::SUCCESS)
+        },
         HELP => {
+            print_version_banner();
             crate::message_printer::print_help_message_for_given_args(args);
             Some(ExitCode::SUCCESS)
         },
-        CHANGELOG => match crate::args::find_argument_of(args, CHANGELOG) {
-            Some("full") => {
-                crate::message_printer::print_changelog(true);
-                Some(ExitCode::SUCCESS)
-            },
-            Some(arg) if !arg.starts_with("--") => {
-                outln!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(CHANGELOG.to_owned(), arg.to_owned()).format());
-                crate::message_printer::print_help_message_for_command(CHANGELOG);
-                Some(ExitCode::FAILURE)
-            },
-            _ => {
-                crate::message_printer::print_changelog(false);
-                Some(ExitCode::SUCCESS)
-            },
-        },
-        SHOW_LANGUAGES => {
-            let conflict_rules = read_conflict_rules();
-            crate::message_printer::print_supported_languages(languages_available, &conflict_rules);
-            // The list is one line per language and not one per file, so two files declaring one
-            // name collapse into a single entry. Reported here because this command returns before
-            // the run that would otherwise say it.
-            for warning in mezura_core::languages::find_duplicate_names(languages_available) {
-                crate::warning_collector::emit(warning.into());
+        CHANGELOG => {
+            print_version_banner();
+            match crate::args::find_argument_of(args, CHANGELOG) {
+                Some("full") => {
+                    crate::message_printer::print_changelog(true);
+                    Some(ExitCode::SUCCESS)
+                },
+                Some(arg) if !arg.starts_with("--") => {
+                    outln!("\n{}", config_manager::ArgParsingError::IncorrectCommandArgs(CHANGELOG.to_owned(), arg.to_owned()).format());
+                    crate::message_printer::print_help_message_for_command(CHANGELOG);
+                    Some(ExitCode::FAILURE)
+                },
+                _ => {
+                    crate::message_printer::print_changelog(false);
+                    Some(ExitCode::SUCCESS)
+                },
             }
-            report_languages_that_lost_every_claim(mezura_core::languages::find_languages_that_lost_every_claim(
-                    languages_available, &conflict_rules));
-            Some(ExitCode::SUCCESS)
-        },
-        SHOW_CONFIGS => {
-            crate::message_printer::print_existing_configs();
-            Some(ExitCode::SUCCESS)
-        },
-        SHOW_PRESETS => {
-            crate::message_printer::print_test_presets();
-            Some(ExitCode::SUCCESS)
         },
         RESTORE => {
+            print_version_banner();
             // The same pass a changed binary performs, asked for by hand, for when something was
             // damaged while the binary stayed the same. This is the only run that does not perform
             // it on the way in, which is what leaves this report something to describe.
@@ -601,20 +588,55 @@ fn handle_message_only_command(args: &[String], languages_available: &[Language]
 
             Some(if outcome.failed.is_empty() {ExitCode::SUCCESS} else {ExitCode::FAILURE})
         },
-        THEME_EDITOR => match crate::theme_files::generate_theme_editor_page(
-                &crate::paths::PERSISTENT_APP_PATHS.themes_dir, &crate::paths::PERSISTENT_APP_PATHS.data_dir) {
-            Ok(path) => {
-                outln!("\nTheme editor page generated at:\n{path}");
-                open_in_browser(&path);
-                Some(ExitCode::SUCCESS)
-            },
-            Err(x) => {
-                outln!("\n{}", crate::message_printer::wrap_message(
-                        &format!("Unable to generate the theme editor page: {x}")).red());
-                Some(ExitCode::FAILURE)
+        _ => None
+    }
+}
+
+fn answer_after_the_migration(args: &[String], message_command: &str, languages_available: &[Language])
+        -> Option<ExitCode> {
+    match message_command {
+        SHOW_LANGUAGES => {
+            print_version_banner();
+            let conflict_rules = read_conflict_rules();
+            crate::message_printer::print_supported_languages(languages_available, &conflict_rules);
+            // The list is one line per language and not one per file, so two files declaring one
+            // name collapse into a single entry. Reported here because this command returns before
+            // the run that would otherwise say it.
+            for warning in mezura_core::languages::find_duplicate_names(languages_available) {
+                crate::warning_collector::emit(warning.into());
+            }
+            report_languages_that_lost_every_claim(mezura_core::languages::find_languages_that_lost_every_claim(
+                    languages_available, &conflict_rules));
+            Some(ExitCode::SUCCESS)
+        },
+        SHOW_CONFIGS => {
+            print_version_banner();
+            crate::message_printer::print_existing_configs();
+            Some(ExitCode::SUCCESS)
+        },
+        SHOW_PRESETS => {
+            print_version_banner();
+            crate::message_printer::print_test_presets();
+            Some(ExitCode::SUCCESS)
+        },
+        THEME_EDITOR => {
+            print_version_banner();
+            match crate::theme_files::generate_theme_editor_page(
+                    &crate::paths::PERSISTENT_APP_PATHS.themes_dir, &crate::paths::PERSISTENT_APP_PATHS.data_dir) {
+                Ok(path) => {
+                    outln!("\nTheme editor page generated at:\n{path}");
+                    open_in_browser(&path);
+                    Some(ExitCode::SUCCESS)
+                },
+                Err(x) => {
+                    outln!("\n{}", crate::message_printer::wrap_message(
+                            &format!("Unable to generate the theme editor page: {x}")).red());
+                    Some(ExitCode::FAILURE)
+                }
             }
         },
         SHOW_THEMES => {
+            print_version_banner();
             // The preview follows '--layout' and '--counting', so that what it shows is what a run
             // would print. Read here by hand, because a message-only command runs before there is a
             // configuration to ask.
@@ -644,6 +666,35 @@ fn handle_message_only_command(args: &[String], languages_available: &[Language]
         },
         _ => None
     }
+}
+
+// The one list that decides which command answers when several were typed. The first one present
+// wins, the refusal names it, and one of the two answers runs it.
+fn find_message_command(args: &[String]) -> Option<&'static str> {
+    [HELP, VERSION, CHANGELOG, SHOW_LANGUAGES, SHOW_CONFIGS, RESTORE, THEME_EDITOR, SHOW_THEMES, SHOW_PRESETS]
+            .into_iter().find(|command| crate::args::has_command(args, command))
+}
+
+fn print_version_banner() {
+    outln!("\n{}", crate::theme::get_active().version.paint(VERSION_ID));
+}
+
+fn print_failure(message: &str) {
+    eprintln!("\n{}\n", crate::theme::get_active().error.paint(&crate::message_printer::wrap_message(message)));
+}
+
+fn format_refusal_of_a_newer_release(newer: &str) -> String {
+    let paths = &crate::paths::PERSISTENT_APP_PATHS;
+    let folder = paths.data_dir.trim_end_matches(['/', '\\']);
+    let variable = crate::paths::DATA_DIR_VARIABLE;
+    let (named, way_out) = if paths.named_by_the_environment {
+        (format!(", named by {variable},"), format!("Name another folder in {variable}"))
+    } else {
+        (String::new(), format!("Set {variable} to another folder"))
+    };
+    format!("The data directory '{folder}'{named} was written by mezura {newer}, which is newer than this \
+            build, {VERSION_ID}. {way_out} to count with this build, or run '--{RESTORE}' to rewrite it with \
+            this build's files.")
 }
 
 // The command that makes the output a document, when one was typed

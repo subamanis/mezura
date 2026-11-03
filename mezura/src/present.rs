@@ -4,7 +4,6 @@ use std::io::IsTerminal;
 use mezura_core::{AppliedPreset, FaultyFileDetails, RunResult, ScanSkip, UnreadableDirDetails};
 
 use crate::config_manager::{Configuration, OutputFormat};
-use crate::config_manager::HIDE;
 use crate::message_printer::{collect_distinct, format_tests_command, join_with, quote_for_the_shell};
 use crate::message_printer::MESSAGE_WIDTH;
 use crate::paths::find_outermost_directories;
@@ -301,8 +300,6 @@ fn format_applied_presets(result: &RunResult, working_directory: Option<&str>) -
                 |shown| format_cut_list(&directories, shown) + &closing);
         lines.push(format!("{opening}{}{closing}", format_cut_list(&directories, shown)));
     }
-    lines.push(format!("To disable a test preset: {}. To disable test detection: '--{HIDE} tests'.",
-            format_tests_command("!@<name>")));
 
     lines
 }
@@ -498,7 +495,7 @@ mod tests {
                 applied("jest", "D:/proj/web", "jest.config.js", true), applied("pytest", "D:/proj/tools", "conftest.py", false)]);
 
         let lines = format_applied_presets(&result, Some("D:/proj"));
-        assert_eq!(3, lines.len(), "a preset that decided nothing got a row: {lines:#?}");
+        assert_eq!(2, lines.len(), "a preset that decided nothing got a row: {lines:#?}");
         assert_eq!("  @jest   under ./web, ./packages/package-00 and 19 more (jest.config.js, jest.config.ts)", lines[1],
                 "a folder inside another of the same preset was listed, or a deeper one came first");
 

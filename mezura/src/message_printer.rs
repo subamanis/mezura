@@ -10,6 +10,7 @@ use crate::test_presets::{PresetError, collect_user_preset_names, is_a_shipped_n
 
 static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
 pub(crate) const MESSAGE_WIDTH : usize = 110;
+pub(crate) const UNRELEASED : &str = "unreleased";
 // The help paints itself with these colors, because it is printed before a
 // theme is chosen: 'main' answers the message-only commands above the line that sets one, so
 // anything that does ask for a theme there is handed the default.
@@ -1463,16 +1464,19 @@ pub fn create_help_body() -> String {
     body
 }
 
+pub fn print_version() {
+    outln!("
+{} ({})
+", super::theme::get_active().version.paint(VERSION_ID), find_release_date().unwrap_or_else(|| UNRELEASED.to_owned()));
+}
+
 // The release date lives in the Changelog's first line, 'v3.0.0 - unreleased', and nowhere else. A
 // test in this module keeps that line and VERSION_ID together.
-pub fn print_version() {
+pub fn find_release_date() -> Option<String> {
     let changelog = String::from_utf8_lossy(CHANGELOG_BYTES);
-    let released = changelog.lines().next().unwrap_or_default().split_once(" - ")
-            .map_or_else(|| "unreleased".to_owned(), |(_, date)| date.trim().to_owned());
-
-    outln!("
-{} ({released})
-", super::theme::get_active().version.paint(VERSION_ID));
+    let (_, date) = changelog.lines().next()?.split_once(" - ")?;
+    let date = date.trim();
+    (date != UNRELEASED).then(|| date.to_owned())
 }
 
 pub fn get_command_names() -> Vec<&'static str> {
