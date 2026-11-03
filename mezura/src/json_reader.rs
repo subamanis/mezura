@@ -656,7 +656,7 @@ mod tests {
         let (result, config) = populated();
         let read = parse(&create_document(&result, &Local::now(), &config)).unwrap();
 
-        assert_eq!(crate::config_manager::VERSION_ID.trim_start_matches('v'), read.mezura_version);
+        assert_eq!(crate::release::VERSION_ID.trim_start_matches('v'), read.mezura_version);
         assert_eq!(vec!["target".to_owned(), "*.min.js".to_owned()], read.scope.exclude);
         assert_eq!(vec!["spec/".to_owned(), "!spec/fixtures".to_owned()], read.scope.tests);
         assert_eq!(vec!["rust".to_owned()], read.scope.languages);

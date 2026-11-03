@@ -96,7 +96,7 @@ impl Reading {
         Reading {
             source,
             taken,
-            version: super::config_manager::VERSION_ID.trim_start_matches('v').to_owned(),
+            version: super::release::VERSION_ID.trim_start_matches('v').to_owned(),
             scope,
             warnings: Vec::new(),
             faulty_files_count: result.faulty_files.len(),

@@ -7,11 +7,10 @@ use include_dir::{File, include_dir};
 use mezura_core::LANGUAGE_CONFLICTS_FILE_NAME;
 use mezura_core::language_file::ConflictBlock;
 
-use crate::config_manager::VERSION_ID;
 use crate::message_printer::wrap_message;
-use crate::message_printer::UNRELEASED;
 use crate::paths::{CONFIG_DIR_NAME, DEFAULT_CONFIG_NAME, LANGUAGES_DIR_NAME, LOGS_DIR_NAME,
         TEST_PRESETS_DIR_NAME, THEMES_DIR_NAME};
+use crate::release::{UNRELEASED, VERSION_ID};
 use crate::startup_timing::{Step, measure};
 use crate::theme::Theme;
 use crate::theme_files::STOCK_LOOK_THEME;
@@ -824,7 +823,7 @@ impl InstallManifest {
         let mut sorted = files.iter().collect::<Vec<_>>();
         sorted.sort();
         let body = sorted.into_iter().map(|(path, hash)| format!("{path} {hash}")).collect::<Vec<_>>().join("\n");
-        let marker = if crate::message_printer::find_release_date().is_none() {format!(" {UNRELEASED}")}
+        let marker = if crate::release::find_release_date().is_none() {format!(" {UNRELEASED}")}
                 else {String::new()};
 
         std::fs::write(data_dir.to_owned() + INSTALL_MANIFEST_FILE_NAME,
@@ -955,12 +954,11 @@ fn read_baked_in_conflict_rules_contents() -> String {
 #[cfg(test)]
 mod tests {
     use mezura_core::Language;
-    use crate::config_manager::VERSION_ID;
-    use crate::message_printer::UNRELEASED;
     use crate::migration::InstallManifest;
     use crate::migration::{INSTALL_MANIFEST_FILE_NAME, TOKENS_LINE_START, content_hash, find_newer_release_in_manifest,
             merge_conflict_files, migrate_data_files, parse_version};
     use crate::paths::test_paths::SCRATCH_DIR;
+    use crate::release::{UNRELEASED, VERSION_ID};
     use crate::theme::Theme;
 
     #[test]
@@ -1710,7 +1708,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         migrate_data_files(&dir, false);
 
-        let expected = match crate::message_printer::find_release_date() {
+        let expected = match crate::release::find_release_date() {
             Some(_) => VERSION_ID.to_owned(),
             None => format!("{VERSION_ID} {UNRELEASED}"),
         };

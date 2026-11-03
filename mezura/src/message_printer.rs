@@ -6,11 +6,10 @@ use mezura_core::language_file::{ConflictRules, FaultyLanguageFile, LanguageDirP
 
 use super::config_manager::*;
 use crate::paths::PERSISTENT_APP_PATHS;
+use crate::release::{UNRELEASED, VERSION_ID, find_release_date, get_changelog};
 use crate::test_presets::{PresetError, collect_user_preset_names, is_a_shipped_name, read_user_preset};
 
-static CHANGELOG_BYTES : &[u8] = include_bytes!("../Changelog");
 pub(crate) const MESSAGE_WIDTH : usize = 110;
-pub(crate) const UNRELEASED : &str = "unreleased";
 // The help paints itself with these colors, because it is printed before a
 // theme is chosen: 'main' answers the message-only commands above the line that sets one, so
 // anything that does ask for a theme there is handed the default.
@@ -1470,15 +1469,6 @@ pub fn print_version() {
 ", super::theme::get_active().version.paint(VERSION_ID), find_release_date().unwrap_or_else(|| UNRELEASED.to_owned()));
 }
 
-// The release date lives in the Changelog's first line, 'v3.0.0 - unreleased', and nowhere else. A
-// test in this module keeps that line and VERSION_ID together.
-pub fn find_release_date() -> Option<String> {
-    let changelog = String::from_utf8_lossy(CHANGELOG_BYTES);
-    let (_, date) = changelog.lines().next()?.split_once(" - ")?;
-    let date = date.trim();
-    (date != UNRELEASED).then(|| date.to_owned())
-}
-
 pub fn get_command_names() -> Vec<&'static str> {
     COMMAND_HELP.iter().flat_map(|(_, commands)| commands.iter().map(|(name, _)| *name)).collect()
 }
@@ -1663,7 +1653,7 @@ pub fn print_help_message_for_command(arg: &str) {
 }
 
 pub fn print_changelog(full: bool) {
-    let changelog = String::from_utf8_lossy(CHANGELOG_BYTES);
+    let changelog = get_changelog();
     if full {
         outln!("\n{changelog}\n");
     } else {
@@ -2283,16 +2273,6 @@ mod tests {
                 of text was painted as a value");
         assert!(badge.iter().all(|value| crate::badge::BadgeSpec::parse(value).is_ok()), "'--badge' does not accept \
                 every value its help lists: {badge:?}");
-    }
-
-    // '--version' reads the release date from the first line of the Changelog, so without this the
-    // two drift apart silently and '--version' quotes the date of a release that is not running.
-    #[test]
-    fn the_changelog_opens_with_the_version_this_binary_reports() {
-        let changelog = String::from_utf8_lossy(CHANGELOG_BYTES);
-        let first = changelog.lines().next().unwrap();
-        assert!(first.starts_with(&format!("{VERSION_ID} - ")),
-                "the Changelog opens with '{first}', which does not start with '{VERSION_ID} - '");
     }
 
     // The list a bare '--help' prints is these second lines, so a command without one is a blank

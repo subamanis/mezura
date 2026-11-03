@@ -14,14 +14,12 @@ use super::config_files::{ConfigFileIssues, InvalidField};
 use super::git::Checkout;
 use super::message_printer::{self, Formatted, wrap_message};
 use super::paths::LocalDir;
+use super::release::VERSION_ID;
 use super::suggestions;
 use super::test_presets::{ExpandedPatterns, can_name_a_preset, expand_presets, is_a_shipped_name, write_user_preset};
 use super::theme::Theme;
 use super::theme_files::STOCK_LOOK_THEME;
 use super::warning_collector::{ProgramCode, ProgramWarning};
-
-// Printed at startup and by '--version'. Also in mezura/Cargo.toml, and the two move together.
-pub const VERSION_ID : &str = "v3.4.0";
 
 // command flags
 pub const TARGETS            :&str   = "targets";

@@ -31,6 +31,7 @@ mod number_formatter;
 mod paths;
 mod present;
 mod preset_hint;
+mod release;
 mod result_printer;
 mod sources;
 mod startup_timing;
@@ -54,9 +55,10 @@ use mezura_core::language_file::ConflictRules;
 
 use crate::config_manager::{Configuration, OutputFormat};
 use crate::config_manager::{BADGE, CHANGELOG, COUNTING, HELP, LAYOUT, OUTPUT, RESTORE, SHOW_CONFIGS,
-        SHOW_LANGUAGES, SHOW_PRESETS, SHOW_THEMES, THEME_EDITOR, VERSION, VERSION_ID};
+        SHOW_LANGUAGES, SHOW_PRESETS, SHOW_THEMES, THEME_EDITOR, VERSION};
 use crate::message_printer::Formatted;
 use crate::migration::{MigrationOutcome, find_newer_release_in_manifest, migrate_data_files};
+use crate::release::VERSION_ID;
 use crate::startup_timing::{Report, Step, measure, record, record_language_files, stamp};
 
 fn main() -> ExitCode {
