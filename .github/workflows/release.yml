@@ -50,7 +50,11 @@ jobs:
         run: cargo test --verbose
 
       - name: Fetch a corpus to take the profile over
-        run: git clone --depth 1 https://github.com/python/cpython.git ../pgo-corpus
+        shell: bash
+        run: |
+          git init -q ../pgo-corpus
+          git -C ../pgo-corpus fetch -q --depth 1 https://github.com/python/cpython.git 6d69297b2b1007991640310e8699979a2ef66287
+          git -C ../pgo-corpus -c advice.detachedHead=false checkout -q FETCH_HEAD
 
       - name: Build again with a profile taken from this repository and that corpus
         shell: bash

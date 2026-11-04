@@ -44,6 +44,15 @@ if [ -z "$profdata" ]; then
 fi
 "$profdata" merge -o "$root/pgo.profdata" pgo-data
 
-RUSTFLAGS="-Cprofile-use=$(native "$root/pgo.profdata")" cargo build --release
+RUSTFLAGS="-Cprofile-use=$(native "$root/pgo.profdata") -Cllvm-args=-pgo-warn-missing-function" \
+        cargo build --release -p mezura 2>&1 | tee target-pgo/profile-use.log
+
+unmatched="$(grep 'no profile data available for function' target-pgo/profile-use.log | grep -vc build_script_build || true)"
+if [ "$unmatched" -gt 0 ]; then
+    echo "The profile matches none of $unmatched functions of this build, so the binary would ship" >&2
+    echo "without PGO. The two builds above compiled the crates differently: other packages, other" >&2
+    echo "features or other cargo profile settings change the names the profile is keyed by." >&2
+    exit 1
+fi
 
 rm -rf target-pgo pgo-data
