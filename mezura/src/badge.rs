@@ -10,12 +10,20 @@ const BADGE_FIGURES : [BadgeFigure; 6] = [
     BadgeFigure::Lines, BadgeFigure::Code, BadgeFigure::Comments, BadgeFigure::Tests,
     BadgeFigure::Files, BadgeFigure::Languages
 ];
+const ICON_GRID : usize = 16;
+const ICON_SIZE : usize = 14;
+const ICON_BRACKETS : &str = "<polygon points=\"3.6,3.4 5,4.7 2.6,8 5,11.3 3.6,12.6 0.5,8\"/>\
+        <polygon points=\"12.4,3.4 11,4.7 13.4,8 11,11.3 12.4,12.6 15.5,8\"/>";
+const ICON_RULER : &str = "<path d=\"M9.3 1.5H11.9L10.9 4H9.4L8.96 5.1H10.46L9.7 7H8.2L7.76 8.1H9.26L8.5 10H7L6.56 11.1\
+        H8.06L6.7 14.5H4.1Z\"/>";
 const PILL_HEIGHT : usize = 20;
 const PILL_PADDING : f64 = 5.0;
 const PILL_FONT_SIZE : f64 = 11.0;
+const PILL_ICON_GAP : usize = 3;
 const PILL_LABEL_FILL : &str = "#555555";
 const PILL_LABEL_TEXT : &str = "#ffffff";
-const PILL_LINES_COLORS : (&str, &str) = ("#3a96dd", "#0d2131");
+const PILL_RULER_FILL : &str = "#8ccfff";
+const PILL_LINES_COLORS : (&str, &str) = ("#3a96dd", "#04111c");
 const PILL_CODE_COLORS : (&str, &str) = ("#b4009e", "#ffffff");
 const PILL_COMMENTS_COLORS : (&str, &str) = ("#6ad9bd", "#17302a");
 const PILL_TESTS_COLORS : (&str, &str) = ("#f9f1a5", "#373524");
@@ -26,6 +34,8 @@ const CARD_INSET : usize = 16;
 const CARD_FONT_SIZE : f64 = 12.0;
 const CARD_FOOTER_FONT_SIZE : f64 = 11.0;
 const CARD_TITLE_BASELINE : usize = 26;
+const CARD_ICON_TOP : f64 = 14.5;
+const CARD_ICON_GAP : usize = 4;
 const CARD_BAR_TOP : usize = 36;
 const CARD_BAR_HEIGHT : usize = 8;
 const CARD_LIST_TOP : usize = 64;
@@ -33,8 +43,8 @@ const CARD_ROW_HEIGHT : usize = 18;
 const CARD_LANGUAGES : usize = 6;
 const CARD_NAME_LIMIT : usize = 14;
 const CARD_STYLE : &str = ".bg{fill:#ffffff}.bd{stroke:#d0d7de}.fg{fill:#1f2328}.mu{fill:#656d76}.ot{fill:#8b949e}\
-        .tr{fill:#eaeef2}@media(prefers-color-scheme:dark){.bg{fill:#0d1117}.bd{stroke:#30363d}.fg{fill:#e6edf3}\
-        .mu{fill:#8b949e}.ot{fill:#484f58}.tr{fill:#21262d}}";
+        .tr{fill:#eaeef2}.ac{fill:#0969da}@media(prefers-color-scheme:dark){.bg{fill:#0d1117}.bd{stroke:#30363d}\
+        .fg{fill:#e6edf3}.mu{fill:#8b949e}.ot{fill:#484f58}.tr{fill:#21262d}.ac{fill:#8ccfff}}";
 const OTHER_NAME : &str = "Other";
 const OTHER_FILL : &str = "url(#o)";
 const UNKNOWN_LANGUAGE_COLOR : &str = "#9e9e9e";
@@ -257,7 +267,9 @@ fn render_pill(figures: &[DrawnFigure]) -> String {
     let amounts = figures.iter().map(|figure| figure.format_amount(format_short_number)).collect::<Vec<_>>();
     let text_widths = figures.iter().zip(&amounts).map(|(figure, amount)| measure_bold_text(amount, PILL_FONT_SIZE)
             + measure_pill_text(&format!(" {}", figure.figure.as_str()))).collect::<Vec<_>>();
-    let label_cell_width = calculate_pill_cell_width(label_text_width);
+    let icon_room = ICON_SIZE + PILL_ICON_GAP;
+    let label_text_cell_width = calculate_pill_cell_width(label_text_width);
+    let label_cell_width = icon_room + label_text_cell_width;
     let cell_widths = text_widths.iter().map(|width| calculate_pill_cell_width(*width)).collect::<Vec<_>>();
     let total_width = label_cell_width + cell_widths.iter().sum::<usize>();
     let title = escape_xml(&format!("{BADGE_LABEL}: {}", figures.iter().map(DrawnFigure::format_short).collect::<Vec<_>>().join(", ")));
@@ -275,9 +287,12 @@ fn render_pill(figures: &[DrawnFigure]) -> String {
         x += cell_width;
     }
     svg.push_str("</g>");
+    write_icon(&mut svg, PILL_PADDING, ((PILL_HEIGHT - ICON_SIZE) / 2) as f64, &format!("fill=\"{PILL_LABEL_TEXT}\""),
+            &format!("fill=\"{PILL_RULER_FILL}\""));
     svg.push_str(&format!("<g font-family=\"Verdana,Geneva,DejaVu Sans,sans-serif\" font-size=\"{PILL_FONT_SIZE}\" \
             text-anchor=\"middle\">"));
-    write_pill_text(&mut svg, &escape_xml(BADGE_LABEL), label_cell_width as f64 / 2.0, label_text_width, PILL_LABEL_TEXT);
+    write_pill_text(&mut svg, &escape_xml(BADGE_LABEL), icon_room as f64 + label_text_cell_width as f64 / 2.0,
+            label_text_width, PILL_LABEL_TEXT);
     let mut x = label_cell_width;
     for (((figure, amount), text_width), cell_width) in figures.iter().zip(&amounts).zip(&text_widths).zip(&cell_widths) {
         let markup = format!("<tspan font-weight=\"bold\">{}</tspan> {}", escape_xml(amount), figure.figure.as_str());
@@ -296,6 +311,12 @@ fn write_pill_text(svg: &mut String, markup: &str, center: f64, width: f64, fill
 
 fn calculate_pill_cell_width(text_width: f64) -> usize {
     (text_width + 2.0 * PILL_PADDING).ceil() as usize
+}
+
+fn write_icon(svg: &mut String, x: f64, y: f64, brackets_paint: &str, ruler_paint: &str) {
+    svg.push_str(&format!("<svg x=\"{}\" y=\"{}\" width=\"{ICON_SIZE}\" height=\"{ICON_SIZE}\" \
+            viewBox=\"0 0 {ICON_GRID} {ICON_GRID}\"><g {brackets_paint}>{ICON_BRACKETS}</g><g {ruler_paint}>{ICON_RULER}</g></svg>",
+            format_with_one_decimal(x), format_with_one_decimal(y)));
 }
 
 // The first figure is the headline beside the title, the rest make the footer
@@ -325,7 +346,9 @@ fn render_card(result: &RunResult, config: &Configuration, figures: &[DrawnFigur
             CARD_WIDTH - 1, height - 1));
     svg.push_str(&format!("<g font-family=\"-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif\" \
             font-size=\"{CARD_FONT_SIZE}\">"));
-    svg.push_str(&format!("<text x=\"{CARD_INSET}\" y=\"{CARD_TITLE_BASELINE}\" class=\"mu\">{BADGE_LABEL}</text>"));
+    write_icon(&mut svg, CARD_INSET as f64, CARD_ICON_TOP, "class=\"mu\"", "class=\"ac\"");
+    svg.push_str(&format!("<text x=\"{}\" y=\"{CARD_TITLE_BASELINE}\" class=\"mu\">{BADGE_LABEL}</text>",
+            CARD_INSET + ICON_SIZE + CARD_ICON_GAP));
     if let Some(figure) = headline {
         svg.push_str(&format!("<text x=\"{}\" y=\"{CARD_TITLE_BASELINE}\" text-anchor=\"end\" font-weight=\"500\" class=\"fg\">{}</text>",
                 CARD_WIDTH - CARD_INSET, escape_xml(&figure.format_whole())));
