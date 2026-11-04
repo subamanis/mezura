@@ -11,8 +11,8 @@ It lets you decide what counts as what, and how the report looks.
 The figures can be grouped by language, by module and by file.  
 Windows, Linux and macOS binaries are built and tested on every release.
 
-The whole Linux kernel, in five of the bundled themes:
-<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/hero.gif" width="1187">
+The whole Linux kernel, in some of the bundled themes:
+<img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/hero.gif" width="1179">
 
 
 ## Table of contents

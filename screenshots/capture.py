@@ -14,12 +14,15 @@ import ctypes
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
+import webbrowser
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -60,7 +63,7 @@ HERO_LIGHT_THEMES = [
     "Ocean-light",
 ]
 
-HERO_ALL_THEMES = HERO_DARK_THEMES + HERO_LIGHT_THEMES
+HERO_ALL_THEMES = HERO_DARK_THEMES + ["Uncolored"] + HERO_LIGHT_THEMES
 
 ALL_BUNDLED_THEMES = [
     "Preset default",
@@ -93,6 +96,36 @@ LIGHT_THEME_PALETTES: Dict[str, Tuple[str, str]] = {
 DARK_DEFAULT_BG = "#0c0c0c" if sys.platform == "win32" else "#101010"
 DARK_DEFAULT_FG = "#cccccc"
 
+HERO_SIZE = (1187, 1155) if sys.platform.startswith("linux") else (1187, 1255)
+
+TRIM_EDGE = 4
+
+GNOME_EFFECTS = [
+    ("org.gnome.desktop.sound", "event-sounds"),
+    ("org.gnome.desktop.interface", "enable-animations"),
+]
+
+GITHUB_MARKDOWN_API = "https://api.github.com/markdown"
+GITHUB_MARKDOWN_CSS = "https://cdn.jsdelivr.net/npm/github-markdown-css@5.8.1/github-markdown-light.min.css"
+MARKDOWN_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>report.md</title>
+<link rel="stylesheet" href="{css}">
+<style>
+body {{ margin: 0; background: #ffffff; }}
+.markdown-body {{ box-sizing: border-box; padding: 16px 24px; }}
+</style>
+</head>
+<body>
+<article class="markdown-body">
+{body}
+</article>
+</body>
+</html>
+"""
+
 
 @dataclass
 class Preset:
@@ -106,6 +139,7 @@ class Preset:
     hero_themes: List[str] = field(default_factory=list)
     force_light_bg: Optional[str] = None
     batch_members: List[str] = field(default_factory=list)
+    browser_page: Optional[str] = None
     description: str = ""
 
 
@@ -113,31 +147,32 @@ PRESETS: Dict[str, Preset] = {
     "hero": Preset(
         name="hero",
         output="hero.gif",
-        default_size=(1187, 1255),
+        default_size=HERO_SIZE,
         section="full_with_prompt",
-        args=["{linux}", "--top", "10"],
+        args=["{linux}", "--top", "12"],
         uses_linux_repo=True,
         is_hero_gif=True,
         hero_themes=HERO_ALL_THEMES,
-        description="Linux kernel in 5 dark + 3 light themes -> new/hero.gif + 3 light PNGs",
+        description="Linux kernel in 5 dark themes, Uncolored and 3 light themes -> new/hero.gif + 3 light PNGs",
     ),
     "hero-classic": Preset(
         name="hero-classic",
         output="hero-classic.gif",
-        default_size=(1187, 1255),
+        default_size=HERO_SIZE,
         section="full_with_prompt",
-        args=["{linux}", "--top", "10"],
+        args=["{linux}", "--top", "12"],
         uses_linux_repo=True,
         is_hero_gif=True,
-        hero_themes=["Mezura-classic", "Gruvbox", "Ocean", "Dracula", "Meadow"] + HERO_LIGHT_THEMES,
-        description="Linux kernel (starting with Mezura-classic) + 3 light themes -> new/hero-classic.gif",
+        hero_themes=["Mezura", "Mezura-classic", "Gruvbox", "Ocean", "Dracula", "Meadow", "Uncolored"]
+        + HERO_LIGHT_THEMES,
+        description="Linux kernel in Mezura, then Mezura-classic, the dark themes, Uncolored and 3 light themes -> new/hero-classic.gif",
     ),
     "hero-dark-only": Preset(
         name="hero-dark-only",
         output="hero-dark.gif",
-        default_size=(1187, 1255),
+        default_size=HERO_SIZE,
         section="full_with_prompt",
-        args=["{linux}", "--top", "10"],
+        args=["{linux}", "--top", "12"],
         uses_linux_repo=True,
         is_hero_gif=True,
         hero_themes=HERO_DARK_THEMES,
@@ -254,6 +289,32 @@ PRESETS: Dict[str, Preset] = {
         force_light_bg="Catppuccin-light",
         description="Catppuccin-light, Gruvbox-light, and Ocean-light previews -> new/theme-showcase-light.png",
     ),
+    "markdown": Preset(
+        name="markdown",
+        output="markdown.png",
+        default_size=(1180, 990),
+        section="",
+        args=["--by-file", "2", "--output", "markdown"],
+        browser_page="markdown",
+        description="--output markdown as GitHub renders it, opened in the browser by Preview -> new/markdown.png",
+    ),
+    "html": Preset(
+        name="html",
+        output="html.png",
+        default_size=(1180, 885),
+        section="",
+        args=["--output", "html"],
+        browser_page="html",
+        description="--output html, opened in the browser by Preview, the top of the page -> new/html.png",
+    ),
+    "theme-editor": Preset(
+        name="theme-editor",
+        output="theme-editor.png",
+        default_size=(1412, 1185),
+        section="",
+        browser_page="theme-editor",
+        description="docs/theme-editor/index.html, opened in the browser by Preview -> new/theme-editor.png",
+    ),
     "batch: layouts": Preset(
         name="batch: layouts",
         output="4 layout PNGs",
@@ -270,12 +331,16 @@ PRESETS: Dict[str, Preset] = {
         batch_members=["tests-share", "tests-split"],
         description="Captures tests-share and tests-split sequentially into new/",
     ),
-    "batch: all-mezura": Preset(
-        name="batch: all-mezura",
-        output="10 mezura PNGs",
-        default_size=(1520, 980),
-        section="details",
+    "batch: all": Preset(
+        name="batch: all",
+        output="every terminal picture of the README",
+        default_size=(1520, 1255),
+        section="full_with_prompt",
+        uses_linux_repo=True,
         batch_members=[
+            "hero",
+            "modules-with-unnamed",
+            "modules-matrix",
             "table-layout",
             "boxed-layout",
             "list-layout",
@@ -285,18 +350,8 @@ PRESETS: Dict[str, Preset] = {
             "compare",
             "diff",
             "theme-showcase",
-            "theme-showcase-light",
         ],
-        description="Captures all 10 mezura-repo screenshots sequentially into new/",
-    ),
-    "batch: all-linux": Preset(
-        name="batch: all-linux",
-        output="hero.gif + 2 module PNGs",
-        default_size=(1320, 1255),
-        section="full_with_prompt",
-        uses_linux_repo=True,
-        batch_members=["hero", "modules-with-unnamed", "modules-matrix"],
-        description="Captures hero.gif (dark + light) and both Linux module screenshots into new/",
+        description="Every terminal picture of the README into new/; markdown, html and theme-editor are browser pages, one at a time",
     ),
 }
 
@@ -354,13 +409,19 @@ def restore_terminal_state() -> None:
 atexit.register(restore_terminal_state)
 
 
-def extract_section(raw_output: str, section: str, linux_dir: str = "./linux") -> str:
+def extract_section(
+    raw_output: str,
+    section: str,
+    linux_dir: str = "./linux",
+    shown_args: Optional[List[str]] = None,
+) -> str:
     lines = raw_output.replace("\r\n", "\n").split("\n")
 
     if section == "full_with_prompt":
+        typed = " ".join(arg.replace("{linux}", "./linux") for arg in (shown_args or ["{linux}", "--top", "12"]))
         prompt = (
             "\x1b[1;32mpetros@Petra\x1b[0m:\x1b[1;34m~/Documents/dev/bench\x1b[0m"
-            "$ mezura ./linux --top 10"
+            f"$ mezura {typed}"
         )
         cleaned = list(lines)
         while cleaned and strip_ansi(cleaned[-1]).strip() == "":
@@ -472,19 +533,40 @@ def extract_section(raw_output: str, section: str, linux_dir: str = "./linux") -
     return raw_output.strip("\n")
 
 
+def find_top_arg(args: List[str]) -> str:
+    if "--top" in args and args.index("--top") + 1 < len(args):
+        return args[args.index("--top") + 1]
+    return ""
+
+
+def override_args(args: List[str], top: Optional[str], extra_args: List[str]) -> List[str]:
+    if "--show-themes" in args:
+        return list(args)
+    out = list(args)
+    if top:
+        if "--top" in out:
+            out[out.index("--top") + 1] = top
+        else:
+            out.extend(["--top", top])
+    return out + extra_args
+
+
 def run_mezura_for_preset(
     preset: Preset,
     mezura_bin: str,
     linux_dir: str,
     theme_override: Optional[str] = None,
+    top: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
 ) -> str:
     env = os.environ.copy()
     env["CLICOLOR_FORCE"] = "1"
     env.pop("NO_COLOR", None)
     env.pop("CLICOLOR", None)
 
+    args = override_args(preset.args, top, extra_args or [])
     cmd = [mezura_bin]
-    for arg in preset.args:
+    for arg in args:
         cmd.append(arg.replace("{linux}", linux_dir))
 
     if "--show-themes" not in cmd:
@@ -515,7 +597,55 @@ def run_mezura_for_preset(
     elif not raw.strip() and proc.stderr.strip():
         raw = proc.stderr
 
-    return extract_section(raw, preset.section, linux_dir=linux_dir)
+    return extract_section(raw, preset.section, linux_dir=linux_dir, shown_args=args)
+
+
+def render_github_markdown(text: str) -> str:
+    request = urllib.request.Request(
+        GITHUB_MARKDOWN_API,
+        data=json.dumps({"text": text, "mode": "gfm"}).encode("utf-8"),
+        headers={"Accept": "application/vnd.github+json", "Content-Type": "application/json"},
+    )
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return response.read().decode("utf-8")
+
+
+def write_browser_page(
+    preset: Preset,
+    mezura_bin: str,
+    top: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
+) -> Path:
+    if preset.browser_page == "theme-editor":
+        return REPO_ROOT / "docs" / "theme-editor" / "index.html"
+    env = os.environ.copy()
+    env.pop("CLICOLOR_FORCE", None)
+    cmd = [mezura_bin] + override_args(preset.args, top, extra_args or []) + ["--no-default-config"]
+    proc = subprocess.run(
+        cmd,
+        cwd=str(REPO_ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    if preset.browser_page == "html":
+        page = OUTPUT_DIR / "report.html"
+        page.write_text(proc.stdout, encoding="utf-8")
+        return page
+    (OUTPUT_DIR / "report.md").write_text(proc.stdout, encoding="utf-8")
+    page = OUTPUT_DIR / "report-markdown.html"
+    page.write_text(
+        MARKDOWN_PAGE.format(css=GITHUB_MARKDOWN_CSS, body=render_github_markdown(proc.stdout)),
+        encoding="utf-8",
+    )
+    return page
 
 
 def normalize_exec_time(rendered: str, reference_time_str: Optional[str]) -> Tuple[str, Optional[str]]:
@@ -567,6 +697,23 @@ def print_in_terminal(
     return clamped_scroll, max_scroll
 
 
+def switch_off_gnome_effects() -> List[Tuple[str, str]]:
+    if not sys.platform.startswith("linux") or not shutil.which("gsettings"):
+        return []
+    switched_off = []
+    for schema, key in GNOME_EFFECTS:
+        current = subprocess.run(["gsettings", "get", schema, key], capture_output=True, text=True).stdout.strip()
+        if current == "true":
+            subprocess.run(["gsettings", "set", schema, key, "false"], check=False)
+            switched_off.append((schema, key))
+    return switched_off
+
+
+def restore_gnome_effects(switched_off: List[Tuple[str, str]]) -> None:
+    for schema, key in switched_off:
+        subprocess.run(["gsettings", "set", schema, key, "true"], check=False)
+
+
 def grab_screen_bbox(bbox: Tuple[int, int, int, int]):
     from PIL import Image, ImageGrab
 
@@ -595,16 +742,17 @@ def grab_screen_bbox(bbox: Tuple[int, int, int, int]):
 
 def compute_content_bbox(img, tolerance: int = 8) -> Optional[Tuple[int, int, int, int]]:
     """Finds the bounding box of pixels differing from the corner background color."""
-    from PIL import Image, ImageChops
+    from PIL import Image, ImageChops, ImageDraw
 
     w, h = img.size
-    if w <= 2 or h <= 2:
+    if w <= 2 * TRIM_EDGE + 2 or h <= 2 * TRIM_EDGE + 2:
         return None
     # Sample bottom-right or top-left corner for the terminal background color
-    bg_color = img.getpixel((w - 2, h - 2))
+    bg_color = img.getpixel((w - 1 - TRIM_EDGE, h - 1 - TRIM_EDGE))
     bg_img = Image.new("RGB", (w, h), bg_color)
     diff = ImageChops.difference(img, bg_img).convert("L")
     diff = diff.point(lambda p: 255 if p > tolerance else 0)
+    ImageDraw.Draw(diff).rectangle((0, 0, w - 1, h - 1), outline=0, width=TRIM_EDGE)
     return diff.getbbox()
 
 
@@ -784,7 +932,6 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
 
     root = tk.Tk()
     root.title("mezura screenshot capture")
-    root.attributes("-topmost", True)
 
     transparent_key = "#010203"
     use_transparent_hole = False
@@ -797,7 +944,7 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
     else:
         try:
             root.wait_visibility(root)
-            root.wm_attributes("-alpha", 0.55)
+            root.wm_attributes("-alpha", 0.75)
         except Exception:
             pass
 
@@ -864,7 +1011,6 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
     def browse_linux_dir() -> Optional[str]:
         cur = linux_var.get().strip()
         init_dir = str(Path(cur).expanduser()) if cur and Path(cur).expanduser().is_dir() else str(REPO_ROOT.parent)
-        root.attributes("-topmost", False)
         try:
             chosen = filedialog.askdirectory(
                 parent=root,
@@ -872,7 +1018,6 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
                 title="Select Linux kernel repository directory",
             )
         finally:
-            root.attributes("-topmost", True)
             root.lift()
         if chosen:
             linux_var.set(chosen)
@@ -906,6 +1051,34 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
     )
     trim_check.pack(side=tk.LEFT, padx=(0, 8))
 
+    tk.Label(row2, text="--top:", fg="#cdd6f4", bg="#1e1e2e", font=("Segoe UI", 9)).pack(
+        side=tk.LEFT, padx=(0, 4)
+    )
+    top_var = tk.StringVar(value=find_top_arg(PRESETS[preset_var.get()].args))
+    top_entry = tk.Entry(
+        row2,
+        textvariable=top_var,
+        width=4,
+        bg="#313244",
+        fg="#cdd6f4",
+        insertbackground="#cdd6f4",
+    )
+    top_entry.pack(side=tk.LEFT, padx=(0, 8))
+
+    tk.Label(row2, text="Extra args:", fg="#cdd6f4", bg="#1e1e2e", font=("Segoe UI", 9)).pack(
+        side=tk.LEFT, padx=(0, 4)
+    )
+    extra_args_var = tk.StringVar(value="")
+    extra_args_entry = tk.Entry(
+        row2,
+        textvariable=extra_args_var,
+        width=20,
+        bg="#313244",
+        fg="#cdd6f4",
+        insertbackground="#cdd6f4",
+    )
+    extra_args_entry.pack(side=tk.LEFT, padx=(0, 8))
+
     status_var = tk.StringVar(value="Ready")
     status_bar = tk.Label(
         root,
@@ -920,7 +1093,14 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
     status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
     hole_bg = transparent_key if use_transparent_hole else "#11111b"
-    capture_hole = tk.Frame(root, bg=hole_bg)
+    hole_edge = 0 if use_transparent_hole else 1
+    capture_hole = tk.Frame(
+        root,
+        bg=hole_bg,
+        highlightthickness=hole_edge,
+        highlightbackground="#f9e2af",
+        highlightcolor="#f9e2af",
+    )
     capture_hole.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
     def current_hole_bbox() -> Tuple[int, int, int, int]:
@@ -1004,6 +1184,18 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
         scroll_state["max"] = max_off
         update_status_dimensions()
 
+    def read_overrides() -> Tuple[Optional[str], List[str]]:
+        top = top_var.get().strip()
+        if top and not top.isdigit():
+            status_var.set(f"--top '{top}' is not a number, left out.")
+            top = ""
+        try:
+            extra_args = shlex.split(extra_args_var.get())
+        except ValueError as err:
+            status_var.set(f"Extra args left out: {err}")
+            extra_args = []
+        return (top or None), extra_args
+
     def preview_current(*_args) -> None:
         preset = PRESETS[preset_var.get()]
         if preset.batch_members:
@@ -1016,6 +1208,19 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
         if linux_target is None:
             return
 
+        if preview_preset.browser_page:
+            status_var.set(f"Writing the {preview_preset.browser_page} page...")
+            root.update_idletasks()
+            top, extra_args = read_overrides()
+            try:
+                page = write_browser_page(preview_preset, mezura_bin, top, extra_args)
+            except Exception as err:
+                status_var.set(f"The {preview_preset.browser_page} page failed: {err}")
+                return
+            webbrowser.open(page.as_uri())
+            status_var.set(f"Opened {page.relative_to(REPO_ROOT)} in the browser: put the frame over it and press Capture.")
+            return
+
         chosen_theme = theme_var.get()
         if preview_preset.is_hero_gif and chosen_theme == "Preset default":
             chosen_theme = preview_preset.hero_themes[0]
@@ -1023,11 +1228,14 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
         bg_theme = preview_preset.force_light_bg or chosen_theme
         status_var.set(f"Rendering preview for '{preview_preset.name}'...")
         root.update_idletasks()
+        top, extra_args = read_overrides()
         rendered = run_mezura_for_preset(
             preview_preset,
             mezura_bin=mezura_bin,
             linux_dir=linux_target,
             theme_override=chosen_theme,
+            top=top,
+            extra_args=extra_args,
         )
         cur_off, max_off = print_in_terminal(
             rendered,
@@ -1044,6 +1252,17 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         saved_paths: List[Path] = []
         cur_scroll = int(scroll_state["offset"])
+        top, extra_args = read_overrides()
+
+        if preset.browser_page:
+            time.sleep(0.20)
+            img = grab_screen_bbox(bbox)
+            if auto_trim_var.get():
+                img = auto_trim_single(img, padding=14)
+            out_path = OUTPUT_DIR / preset.output
+            img.save(str(out_path))
+            saved_paths.append(out_path)
+            return saved_paths
 
         if preset.is_hero_gif:
             frames = []
@@ -1054,6 +1273,8 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
                     mezura_bin=mezura_bin,
                     linux_dir=linux_target,
                     theme_override=thm,
+                    top=top,
+                    extra_args=extra_args,
                 )
                 rendered, ref_exec_time = normalize_exec_time(rendered, ref_exec_time)
                 print_in_terminal(rendered, theme_for_bg=thm, scroll_offset=cur_scroll)
@@ -1091,6 +1312,8 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
             mezura_bin=mezura_bin,
             linux_dir=linux_target,
             theme_override=chosen_theme,
+            top=top,
+            extra_args=extra_args,
         )
         cur_off, max_off = print_in_terminal(rendered, theme_for_bg=bg_theme, scroll_offset=cur_scroll)
         scroll_state["rendered"] = rendered
@@ -1131,13 +1354,14 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
         time.sleep(0.18)
 
         all_saved: List[Path] = []
+        switched_off = switch_off_gnome_effects()
         try:
             for item in members:
                 all_saved.extend(capture_single_preset(item, bbox, linux_target))
         finally:
+            restore_gnome_effects(switched_off)
             root.deiconify()
             root.lift()
-            root.attributes("-topmost", True)
 
         names = ", ".join(f"new/{p.name}" for p in all_saved[:4])
         if len(all_saved) > 4:
@@ -1147,6 +1371,7 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
     def on_preset_changed(*_args) -> None:
         scroll_state["offset"] = 0
         scroll_state["max"] = 0
+        top_var.set(find_top_arg(PRESETS[preset_var.get()].args))
         apply_preset_geometry(preset_var.get())
 
     def on_theme_changed(*_args) -> None:
@@ -1222,10 +1447,16 @@ def run_gui(mezura_bin: str, initial_preset: str, linux_dir: str) -> int:
     preset_combo.bind("<<ComboboxSelected>>", on_preset_changed)
     theme_combo.bind("<<ComboboxSelected>>", on_theme_changed)
     capture_hole.bind("<Configure>", update_status_dimensions)
+    def on_return(event) -> None:
+        if event.widget in (top_entry, extra_args_entry):
+            preview_current()
+        elif event.widget is not linux_entry:
+            on_capture()
+
     root.bind("<Up>", lambda e: None if e.widget in (preset_combo, theme_combo) else scroll_by(-1))
     root.bind("<Down>", lambda e: None if e.widget in (preset_combo, theme_combo) else scroll_by(1))
     root.bind("<MouseWheel>", lambda e: scroll_by(-1 if e.delta > 0 else 1))
-    root.bind("<Return>", lambda e: None if e.widget is linux_entry else on_capture())
+    root.bind("<Return>", on_return)
     root.bind("<Escape>", close_cleanly)
     root.protocol("WM_DELETE_WINDOW", close_cleanly)
 
@@ -1295,7 +1526,10 @@ def main() -> int:
             return 1
         members = [PRESETS[m] for m in preset.batch_members] if preset.batch_members else [preset]
         for item in members:
-            if item.is_hero_gif:
+            if item.browser_page:
+                page = write_browser_page(item, mezura_bin)
+                sys.stdout.write(f"=== {item.name} ===\n{page}\n\n")
+            elif item.is_hero_gif:
                 ref_time = None
                 for thm in item.hero_themes:
                     out = run_mezura_for_preset(item, mezura_bin, linux_dir, theme_override=thm)
