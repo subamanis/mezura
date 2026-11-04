@@ -82,7 +82,8 @@ Both come out of the same run, so switching costs no recounting.
 `explain_file` reads a single file line by line and says why each line was counted the way it was:
 the class it landed in, what earlier lines had left open, and which stretches of it sit inside a
 string or a comment. It also says what identified the file when its extension is contested, and why
-a directory scan would have left it out.
+a directory scan would have left it out. `run_watched_by` takes any `RunWatcher`, which can also
+receive the figures per language as they are counted.
 
 Languages of your own go in through `Languages::shipped_with`, and a caller keeping its own
 directory of language files parses them with `language_file` and hands them to `Languages::resolve`.

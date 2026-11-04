@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 
 use crate::{EngineConfig, FaultyFileDetails, FaultyFilesListMut, FileEntry, FilesPerModuleMut,
-        Language, ModuleRowsMut, NestedLanguageMapMut, ParsableFile, ScanProgress, ScanSkip, SkippedFiles, Stats,
+        Language, ModuleRowsMut, NestedLanguageMapMut, ParsableFile, RunWatcher, ScanSkip, SkippedFiles, Stats,
         StatsMapMut, TestCode, TestCodeMapMut, phase_timing};
 use crate::engine::file_parser;
 use crate::engine::identity::ModuleLookups;
@@ -18,7 +18,7 @@ use crate::languages::NestedLanguageDefinitions;
 
 const INITIAL_FILE_BUFFER_BYTES : usize = 150;
 
-pub(crate) fn start_parser_thread<'scope>(scope: &'scope Scope<'scope, '_>, id: usize,
+pub(crate) fn start_parser_thread<'scope, W: RunWatcher>(scope: &'scope Scope<'scope, '_>, id: usize,
         files_injector: &'scope Injector<ParsableFile>, worker: Worker<ParsableFile>, peers: &'scope [Stealer<ParsableFile>],
         faulty_files: &'scope FaultyFilesListMut, finish_condition: &'scope AtomicBool,
         stats_per_module: &'scope StatsMapMut, nested_per_module: &'scope NestedLanguageMapMut,
@@ -27,12 +27,12 @@ pub(crate) fn start_parser_thread<'scope>(scope: &'scope Scope<'scope, '_>, id: 
         language_lookups: &'scope ModuleLookups,
         config: &'scope EngineConfig, started: Instant, counting_ended: &'scope AtomicU64,
         consumer_exits: &'scope (AtomicU64, AtomicU64), skipped_files: &'scope Mutex<SkippedFiles>,
-        progress: &'scope ScanProgress) -> std::io::Result<ScopedJoinHandle<'scope, ()>>
+        watcher: &'scope W) -> std::io::Result<ScopedJoinHandle<'scope, ()>>
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn_scoped(scope, move || {
         start_parsing_files(id, files_injector, worker, peers, faulty_files, finish_condition, stats_per_module,
                 nested_per_module, tests_per_module, files_per_module, module_rows, language_map, nested_definitions,
-                language_lookups, config, skipped_files, progress);
+                language_lookups, config, skipped_files, watcher);
         // The last thing this thread does, and the only honest answer to how long the counting took:
         // 'run' joins these threads after calling the caller's callback, so its own clock cannot tell
         // the two apart.
@@ -46,13 +46,13 @@ pub(crate) fn start_parser_thread<'scope>(scope: &'scope Scope<'scope, '_>, id: 
     })
 }
 
-fn start_parsing_files(id: usize, files_injector: &Injector<ParsableFile>, worker: Worker<ParsableFile>,
+fn start_parsing_files<W: RunWatcher>(id: usize, files_injector: &Injector<ParsableFile>, worker: Worker<ParsableFile>,
     peers: &[Stealer<ParsableFile>], faulty_files: &FaultyFilesListMut, finish_condition: &AtomicBool,
     stats_per_module: &StatsMapMut, nested_per_module: &NestedLanguageMapMut, tests_per_module: &TestCodeMapMut,
     files_per_module: &FilesPerModuleMut, module_rows: &ModuleRowsMut,
     language_map: &HashMap<String,Language>, nested_definitions: &NestedLanguageDefinitions,
     language_lookups: &ModuleLookups,
-    config: &EngineConfig, skipped_files: &Mutex<SkippedFiles>, progress: &ScanProgress)
+    config: &EngineConfig, skipped_files: &Mutex<SkippedFiles>, watcher: &W)
 {
     let mut buf = Vec::with_capacity(INITIAL_FILE_BUFFER_BYTES);
     let mut parse_buffers = file_parser::ParseBuffers::default();
@@ -71,6 +71,8 @@ fn start_parsing_files(id: usize, files_injector: &Injector<ParsableFile>, worke
     let mut local_tests: Vec<HashMap<String, TestCode>> = vec![HashMap::new(); modules];
     let mut local_files: Vec<HashMap<String, Vec<FileEntry>>> = vec![HashMap::new(); modules];
     let mut local_rows: Vec<ModuleRow> = Vec::new();
+    let mut figures_not_handed_over: HashMap<String, Stats> = HashMap::new();
+    let mut last_handed_over = Instant::now();
     // A batch and not one file at a time. With several of these threads per core they all reach for the
     // same queue head between files, and a contended steal comes back as Retry, which the arm below
     // answers by yielding: a whole scheduling round per file. A batch is half of what is left, so
@@ -114,7 +116,7 @@ fn start_parsing_files(id: usize, files_injector: &Injector<ParsableFile>, worke
                             preset.record_match();
                         }
                         let lang_name = resolved.as_deref().unwrap_or(lang_name);
-                        progress.record_file_parsed(report.total_lines());
+                        watcher.record_file_parsed(report.total_lines());
                         let language = language_map.get(lang_name).unwrap();
                         let keywords = &language.keywords;
                         let bytes = report.bytes;
@@ -158,6 +160,16 @@ fn start_parsing_files(id: usize, files_injector: &Injector<ParsableFile>, worke
                             None => { local_stats[module].entry(lang_name.to_owned())
                                     .or_default().add_file(&whole, bytes, keywords); }
                         }
+                        if let Some(every) = W::FIGURES_EVERY {
+                            match figures_not_handed_over.get_mut(lang_name) {
+                                Some(stats) => stats.add_file(&whole, bytes, keywords),
+                                None => { figures_not_handed_over.entry(lang_name.to_owned())
+                                        .or_default().add_file(&whole, bytes, keywords); }
+                            }
+                            if last_handed_over.elapsed() >= every {
+                                hand_over_figures(watcher, &mut figures_not_handed_over, &mut last_handed_over);
+                            }
+                        }
                         if let Some(tests) = &tests {
                             let is_whole = tests.stats.lines == whole.lines;
                             match local_tests[module].get_mut(lang_name) {
@@ -174,11 +186,11 @@ fn start_parsing_files(id: usize, files_injector: &Injector<ParsableFile>, worke
                         }
                     },
                     Ok(file_parser::FileOutcome::Skipped(kind)) => {
-                        progress.record_file_parsed(0);
+                        watcher.record_file_parsed(0);
                         local_skipped.get_of_kind_mut(kind).push(spell_out(&parsable_file.path));
                     },
                     Err(x) => {
-                        progress.record_file_parsed(0);
+                        watcher.record_file_parsed(0);
                         // The listing gives no size on unix, and the json report carries one for
                         // every faulty file, so it is asked for here, on the failure path alone
                         let size = match parsable_file.size {
@@ -198,6 +210,9 @@ fn start_parsing_files(id: usize, files_injector: &Injector<ParsableFile>, worke
             Steal::Empty => {
                 if finish_condition.load(Ordering::Relaxed) {
                     break;
+                }
+                if W::FIGURES_EVERY.is_some() && !figures_not_handed_over.is_empty() {
+                    hand_over_figures(watcher, &mut figures_not_handed_over, &mut last_handed_over);
                 }
 
                 // Timed only while the producers are still running: a consumer waiting for work that
@@ -220,6 +235,9 @@ fn start_parsing_files(id: usize, files_injector: &Injector<ParsableFile>, worke
 
     if *phase_timing::ENABLED {
         parse_buffers.timing.publish();
+    }
+    if !figures_not_handed_over.is_empty() {
+        hand_over_figures(watcher, &mut figures_not_handed_over, &mut last_handed_over);
     }
 
     if !local_faulty.is_empty() {
@@ -270,6 +288,12 @@ fn start_parsing_files(id: usize, files_injector: &Injector<ParsableFile>, worke
     if !local_rows.is_empty() {
         module_rows.lock().unwrap().append(&mut local_rows);
     }
+}
+
+fn hand_over_figures<W: RunWatcher>(watcher: &W, figures: &mut HashMap<String, Stats>, last_handed_over: &mut Instant) {
+    watcher.receive_figures(figures);
+    figures.clear();
+    *last_handed_over = Instant::now();
 }
 
 fn steal_from_peers(id: usize, peers: &[Stealer<ParsableFile>], worker: &Worker<ParsableFile>) -> Steal<ParsableFile> {

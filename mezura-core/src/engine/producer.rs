@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 
-use crate::{AppliedPresetsMut, EngineConfig, FilesPresent, GitignoreStack, ObeyedIgnoreFiles, ParsableFile, ScanProgress,
+use crate::{AppliedPresetsMut, EngineConfig, FilesPresent, GitignoreStack, ObeyedIgnoreFiles, ParsableFile, RunWatcher,
         TraversedDir, UnreadableDirDetails};
 use crate::engine::identity::ModuleLookups;
 use crate::engine::is_the_same_name;
@@ -23,20 +23,20 @@ use crate::engine::test_detection::{ActivePreset, BuildFilesSeen, DirectoryScope
 // how many of them have gone idle against how many started: one that dies without ever going idle
 // makes that count unreachable and the rest wait on it forever. The catch marks the dead one idle on
 // its way out and records what killed it, which 'run' turns into an error after the joins.
-pub(crate) fn start_producer_thread<'scope>(scope: &'scope Scope<'scope, '_>, id: usize,
+pub(crate) fn start_producer_thread<'scope, W: RunWatcher>(scope: &'scope Scope<'scope, '_>, id: usize,
         files_injector: &'scope Injector<ParsableFile>, dirs_injector: &'scope Injector<TraversedDir>, worker: Worker<TraversedDir>,
         stealers: &'scope [Stealer<TraversedDir>], idle_producers: &'scope AtomicUsize, language_lookups: &'scope ModuleLookups,
         exclude_patterns: &'scope PathPatternMatcher, test_patterns: &'scope PathPatternMatcher,
         config: &'scope EngineConfig, files_stats: &'scope Mutex<FilesPresent>, modules: &'scope Modules,
         unreadable_dirs: &'scope Mutex<Vec<UnreadableDirDetails>>, applied_presets: &'scope AppliedPresetsMut,
-        producers_total: &'scope AtomicUsize, worker_panics: &'scope Mutex<Vec<String>>, progress: &'scope ScanProgress)
+        producers_total: &'scope AtomicUsize, worker_panics: &'scope Mutex<Vec<String>>, watcher: &'scope W)
 -> std::io::Result<ScopedJoinHandle<'scope, ()>>
 {
     thread::Builder::new().name(format!("producer-{id}")).spawn_scoped(scope, move || {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||
                 search_for_files(id, files_injector, dirs_injector, worker, stealers, idle_producers,
                         language_lookups, exclude_patterns, test_patterns, config, modules, applied_presets,
-                        producers_total, progress)));
+                        producers_total, watcher)));
         match outcome {
             Ok((found, unreadable)) => {
                 if !unreadable.is_empty() {
@@ -55,11 +55,11 @@ pub(crate) fn start_producer_thread<'scope>(scope: &'scope Scope<'scope, '_>, id
     })
 }
 
-fn search_for_files(id: usize, files_injector: &Injector<ParsableFile>, dirs_injector: &Injector<TraversedDir>, worker: Worker<TraversedDir>,
+fn search_for_files<W: RunWatcher>(id: usize, files_injector: &Injector<ParsableFile>, dirs_injector: &Injector<TraversedDir>, worker: Worker<TraversedDir>,
         stealers: &[Stealer<TraversedDir>], idle_producers: &AtomicUsize,
         language_lookups: &ModuleLookups, exclude_patterns: &PathPatternMatcher, test_patterns: &PathPatternMatcher,
         config: &EngineConfig, modules: &Modules, applied_presets: &AppliedPresetsMut,
-        producers_total: &AtomicUsize, progress: &ScanProgress)
+        producers_total: &AtomicUsize, watcher: &W)
 -> (FilesPresent, Vec<UnreadableDirDetails>)
 {
     let mut files_present = FilesPresent::default();
@@ -105,7 +105,7 @@ fn search_for_files(id: usize, files_injector: &Injector<ParsableFile>, dirs_inj
                     let with_presets = turn_on_presets(&dir.scope, trigger_files, &dir.path, presets_taken_back, applied_presets);
                     traverse_dir(files_injector, &mut entries, &worker, language_lookups, exclude_patterns, dir.exclude_root,
                             test_patterns, &mut patterns_found, &gitignore_stack, config, modules, dir.module,
-                            with_presets.as_ref().unwrap_or(&dir.scope), build_files, &dir.path, &mut files_present, progress)
+                            with_presets.as_ref().unwrap_or(&dir.scope), build_files, &dir.path, &mut files_present, watcher)
                 },
                 // Everything under it goes uncounted and reaches no total, not even the number of
                 // files looked at, and nothing else would say so. The reason travels with the path,
@@ -212,11 +212,11 @@ fn turn_on_presets(scope: &DirectoryScope, trigger_files: TriggerFilesSeen, dire
 
 // 'module' is decided when the directory is queued and its entries inherit it. The two lookups below
 // only happen in a run with a target inside another target.
-fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: &mut Vec<(DirEntry, OsString)>, dirs_worker: &Worker<TraversedDir>,
+fn traverse_dir<W: RunWatcher>(files_injector: &Injector<ParsableFile>, entries: &mut Vec<(DirEntry, OsString)>, dirs_worker: &Worker<TraversedDir>,
         language_lookups: &ModuleLookups, exclude_patterns: &PathPatternMatcher, exclude_root: usize, test_patterns: &PathPatternMatcher,
         patterns_found: &mut Vec<usize>, gitignore_stack: &Option<Arc<GitignoreStack>>, config: &EngineConfig, modules: &Modules,
         module: ModuleId, scope: &DirectoryScope, build_files: BuildFilesSeen, dir_path: &Path, files_present: &mut FilesPresent,
-        progress: &ScanProgress)
+        watcher: &W)
 {
     let mut local_total_files = 0;
     let mut local_relevant_files = 0;
@@ -277,7 +277,7 @@ fn traverse_dir(files_injector: &Injector<ParsableFile>, entries: &mut Vec<(DirE
                 files_injector.push(ParsableFile::new(path_buf, lang_name, module, size)
                         .with_extension_rules(language_lookup.find_extension_rules(name))
                         .with_test_scope(test_scope, decided_by_presets));
-                progress.record_file_found();
+                watcher.record_file_found();
             } else {
                 // Read lossily, and only to ask whether it is dotted, which a lossy reading answers
                 // correctly since a leading '.' is ASCII and survives any replacement. Demanding
@@ -384,12 +384,12 @@ mod tests {
         let mut files_present = FilesPresent::default();
         let test_patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed).unwrap();
         let above = queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector, &mut files_present,
-                &language_lookups, &modules, &ScanProgress::default());
+                &language_lookups, &modules, &crate::Unwatched);
 
         let exclude_patterns = PathPatternMatcher::compile(&config.exclude_patterns.patterns, TakingBack::Refused).unwrap();
         let (found, _) = search_for_files(0, &files_injector, &dirs_injector,
                 Worker::new_lifo(), &[], &idle_producers, &language_lookups, &exclude_patterns, &test_patterns, &config, &modules,
-                &Mutex::new(above), &AtomicUsize::new(1), &ScanProgress::default());
+                &Mutex::new(above), &AtomicUsize::new(1), &crate::Unwatched);
 
         let mut found_files = Vec::new();
         while let Steal::Success(f) = files_injector.steal() {
@@ -639,13 +639,13 @@ mod tests {
         let mut files_present = FilesPresent::default();
         let test_patterns = PathPatternMatcher::compile(&[] as &[&str], TakingBack::Allowed).unwrap();
         queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector,
-                &mut files_present, &language_lookups, &modules, &ScanProgress::default());
+                &mut files_present, &language_lookups, &modules, &crate::Unwatched);
         dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0, DirectoryScope::default(), 0));
 
         let exclude_patterns = PathPatternMatcher::compile(&[] as &[&str], TakingBack::Refused).unwrap();
         let (found, unreadable) = search_for_files(0, &files_injector, &dirs_injector,
                 Worker::new_lifo(), &[], &AtomicUsize::new(0), &language_lookups, &exclude_patterns, &test_patterns,
-                &config, &modules, &Mutex::new(Vec::new()), &AtomicUsize::new(1), &ScanProgress::default());
+                &config, &modules, &Mutex::new(Vec::new()), &AtomicUsize::new(1), &crate::Unwatched);
 
         fs::remove_dir_all(&root).unwrap();
 

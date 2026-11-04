@@ -1,7 +1,10 @@
 use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, Languages,
-        PathPatterns, StringRules, Target, Threads, language_file, languages, run, run_watched};
+        PathPatterns, RunWatcher, Stats, StringRules, Target, Threads, language_file, languages, run, run_watched,
+        run_watched_by};
 
 const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
 
@@ -1222,6 +1225,127 @@ fn a_slow_traversal_callback_is_not_charged_to_the_counting() {
             "a callback that slept {}ms turned a {}ms count into {}ms, so the caller is being charged \
              to the parser", held_for.as_millis(), prompt.performance.duration_millis,
             slow.performance.duration_millis);
+}
+
+#[test]
+fn the_figures_handed_over_during_a_run_add_up_to_its_result() {
+    const EVERY_FILE: u64 = 0;
+    const ONLY_WHEN_A_THREAD_ENDS: u64 = 3_600_000;
+
+    struct FiguresAddedUp<const MILLIS: u64>(Mutex<HashMap<String, Stats>>);
+
+    impl<const MILLIS: u64> RunWatcher for FiguresAddedUp<MILLIS> {
+        const FIGURES_EVERY: Option<std::time::Duration> = Some(std::time::Duration::from_millis(MILLIS));
+
+        fn receive_figures(&self, per_language: &HashMap<String, Stats>) {
+            let mut added_up = self.0.lock().unwrap();
+            for (name_of_language, figures) in per_language {
+                added_up.entry(name_of_language.clone()).or_default().add(figures);
+            }
+        }
+    }
+
+    fn assert_handed_figures_add_up<const MILLIS: u64>() {
+        let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
+        let config = EngineConfig {
+            threads: Threads::new(1, 4),
+            ..EngineConfig::new([format!("{current_dir}/src"), format!("{current_dir}/tests")])
+        };
+        let (languages, _) = Languages::shipped(&config);
+        let watcher = FiguresAddedUp::<MILLIS>(Mutex::new(HashMap::new()));
+        let result = run_watched_by(&config, languages, &watcher, |_| {}).unwrap();
+        let added_up = watcher.0.into_inner().unwrap();
+
+        let occurred = |stats: &Stats| stats.keyword_occurrences.iter()
+                .filter(|(_, occurrences)| **occurrences > 0).map(|(name, occurrences)| (name.clone(), *occurrences))
+                .collect::<HashMap<_, _>>();
+        for (name_of_language, counted) in &result.per_language {
+            let handed = added_up.get(name_of_language).cloned().unwrap_or_default();
+            assert_eq!((counted.files, counted.bytes, &counted.classes, occurred(counted)),
+                    (handed.files, handed.bytes, &handed.classes, occurred(&handed)),
+                    "{name_of_language}, handed every {MILLIS} ms");
+        }
+        assert_eq!(result.total.files, Stats::calculate_total_of(&added_up).files);
+        assert!(result.total.files > 0);
+    }
+
+    assert_handed_figures_add_up::<EVERY_FILE>();
+    assert_handed_figures_add_up::<ONLY_WHEN_A_THREAD_ENDS>();
+}
+
+#[test]
+fn a_counting_thread_with_nothing_left_to_count_hands_over_what_it_holds() {
+    const FILES_BEFORE_THE_WALK_STALLS: usize = 20;
+
+    struct StalledWalk {
+        found: AtomicUsize,
+        handed: AtomicUsize,
+        handed_while_stalled: AtomicBool
+    }
+
+    impl RunWatcher for StalledWalk {
+        const FIGURES_EVERY: Option<std::time::Duration> = Some(std::time::Duration::from_secs(3600));
+
+        fn record_file_found(&self) {
+            if self.found.fetch_add(1, Ordering::Relaxed) + 1 != FILES_BEFORE_THE_WALK_STALLS {
+                return;
+            }
+            let stalled_at = std::time::Instant::now();
+            while stalled_at.elapsed() < std::time::Duration::from_secs(5) {
+                if self.handed.load(Ordering::Relaxed) == FILES_BEFORE_THE_WALK_STALLS {
+                    self.handed_while_stalled.store(true, Ordering::Relaxed);
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+
+        fn receive_figures(&self, per_language: &HashMap<String, Stats>) {
+            self.handed.fetch_add(per_language.values().map(|stats| stats.files).sum(), Ordering::Relaxed);
+        }
+    }
+
+    let names = (0..2 * FILES_BEFORE_THE_WALK_STALLS).map(|i| format!("f{i}.rs")).collect::<Vec<_>>();
+    let files = names.iter().map(|name| (name.as_str(), "fn a() {}\n")).collect::<Vec<_>>();
+    let root = write_tree("mezura-stalled-walk", &files);
+    let config = EngineConfig {
+        threads: Threads::new(1, 2),
+        ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")])
+    };
+    let (languages, _) = Languages::shipped(&config);
+    let watcher = StalledWalk { found: AtomicUsize::new(0), handed: AtomicUsize::new(0),
+            handed_while_stalled: AtomicBool::new(false) };
+    let result = run_watched_by(&config, languages, &watcher, |_| {}).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+
+    assert!(watcher.handed_while_stalled.load(Ordering::Relaxed),
+            "the figures counted before the walk stalled stayed with the threads that counted them");
+    assert_eq!(result.total.files, watcher.handed.load(Ordering::Relaxed));
+}
+
+#[test]
+fn a_watcher_is_told_once_that_the_walk_is_done() {
+    #[derive(Default)]
+    struct WalkDoneCount(AtomicUsize);
+
+    impl RunWatcher for WalkDoneCount {
+        fn mark_walk_done(&self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let current_dir = env!("CARGO_MANIFEST_DIR").replace("\\", "/");
+    let config = EngineConfig { threads: Threads::new(1, 2), ..EngineConfig::new([format!("{current_dir}/src")]) };
+    let (languages, _) = Languages::shipped(&config);
+    let counted = WalkDoneCount::default();
+    run_watched_by(&config, languages, &counted, |_| {}).unwrap();
+    assert_eq!(1, counted.0.load(Ordering::Relaxed), "a run that counted");
+
+    let config = EngineConfig::default();
+    let (languages, _) = Languages::shipped(&config);
+    let refused = WalkDoneCount::default();
+    assert!(run_watched_by(&config, languages, &refused, |_| {}).is_err());
+    assert_eq!(1, refused.0.load(Ordering::Relaxed), "a run that refused");
 }
 
 #[test]

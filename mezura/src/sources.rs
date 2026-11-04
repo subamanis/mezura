@@ -266,7 +266,11 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
         }
     } else {
         let resolved_langs = mezura_core::Languages::resolve(&of_git_revision, languages, conflicts).0;
-        let mut result = mezura_core::run_watched(&of_git_revision, resolved_langs, Some(&progress), |_| {})
+        let counted = match super::animated_display::revision_line_moves() {
+            true => mezura_core::run_watched_by(&of_git_revision, resolved_langs, &*progress, |_| {}),
+            false => mezura_core::run_watched_by(&of_git_revision, resolved_langs, &mezura_core::Unwatched, |_| {})
+        };
+        let mut result = counted
                 .map_err(|error| GitError::CountingRevision { revision: git_revision.to_owned(), error })?;
         move_file_paths_out_of_checkout(&mut result, &of_git_revision.targets, &counted_declared,
                 &checkout.path, &display_repository);

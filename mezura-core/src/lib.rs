@@ -65,7 +65,7 @@ pub use engine::targets::{TargetError, convert_to_absolute, normalise_separators
 pub use engine::test_detection::{DependencyManifest, TestPreset};
 pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, MatchedPreset, TestFileRule, explain_file};
 pub use languages::{LanguageClaims, Languages};
-pub use progress::ScanProgress;
+pub use progress::{RunWatcher, ScanProgress, Unwatched};
 pub use result::{AppliedPreset, FaultyFileDetails, FileEntry, FilesPresent, ModuleResult, Performance, RunError,
         RunResult, ScanSkip, SkippedFiles, SortCriterion, TestCode, UnreadableDirDetails};
 pub use warnings::{Affects, Code, Warning};
@@ -123,28 +123,37 @@ pub(crate) type AppliedPresetsMut = Mutex<Vec<Arc<ActivePreset>>>;
 /// Blocks until everything has been counted. Failing to read some of the files is not an error, and
 /// comes back in [`RunResult::faulty_files`]; the cases that are one are [`RunError`].
 pub fn run(config: &EngineConfig, languages: Languages) -> Result<RunResult, RunError> {
-    run_watched(config, languages, None, |_| {})
+    run_watched_by(config, languages, &Unwatched, |_| {})
 }
 
 /// The same run, for a caller that needs real time feedback while it happens.
 ///
 /// The progress counters move as files are found and parsed, so a thread of the caller's can read
 /// them while this one blocks.
+pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option<&ScanProgress>,
+        on_traversal_done: impl FnOnce(FilesPresent)) -> Result<RunResult, RunError>
+{
+    match progress {
+        Some(progress) => run_watched_by(config, languages, progress, on_traversal_done),
+        None => run_watched_by(config, languages, &Unwatched, on_traversal_done)
+    }
+}
+
+/// The same run, watched by any [`RunWatcher`], which can also receive the figures per language
+/// while they are being counted.
 ///
 /// `on_traversal_done` is called once, as soon as the directories have been scanned, with the files
-/// that were found; the counting of those files is still going on at that point. It is called on
+/// that were found. The counting of those files is still going on at that point. It is called on
 /// every run that returns `Ok`, including one that found nothing, and never on a run whose scanning
 /// thread died, because the figures such a run leaves behind are lower than what is really on disk.
 ///
 /// Every thread the run starts has stopped by the time it returns, a panic of the callback included.
-pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option<&ScanProgress>,
+pub fn run_watched_by<W: RunWatcher>(config: &EngineConfig, languages: Languages, watcher: &W,
         on_traversal_done: impl FnOnce(FilesPresent)) -> Result<RunResult, RunError>
 {
-    let unwatched = ScanProgress::default();
-    let progress = progress.unwrap_or(&unwatched);
     // Guarded rather than raised on each return: 'run' refuses in six places before the walk ever
     // starts, and a watcher of the public flag must see it rise on every one of them.
-    let _walk_ends = WalkDoneGuard(progress);
+    let mut walk_ends = WalkDoneGuard { watcher, marked: false };
     if config.targets.is_empty() {
         return Err(RunError::NoTargets);
     }
@@ -182,7 +191,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
     let mut warnings = describe_patterns_that_changed_nothing(config, &exclude_patterns, &test_patterns,
             |matcher, patterns| matcher.find_places_out_of_reach(&roots_of(patterns)));
     let presets_above_the_targets = queue_the_targets(config, &targets, &test_patterns, &dirs_injector, &files_injector,
-            &mut files_present, &language_lookups, &modules, progress);
+            &mut files_present, &language_lookups, &modules, watcher);
 
     let files_stats = Mutex::new(files_present);
     let unreadable_dirs = Mutex::new(Vec::new());
@@ -218,7 +227,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
         for (i, worker) in workers.into_iter().enumerate() {
             match engine::producer::start_producer_thread(scope, i, &files_injector, &dirs_injector, worker, &stealers,
                     &idle_producers, &language_lookups, &exclude_patterns, &test_patterns, config, &files_stats, &modules,
-                    &unreadable_dirs, &applied_presets, &producers_total, &worker_panics, progress) {
+                    &unreadable_dirs, &applied_presets, &producers_total, &worker_panics, watcher) {
                 Ok(handle) => producer_handles.push(handle),
                 Err(x) => last_refusal = Some(x)
             }
@@ -233,7 +242,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
             match engine::consumer::start_parser_thread(scope, i, &files_injector, worker, &consumer_peers, &faulty_files,
                     &finish_condition, &stats_per_module, &nested_per_module, &tests_per_module, &files_per_module,
                     &module_rows, &language_map, &nested_definitions, &language_lookups, config, parsing_started_instant,
-                    &counting_ended, &consumer_exits, &skipped_files, progress) {
+                    &counting_ended, &consumer_exits, &skipped_files, watcher) {
                 Ok(handle) => consumer_handles.push(handle),
                 Err(x) => last_refusal = Some(x)
             }
@@ -249,7 +258,7 @@ pub fn run_watched(config: &EngineConfig, languages: Languages, progress: Option
         // After the join. A watcher starts timing the counting the moment this flag rises, and only
         // here is nothing else left competing for the cores. Raised earlier, the pace it measures
         // comes out low.
-        progress.mark_walk_done();
+        walk_ends.mark_walk_done();
         let producers_done_millis = parsing_started_instant.elapsed().as_millis();
 
         let queued_at_producer_exit = files_injector.len();
@@ -402,11 +411,23 @@ pub fn prints_phase_timing() -> bool {
     *phase_timing::ENABLED
 }
 
-struct WalkDoneGuard<'a>(&'a ScanProgress);
+struct WalkDoneGuard<'a, W: RunWatcher> {
+    watcher: &'a W,
+    marked: bool
+}
 
-impl Drop for WalkDoneGuard<'_> {
+impl<W: RunWatcher> WalkDoneGuard<'_, W> {
+    fn mark_walk_done(&mut self) {
+        if !self.marked {
+            self.marked = true;
+            self.watcher.mark_walk_done();
+        }
+    }
+}
+
+impl<W: RunWatcher> Drop for WalkDoneGuard<'_, W> {
     fn drop(&mut self) {
-        self.0.mark_walk_done();
+        self.mark_walk_done();
     }
 }
 
@@ -429,10 +450,10 @@ impl Drop for FinishConditionGuard<'_> {
 //
 // What comes back is every preset the folders above the targets turned on, which the walk never
 // sees since it starts at the targets.
-pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets::Targets, test_patterns: &PathPatternMatcher,
+pub(crate) fn queue_the_targets<W: RunWatcher>(config: &EngineConfig, targets: &engine::targets::Targets, test_patterns: &PathPatternMatcher,
         dirs_injector: &Injector<TraversedDir>, files_injector: &Injector<ParsableFile>,
         files_present: &mut FilesPresent, language_lookups: &engine::identity::ModuleLookups, modules: &Modules,
-        progress: &ScanProgress) -> Vec<Arc<ActivePreset>>
+        watcher: &W) -> Vec<Arc<ActivePreset>>
 {
     let mut scopes_of_directories = HashMap::new();
     let climb = PresetClimb::new(test_patterns.get_presets_taken_back());
@@ -463,7 +484,7 @@ pub(crate) fn queue_the_targets(config: &EngineConfig, targets: &engine::targets
                     .with_test_scope(test_scope, decided_by_presets));
             files_present.total_files += 1;
             files_present.relevant_files += 1;
-            progress.record_file_found();
+            watcher.record_file_found();
         } else if dir_path.is_dir() {
             let gitignore_stack = GitignoreStack::for_root_dir(dir_path, ObeyedIgnoreFiles::of(config));
             let scope = find_test_scope_of_target(config, test_patterns, dir_path, names_root, OwnListing::ReadByTheWalk, &climb,

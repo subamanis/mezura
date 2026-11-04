@@ -108,13 +108,21 @@ pub fn set_animations_hidden(hidden: bool) {
     ANIMATIONS_HIDDEN.store(hidden, Ordering::Relaxed);
 }
 
+pub fn needs_progress(config: &Configuration) -> bool {
+    walk_line_moves(config) || parsing_line_can_move(config)
+}
+
+pub fn revision_line_moves() -> bool {
+    !animations_are_hidden()
+}
+
 // Prints the walk heading, animated when both output streams are a terminal and static otherwise.
 pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -> AnimatedDisplay {
     if config.view.hidden.directory_info || !config.view.prints_text() {
         return AnimatedDisplay::default();
     }
     let heading = crate::theme::get_active().heading.paint(WALK_HEADING).to_string();
-    if !std::io::stdout().is_terminal() || animations_are_hidden() {
+    if !walk_line_moves(config) {
         outln!("\n{heading}...");
         return AnimatedDisplay::default();
     }
@@ -146,7 +154,7 @@ pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -
 // completely, so the printed comparison carries no trace of it.
 pub fn start_revision_display(config: &Configuration, git_revision: &str, writing_verb: &str,
         progress: Arc<ScanProgress>, already_written: bool) -> AnimatedDisplay {
-    if animations_are_hidden() {
+    if !revision_line_moves() {
         return AnimatedDisplay::default();
     }
 
@@ -199,7 +207,7 @@ pub fn start_checkout_display(verb: &str, name: &str, hidden: bool) -> AnimatedD
 // The transient line of a parse that outlives the walk. It erases itself completely; nothing
 // permanent is printed.
 pub fn start_parsing_display(config: &Configuration, progress: Arc<ScanProgress>) -> AnimatedDisplay {
-    if config.view.hidden.parsing_info || animations_are_hidden() {
+    if !parsing_line_can_move(config) {
         return AnimatedDisplay::default();
     }
     if progress.get_files_found() == progress.get_files_parsed() {
@@ -277,6 +285,15 @@ fn cap_revision_name(name: &str) -> String {
 fn animations_are_hidden() -> bool {
     ANIMATIONS_HIDDEN.load(Ordering::Relaxed) || !std::io::stderr().is_terminal()
             || mezura_core::prints_phase_timing()
+}
+
+fn walk_line_moves(config: &Configuration) -> bool {
+    !config.view.hidden.directory_info && config.view.prints_text() && std::io::stdout().is_terminal()
+            && !animations_are_hidden()
+}
+
+fn parsing_line_can_move(config: &Configuration) -> bool {
+    !config.view.hidden.parsing_info && !animations_are_hidden()
 }
 
 // One less than the terminal says: the last column is where terminals keep their pending-wrap

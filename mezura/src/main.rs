@@ -276,11 +276,15 @@ fn main() -> ExitCode {
     let live = crate::animated_display::start_walk_display(&config, progress.clone());
 
     let mut parsing_live = None;
-    let outcome = mezura_core::run_watched(&config.engine, languages, Some(&progress), |scan| {
+    let on_traversal_done = |scan| {
         live.finish();
         announce_traversal(&config, scan);
         parsing_live = Some(crate::animated_display::start_parsing_display(&config, progress.clone()));
-    });
+    };
+    let outcome = match crate::animated_display::needs_progress(&config) {
+        true => mezura_core::run_watched_by(&config.engine, languages, &*progress, on_traversal_done),
+        false => mezura_core::run_watched_by(&config.engine, languages, &mezura_core::Unwatched, on_traversal_done)
+    };
     if let Some(x) = &parsing_live {
         x.finish();
     }

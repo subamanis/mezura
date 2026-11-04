@@ -1,4 +1,36 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
+
+use crate::Stats;
+
+/// Whoever watches a run while it counts, handed to [`crate::run_watched_by`]. Its methods are
+/// called from the run's threads, several at once.
+pub trait RunWatcher: Sync {
+    /// The shortest time between two hand-overs of one counting thread, checked after each file it
+    /// counts. Each thread also hands over what it holds when it runs out of files and when it
+    /// stops. With `None`, [`RunWatcher::receive_figures`] is never called and no clock is read
+    /// after a file.
+    const FIGURES_EVERY: Option<Duration> = None;
+
+    /// A file was queued for counting.
+    fn record_file_found(&self) {}
+
+    /// A file was counted, or could not be, with its lines.
+    fn record_file_parsed(&self, _lines: usize) {}
+
+    /// Called once per run, when the scan of the directories is over or the run stopped early.
+    fn mark_walk_done(&self) {}
+
+    /// What one counting thread counted per language since its last hand-over, keywords never found
+    /// left out.
+    fn receive_figures(&self, _per_language: &HashMap<String, Stats>) {}
+}
+
+/// The watcher of a run nobody watches.
+pub struct Unwatched;
+
+impl RunWatcher for Unwatched {}
 
 /// How far a run has got, for a caller that needs real time feedback.
 ///
@@ -38,19 +70,21 @@ impl ScanProgress {
     pub fn is_walk_done(&self) -> bool {
         self.walk_done.load(Ordering::Acquire)
     }
+}
 
-    pub(crate) fn record_file_found(&self) {
+impl RunWatcher for ScanProgress {
+    fn record_file_found(&self) {
         self.files_found.fetch_add(1, Ordering::Relaxed);
     }
 
     // A file that could not be parsed still moves 'files_parsed', with no lines: the figure is how
     // far the counting has come through the queue, and a bar over it must be able to reach the end.
-    pub(crate) fn record_file_parsed(&self, lines: usize) {
+    fn record_file_parsed(&self, lines: usize) {
         self.files_parsed.fetch_add(1, Ordering::Relaxed);
         self.lines_counted.fetch_add(lines, Ordering::Relaxed);
     }
 
-    pub(crate) fn mark_walk_done(&self) {
+    fn mark_walk_done(&self) {
         self.walk_done.store(true, Ordering::Release);
     }
 }

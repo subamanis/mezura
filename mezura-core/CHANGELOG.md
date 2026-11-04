@@ -15,6 +15,8 @@ New:
 - `TestPreset::dependency_manifest` and `DependencyManifest`, a list of a project's dependencies that
   turns a preset on under its directory when it requires the tool. The `phpunit` preset is turned on
   by a `composer.json` requiring `phpunit/phpunit`.
+- `run_watched_by` takes any `RunWatcher`, such as `ScanProgress`, `Unwatched` or a type of the
+  caller's, which can also receive the figures per language while they are counted.
 
 Fixes:
 
