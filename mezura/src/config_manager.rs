@@ -3423,7 +3423,10 @@ mod tests {
     #[test]
     fn a_revision_target_is_written_out_and_obeys_the_projects_settings_at_that_commit() {
         let _guard = crate::git::GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let root = std::env::temp_dir().join("mezura-revision-target-project");
+        // CI runners spell TEMP through 8.3 names or a symlink, where git answers with the real path
+        let temp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        let root = std::path::PathBuf::from(temp.to_string_lossy().trim_start_matches(r"\\?\"))
+                .join("mezura-revision-target-project");
         let _ = crate::git::remove_directory_tree(&root);
         std::fs::create_dir_all(root.join("core")).unwrap();
         std::fs::create_dir_all(root.join("cli")).unwrap();

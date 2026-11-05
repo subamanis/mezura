@@ -406,14 +406,18 @@ pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
 pub fn remove_leftover_checkouts(repository: &str) {
     let ours = format!("-{}", std::process::id());
     let temp = std::env::temp_dir();
-    let folded_temp = fold_for_comparison(&temp.to_string_lossy()).into_owned();
+    // TEMP may carry short 8.3 names ('RUNNER~1') where git lists the long ones
+    let folded_temps = [Some(temp.clone()), std::fs::canonicalize(&temp).ok()].into_iter().flatten()
+            .map(|spelling| fold_for_comparison(&spelling.to_string_lossy()).trim_start_matches("//?/").to_owned())
+            .collect::<Vec<_>>();
     let is_a_leftover = |name: &str| is_a_holder_of_a_checkout(name) && !name.ends_with(&ours);
     if let Ok(listed) = Command::new("git").args(["-C", repository, "worktree", "list", "--porcelain"]).output() {
         for line in String::from_utf8_lossy(&listed.stdout).lines() {
             let Some(path) = line.strip_prefix("worktree ") else { continue };
             let Some(holder) = Path::new(path).parent() else { continue };
             let name = holder.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
-            if is_a_leftover(&name) && fold_for_comparison(path).starts_with(&folded_temp) {
+            let folded_path = fold_for_comparison(path);
+            if is_a_leftover(&name) && folded_temps.iter().any(|folded_temp| folded_path.starts_with(folded_temp.as_str())) {
                 remove_worktree(repository, path);
             }
         }
