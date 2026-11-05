@@ -1,4 +1,6 @@
-v3.4.0 - unreleased
+v3.4.0 - 2026-11-05
+
+  55,468 Total lines  -  37,234 Code lines
 
 Main changes:
   -> Local git revisions ('@v3.2.0', './src@030e6e7') and remote repositories
