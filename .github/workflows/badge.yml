@@ -1,0 +1,17 @@
+name: badge
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  badge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subamanis/mezura-badge@v3
+        with:
+          args: --badge code comments tests

@@ -1,9 +1,15 @@
-# mezura
+<h1 align="center">mezura</h1>
+
+<div align="center">
+
+[![mezura](https://raw.githubusercontent.com/subamanis/mezura/mezura-badge/badge.svg)](https://subamanis.github.io/mezura/report/)
 
 [![conformance](https://loc-conformance.github.io/linejudge/badges/mezura.content.svg)](https://loc-conformance.github.io/linejudge/)
 [![CI](https://github.com/subamanis/mezura/actions/workflows/ci.yml/badge.svg)](https://github.com/subamanis/mezura/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/mezura.svg)](https://crates.io/crates/mezura)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+
+</div>
 
 __mezura__ counts the lines of a codebase quickly and accurately, along with user-defined keywords like classes and structs.  
 It tracks how the figures move between runs, and between any two git revisions.  
@@ -449,8 +455,8 @@ the five `--hide` names the document obeys (`keywords`, `nested-languages`, `tes
 ### A badge for the README
 
 `--badge` writes only an SVG to the output. Without a word it is a pill with the lines
-of code, `mezura` on the left. The cells are the words typed, in their order, out of `lines`,
-`code`, `comments`, `tests`, `files` and `languages`. `card` draws the box GitHub draws for a
+of code, `mezura` on the left. The cells are the words typed, always in the order `lines`,
+`code`, `comments`, `tests`, `files`, `languages`. `card` draws the box GitHub draws for a
 repository's languages, with a bar, the biggest languages and the figures.
 
 ```bash
@@ -465,6 +471,22 @@ is the markdown around the image:
 
 ```markdown
 [![mezura](badge.svg)](https://github.com/subamanis/mezura)
+```
+
+The [mezura badge](https://github.com/subamanis/mezura-badge) action draws it in a GitHub
+workflow on every push. It keeps the SVG on a separate branch, `mezura-badge`, and its README
+holds the whole workflow.
+
+```yaml
+- uses: subamanis/mezura-badge@v3
+  with:
+    args: --badge code comments tests
+```
+
+The image then comes from that branch, with your owner and repository in the URL.
+
+```markdown
+[![mezura](https://raw.githubusercontent.com/OWNER/REPO/mezura-badge/badge.svg)](https://github.com/subamanis/mezura)
 ```
 
 ### Coding agents (MCP)
