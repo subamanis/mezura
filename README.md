@@ -1,6 +1,4 @@
-<h1 align="center">mezura</h1>
-
-<div align="center">
+# mezura
 
 [![mezura](https://raw.githubusercontent.com/subamanis/mezura/mezura-badge/badge.svg)](https://subamanis.github.io/mezura/report/)
 
@@ -8,8 +6,6 @@
 [![CI](https://github.com/subamanis/mezura/actions/workflows/ci.yml/badge.svg)](https://github.com/subamanis/mezura/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/mezura.svg)](https://crates.io/crates/mezura)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-
-</div>
 
 __mezura__ counts the lines of a codebase quickly and accurately, along with user-defined keywords like classes and structs.  
 It tracks how the figures move between runs, and between any two git revisions.  
