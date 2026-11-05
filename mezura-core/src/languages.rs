@@ -12,15 +12,17 @@ use crate::engine::identity::{Claim, ClaimKind, IdentityReport, LanguageLookup, 
 use crate::language_file::ConflictRules;
 use crate::warnings::Warning;
 
-/// The languages one run counts with, narrowed by its settings and with every contested extension
-/// already settled.
+/// The languages one run reads files with, every contested extension settled, and the lookups
+/// through which its settings leave files out.
 ///
 /// Whichever settings it was built against are the only ones it may be counted with.
 #[derive(Clone)]
 pub struct Languages {
     by_name: HashMap<String, Language>,
     lookups: ScopedLookups,
-    nested: NestedLanguageDefinitions,
+    // What the sections inside container files are resolved against. Empty on any run where no
+    // language declares regions.
+    extension_to_name: HashMap<String, Arc<str>>,
     // Which settings produced this set, so 'run' can refuse one that would have produced another.
     resolved_against: LanguageSelection
 }
@@ -63,48 +65,43 @@ impl Languages {
         reported.extend(find_unknown_names_of_the_selection(&languages, config));
         reported.extend(find_duplicate_names(&languages));
 
-        let everything = keyed_by_name(languages.clone());
+        let everything = keyed_by_name(languages);
         let mut all_extensions = HashMap::new();
-        let mut in_play : HashMap<String, Language> = HashMap::new();
         let mut whole_run = LanguageLookup::default();
         let mut per_module = HashMap::new();
         // The run's own answer first, so that what it resolves an extension to is the map the
         // sections inside container files are read against.
         for module in std::iter::once(None).chain(find_modules_with_rules_of_their_own(config).into_iter().map(Some)) {
-            let scope = resolve_one_scope(&languages, &everything, config, module.as_deref(), conflicts);
+            let scope = resolve_one_scope(&everything, config, module.as_deref(), conflicts);
             reported.extend(scope.reported);
-            in_play.extend(scope.in_play);
             match module {
                 None => (whole_run, all_extensions) = (scope.lookup, scope.all_extensions),
                 Some(module) => { per_module.insert(module, scope.lookup); }
             }
         }
-        reported.extend(find_unknown_forced_languages(&in_play, &config.forced_languages));
+        reported.extend(find_unknown_forced_languages(&everything, &config.forced_languages));
         // Without this a run that scopes anything repeats every tiebreak once per module.
         let mut already_said = HashSet::new();
         reported.retain(|warning| already_said.insert((warning.code.as_str(), warning.subject.clone(),
                 warning.message.clone())));
 
-        // A section can be written in a language the narrowing took out, so those definitions are
-        // kept. Only when something in play declares regions, or an ordinary run pays for a copy.
-        let mut nested = NestedLanguageDefinitions::default();
-        let set_aside = everything.into_iter().filter(|(name, _)| !in_play.contains_key(name))
-                .collect::<HashMap<_,_>>();
-        if in_play.values().chain(set_aside.values()).any(|language| !language.nested_languages.is_empty()) {
-            reported.extend(find_unresolvable_region_defaults(&in_play, &set_aside, &all_extensions));
-            nested = NestedLanguageDefinitions { set_aside, extension_to_name: all_extensions };
+        // Only when something declares regions, or an ordinary run pays for a copy of the map.
+        let mut extension_to_name = HashMap::new();
+        if everything.values().any(|language| !language.nested_languages.is_empty()) {
+            reported.extend(find_unresolvable_region_defaults(&everything, &all_extensions));
+            extension_to_name = all_extensions;
         }
 
-        (Languages { by_name: in_play, lookups: ScopedLookups::of(whole_run, per_module),
-                nested, resolved_against: LanguageSelection::of(config) }, reported)
+        (Languages { by_name: everything, lookups: ScopedLookups::of(whole_run, per_module),
+                extension_to_name, resolved_against: LanguageSelection::of(config) }, reported)
     }
 
     pub(crate) fn describe_the_same_selection_as(&self, config: &EngineConfig) -> bool {
         self.resolved_against == LanguageSelection::of(config)
     }
 
-    pub(crate) fn into_parts(self) -> (HashMap<String, Language>, ScopedLookups, NestedLanguageDefinitions) {
-        (self.by_name, self.lookups, self.nested)
+    pub(crate) fn into_parts(self) -> (HashMap<String, Language>, ScopedLookups, HashMap<String, Arc<str>>) {
+        (self.by_name, self.lookups, self.extension_to_name)
     }
 }
 
@@ -112,19 +109,11 @@ impl Languages {
 // of it for the shipped set.
 impl std::fmt::Debug for Languages {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut in_play = self.by_name.keys().map(String::as_str).collect::<Vec<_>>();
-        in_play.sort_unstable();
+        let mut names = self.by_name.keys().map(String::as_str).collect::<Vec<_>>();
+        names.sort_unstable();
 
-        f.debug_struct("Languages").field("in_play", &in_play)
-                .field("kept_for_nested_sections", &self.nested.set_aside.len()).finish_non_exhaustive()
+        f.debug_struct("Languages").field("languages", &names).finish_non_exhaustive()
     }
-}
-
-// Empty on any run where no language declares regions.
-#[derive(Default, Clone)]
-pub(crate) struct NestedLanguageDefinitions {
-    pub set_aside: HashMap<String, Language>,
-    pub extension_to_name: HashMap<String, std::sync::Arc<str>>,
 }
 
 // What this crate ships, parsed for counting and raw for installing.
@@ -237,51 +226,68 @@ impl LanguageSelection {
 }
 
 struct ResolvedScope {
-    in_play: HashMap<String, Language>,
     lookup: LanguageLookup,
-    // Over every language and not only the ones in play, which is what lets '--languages m' name
-    // one and a section inside a container file name another the narrowing took out.
+    // Over every language, which is what lets a section inside a container file name a language
+    // the selection leaves out
     all_extensions: HashMap<String, Arc<str>>,
     reported: Vec<Warning>
 }
 
-fn resolve_one_scope(languages: &[Language], everything: &HashMap<String, Language>, config: &EngineConfig,
-        module: Option<&str>, conflicts: &ConflictRules) -> ResolvedScope
+// Every file is identified as in a run without a selection, by the forced pairs, the conflict rules
+// and its content, and the selection decides only whether the language it came out as is counted
+fn resolve_one_scope(everything: &HashMap<String, Language>, config: &EngineConfig, module: Option<&str>,
+        conflicts: &ConflictRules) -> ResolvedScope
 {
     let forced = config.forced_languages.get_rules_of_module(module);
-    // Its complaints about contested extensions are dropped. The narrowed build below makes them,
-    // and a contest between two languages the run then leaves out is not news.
-    let (all_extensions, _) = build_language_map_by(ClaimKind::Extension, everything,
-            &conflicts.by_extension, &forced);
-    let by_name = keyed_by_name(retain_languages_of_interest(languages.to_vec(), &all_extensions,
+    let counted = select_the_languages_counted(everything.values(),
             config.languages_of_interest.get_names_of_module(module),
-            config.excluded_languages.get_names_of_module(module)));
+            config.excluded_languages.get_names_of_module(module));
+    // A contest among languages the run leaves out is not news
+    let counts_a_claimant = |contest: &Claim| std::iter::once(&contest.owner).chain(&contest.losers)
+            .any(|name| counted.contains(name));
 
     let mut reported = Vec::new();
-    let (by_extension, report) = build_language_map_by(ClaimKind::Extension, &by_name,
+    let (by_extension, mut report) = build_language_map_by(ClaimKind::Extension, everything,
             &conflicts.by_extension, &forced);
+    let all_extensions = by_extension.clone();
+    report.contested.retain(counts_a_claimant);
     reported.extend(report.collect_warnings());
     // The forced pairs go to both, since '--force-language Makefile=python' and '--force-language
     // txt=python' are the same sentence and the reader has no reason to know which map answers
-    let (by_filename, filename_report) = build_language_map_by(ClaimKind::Filename, &by_name,
+    let (by_filename, mut filename_report) = build_language_map_by(ClaimKind::Filename, everything,
             &conflicts.by_filename, &forced);
+    filename_report.contested.retain(counts_a_claimant);
     reported.extend(filename_report.collect_warnings());
     // The conflicts file has no block for a contested interpreter yet. The forced pairs reach this
     // map like the other two, which is how such a contest would be settled by hand.
     // Leaving it empty is the whole of 'detect_shebangs'. No reader opens a file over an empty map.
     let by_shebang = if config.detect_shebangs {
-        let (map, shebang_report) = build_language_map_by(ClaimKind::Shebang, &by_name,
+        let (map, mut shebang_report) = build_language_map_by(ClaimKind::Shebang, everything,
                 &HashMap::new(), &forced);
+        shebang_report.contested.retain(counts_a_claimant);
         reported.extend(shebang_report.collect_warnings());
         map
     } else {HashMap::new()};
 
     let extension_rules = if config.use_heuristics {
-        build_extension_rules(find_contested_with_evidence(&report, &by_name), conflicts, &forced)
+        build_extension_rules(find_contested_with_evidence(&report, everything), conflicts, &forced)
     } else {HashMap::new()};
-    ResolvedScope { in_play: by_name,
-            lookup: LanguageLookup { by_extension, by_filename, by_shebang, extension_rules },
-            all_extensions, reported }
+    let not_selected = everything.keys().filter(|name| !counted.contains(*name)).cloned().collect();
+    let skips_shebangs = !by_shebang.values().any(|owner| counted.contains(&**owner));
+    let mut lookup = LanguageLookup { by_extension, by_filename, by_shebang, extension_rules, not_selected,
+            skips_shebangs };
+    drop_the_extensions_no_counted_language_can_win(&mut lookup);
+    ResolvedScope { lookup, all_extensions, reported }
+}
+
+// Their files are dropped unread, the way a run without a selection drops a file nothing claims.
+// Where the content may still identify a counted language, the file is read.
+fn drop_the_extensions_no_counted_language_can_win(lookup: &mut LanguageLookup) {
+    let LanguageLookup { by_extension, extension_rules, not_selected, .. } = lookup;
+    let is_counted = |name: &str| !not_selected.contains(name);
+    by_extension.retain(|extension, owner| is_counted(owner)
+            || extension_rules.get(extension).and_then(|rules| rules.contenders.as_deref())
+                    .is_some_and(|contenders| contenders.iter().any(|name| is_counted(name))));
 }
 
 // A forced extension is the user's outright answer, so no marker takes its files out of the count.
@@ -441,17 +447,16 @@ fn drop_the_unusable(languages: Vec<Language>) -> (Vec<Language>, Vec<Warning>) 
 
 // Asked against exactly the two maps the section lookup will consult, so the check and what it
 // predicts cannot drift.
-fn find_unresolvable_region_defaults(by_name: &HashMap<String, Language>,
-    set_aside: &HashMap<String, Language>, extensions: &HashMap<String, Arc<str>>) -> Vec<Warning>
+fn find_unresolvable_region_defaults(by_name: &HashMap<String, Language>, extensions: &HashMap<String, Arc<str>>)
+        -> Vec<Warning>
 {
     let resolves = |spelling: &str| {
         let lowered = spelling.to_lowercase();
         extensions.contains_key(&lowered)
-                || by_name.values().chain(set_aside.values())
-                        .any(|language| is_the_same_language_name(&language.name, spelling))
+                || by_name.values().any(|language| is_the_same_language_name(&language.name, spelling))
     };
 
-    let mut unresolvable = by_name.values().chain(set_aside.values())
+    let mut unresolvable = by_name.values()
             .flat_map(|language| language.nested_languages.iter()
                     .map(move |region| (language.name.as_str(), region.default.as_str())))
             .filter(|(_, default)| !resolves(default))
@@ -495,8 +500,8 @@ pub fn find_duplicate_names(languages: &[Language]) -> Vec<Warning> {
 /// Which language owns each extension, whole file name and `#!` name, and which of those more than
 /// one language claimed.
 ///
-/// The standing answer, without the forced pairs and the narrowing that belong to a
-/// single run and are applied when its [`Languages`] are resolved.
+/// The standing answer, without the forced pairs that belong to a single run and are applied when
+/// its [`Languages`] are resolved.
 #[derive(Debug, Clone)]
 pub struct LanguageClaims {
     by_extension: HashMap<String, Claim>,
@@ -587,20 +592,21 @@ fn collect_claims_of(kind: ClaimKind, by_name: &HashMap<String, Language>,
     }).collect()
 }
 
-fn retain_languages_of_interest(languages: Vec<Language>, extensions: &HashMap<String, Arc<str>>,
-        of_interest: &[String], excluded: &[String]) -> Vec<Language>
+// An extension names every language claiming it, so '--languages m' counts MATLAB, Objective-C and
+// Mercury, each '.m' file as the language its content says, and '--exclude-languages m' leaves all
+// three out
+fn select_the_languages_counted<'a>(languages: impl IntoIterator<Item = &'a Language>, of_interest: &[String],
+        excluded: &[String]) -> HashSet<String>
 {
-    // Ownership is read from the map the counting itself uses, so '--languages m' means the same
-    // language every '.m' file is counted as here, however that was settled.
     let selects = |spelling: &String, language: &Language| {
         is_the_same_language_name(&language.name, spelling)
-                || extensions.get(&extension_key(spelling))
-                        .is_some_and(|owner| owner.as_ref() == language.name)
+                || language.extensions.iter().any(|extension| extension_key(extension) == extension_key(spelling))
     };
 
     languages.into_iter().filter(|language|
             (of_interest.is_empty() || of_interest.iter().any(|x| selects(x, language)))
             && !excluded.iter().any(|x| selects(x, language)))
+            .map(|language| language.name.clone())
             .collect()
 }
 
@@ -614,14 +620,8 @@ mod language_selection_tests {
     fn the_run_narrows_the_languages_and_records_a_name_that_does_not_exist() {
         let languages = || languages_claiming(&[("Java", &["java"]), ("C#", &["cs"]), ("Rust", &["rs"])])
                 .into_values().collect::<Vec<_>>();
-        let names_of = |languages: Vec<Language>| {
-            let mut names = languages.into_iter().map(|x| x.name).collect::<Vec<_>>();
-            names.sort();
-            names
-        };
-
-        let kept = |of_interest: &[&str], excluded: &[&str]| names_of(
-                retain_languages_of_interest(languages(), &HashMap::new(), &owned(of_interest), &owned(excluded)));
+        let kept = |of_interest: &[&str], excluded: &[&str]| sorted(
+                select_the_languages_counted(&languages(), &owned(of_interest), &owned(excluded)));
 
         assert_eq!(vec!["C#", "Java", "Rust"], kept(&[], &[]));
         assert_eq!(vec!["Java", "Rust"], kept(&["java", "RUST"], &[]));
@@ -638,15 +638,8 @@ mod language_selection_tests {
     fn a_language_is_selected_by_its_name_or_by_an_extension_it_claims() {
         let languages = || languages_claiming(&[("Java", &["java"]), ("C#", &["cs"]), ("Rust", &["rs"])])
                 .into_values().collect::<Vec<_>>();
-        let extensions = || build_language_map_by(ClaimKind::Extension, &keyed_by_name(languages()),
-                &HashMap::new(), &HashMap::new()).0;
-        let names_of = |languages: Vec<Language>| {
-            let mut names = languages.into_iter().map(|x| x.name).collect::<Vec<_>>();
-            names.sort();
-            names
-        };
-        let kept = |of_interest: &[&str], excluded: &[&str]| names_of(
-                retain_languages_of_interest(languages(), &extensions(), &owned(of_interest), &owned(excluded)));
+        let kept = |of_interest: &[&str], excluded: &[&str]| sorted(
+                select_the_languages_counted(&languages(), &owned(of_interest), &owned(excluded)));
 
         assert_eq!(vec!["C#"], kept(&["cs"], &[]), "an extension did not select its language");
         assert_eq!(vec!["Rust"], kept(&["RS"], &[]));
@@ -759,24 +752,50 @@ mod language_selection_tests {
     }
 
     #[test]
-    fn an_extension_two_languages_claim_selects_the_one_that_won_it() {
-        let languages = || languages_claiming(&[("Objective-C", &["m", "mm"]), ("MATLAB", &["m"])])
-                .into_values().collect::<Vec<_>>();
-        let kept = |conflicts, forced| {
-            let extensions = build_language_map_by(ClaimKind::Extension, &keyed_by_name(languages()),
-                    conflicts, forced).0;
-            retain_languages_of_interest(languages(), &extensions, &["m".to_owned()], &[])
-                    .into_iter().map(|x| x.name).collect::<Vec<_>>()
+    fn a_selection_drops_a_file_unread_only_where_nothing_it_could_be_read_as_is_counted() {
+        let claimants = || {
+            let mut languages = languages_claiming(&[("Alpha", &["x"]), ("Zed", &["x"]), ("Solo", &["y"])]);
+            languages.get_mut("Zed").unwrap().identifying_line_starts = vec!["zeddoc".to_owned()];
+            languages.into_values().collect::<Vec<_>>()
         };
+        let lookup_of = |config: EngineConfig| Languages::resolve(&config, claimants(), &ConflictRules::default()).0
+                .lookups.get_of_module_named(None).clone();
+        let x = std::path::Path::new("a.x");
+        let y = std::path::Path::new("a.y");
 
-        let (nothing_decided, no_forcing) = (HashMap::new(), HashMap::new());
-        let conflicts = hashmap!("m".to_owned() => vec!["Objective-C".to_owned(), "MATLAB".to_owned()]);
-        let forced = hashmap!("m".to_owned() => "MATLAB".to_owned());
+        let excluding_zed = lookup_of(EngineConfig { excluded_languages: owned(&["zed"]).into(), ..Default::default() });
+        assert_eq!(Some("Alpha"), excluding_zed.of_path(x).as_deref(), "'.x' may still be Alpha, so its files are read");
+        assert!(!excluding_zed.is_selected("Zed") && excluding_zed.is_selected("Alpha"));
+        assert_eq!(Some("Solo"), excluding_zed.of_path(y).as_deref());
 
-        assert_eq!(vec!["MATLAB"], kept(&nothing_decided, &no_forcing));
-        assert_eq!(vec!["Objective-C"], kept(&conflicts, &no_forcing));
-        // forcing beats the conflicts file here as it does everywhere
-        assert_eq!(vec!["MATLAB"], kept(&conflicts, &forced));
+        let only_zed = lookup_of(EngineConfig { languages_of_interest: owned(&["zed"]).into(), ..Default::default() });
+        assert_eq!(Some("Alpha"), only_zed.of_path(x).as_deref(), "the file is read and identified as in a run without the setting");
+        assert!(!only_zed.is_selected("Alpha") && only_zed.is_selected("Zed"));
+        assert!(only_zed.of_path(y).is_none(), "a file nothing counted claims was not dropped by its name");
+
+        let excluding_x = lookup_of(EngineConfig { excluded_languages: owned(&["x"]).into(), ..Default::default() });
+        assert!(excluding_x.of_path(x).is_none(), "an excluded extension left its files in");
+        assert_eq!(Some("Solo"), excluding_x.of_path(y).as_deref());
+
+        let by_name_only = lookup_of(EngineConfig { excluded_languages: owned(&["alpha"]).into(), use_heuristics: false,
+                ..Default::default() });
+        assert!(by_name_only.of_path(x).is_none(), "without heuristics '.x' is Alpha by the alphabet, and Alpha is left out");
+    }
+
+    #[test]
+    fn a_forced_language_the_selection_leaves_out_is_not_reported_as_missing() {
+        let config = EngineConfig {
+            forced_languages: hashmap!("m".to_owned() => "matlab".to_owned()).into(),
+            excluded_languages: owned(&["matlab"]).into(),
+            ..Default::default()
+        };
+        let languages = languages_claiming(&[("MATLAB", &["m"]), ("Objective-C", &["m"])]).into_values().collect::<Vec<_>>();
+
+        let (languages, reported) = Languages::resolve(&config, languages, &ConflictRules::default());
+
+        assert!(!reported.iter().any(|x| x.code == warnings::Code::UnknownForcedLanguage), "{reported:?}");
+        assert!(languages.lookups.get_of_module_named(None).of_path(std::path::Path::new("a.m")).is_none(),
+                "the forced pair hands every '.m' file to MATLAB, which is left out");
     }
 
     #[test]
@@ -837,19 +856,17 @@ mod language_selection_tests {
     fn a_language_name_outside_ascii_is_excluded_and_not_reported_as_missing() {
         let cafe = || vec![Language::new("CAFÉ", ["cf"], StringRules::escaping_nothing(), ["//"], &[], []),
                 Language::new("Rust", ["rs"], StringRules::escaping_nothing(), ["//"], &[], [])];
-        let names_of = |languages: Vec<Language>| languages.into_iter().map(|x| x.name).collect::<Vec<_>>();
-
         let config = EngineConfig { excluded_languages: owned(&["café"]).into(), ..Default::default() };
-        let kept = retain_languages_of_interest(cafe(), &HashMap::new(), &[], &owned(&["café"]));
+        let kept = select_the_languages_counted(&cafe(), &[], &owned(&["café"]));
         let reported = find_unknown_names_of_the_selection(&cafe(), &config);
 
-        assert_eq!(vec!["Rust"], names_of(kept), "the accented name survived an exclusion that names it");
+        assert_eq!(vec!["Rust"], sorted(kept), "the accented name survived an exclusion that names it");
         assert!(reported.is_empty(), "the language was excluded and the run said it does not exist: {reported:?}");
 
         let config = EngineConfig { languages_of_interest: owned(&["café"]).into(), ..Default::default() };
-        let kept = retain_languages_of_interest(cafe(), &HashMap::new(), &owned(&["café"]), &[]);
+        let kept = select_the_languages_counted(&cafe(), &owned(&["café"]), &[]);
         let reported = find_unknown_names_of_the_selection(&cafe(), &config);
-        assert_eq!(vec!["CAFÉ"], names_of(kept));
+        assert_eq!(vec!["CAFÉ"], sorted(kept));
         assert!(reported.is_empty(), "{reported:?}");
     }
 
@@ -862,11 +879,10 @@ mod language_selection_tests {
         };
         let available = languages_claiming(&[("Java", &["java"]), ("Rust", &["rs"])])
                 .into_values().collect::<Vec<_>>();
-        let kept = retain_languages_of_interest(available.clone(), &HashMap::new(),
-                &owned(&["Java"]), &owned(&["Rust"]));
+        let kept = select_the_languages_counted(&available, &owned(&["Java"]), &owned(&["Rust"]));
         let reported = find_unknown_names_of_the_selection(&available, &config);
 
-        assert_eq!(vec!["Java"], kept.into_iter().map(|x| x.name).collect::<Vec<_>>());
+        assert_eq!(vec!["Java"], sorted(kept));
         assert!(!reported.iter().any(|x| x.subject == "Rust"),
                 "'Rust' exists and was reported as missing: {reported:?}");
     }
@@ -978,11 +994,10 @@ mod language_selection_tests {
         };
         let available = languages_claiming(&[("Java", &["java"]), ("Rust", &["rs"])])
                 .into_values().collect::<Vec<_>>();
-        let kept = retain_languages_of_interest(available.clone(), &HashMap::new(), &[],
-                &owned(&["Java", "Nolang-Q9"]));
+        let kept = select_the_languages_counted(&available, &[], &owned(&["Java", "Nolang-Q9"]));
         let reported = find_unknown_names_of_the_selection(&available, &config);
 
-        assert_eq!(vec!["Rust"], kept.into_iter().map(|x| x.name).collect::<Vec<_>>());
+        assert_eq!(vec!["Rust"], sorted(kept));
         let mine = reported.iter().find(|x| x.subject == "Nolang-Q9").unwrap();
         assert_eq!(warnings::Code::UnknownExcludedLanguage, mine.code);
         assert_eq!("settings", mine.affects().as_str());
@@ -1024,5 +1039,11 @@ mod language_selection_tests {
 
     fn owned(names: &[&str]) -> Vec<String> {
         names.iter().map(|x| (*x).to_owned()).collect()
+    }
+
+    fn sorted(names: HashSet<String>) -> Vec<String> {
+        let mut names = names.into_iter().collect::<Vec<_>>();
+        names.sort();
+        names
     }
 }

@@ -22,6 +22,9 @@ Main changes:
       folder, the way a 'phpunit.xml' does.
 
 Bugfixes:
+  -> With '--languages' and '--exclude-languages' each file is identified as in a run without
+      them, so '--exclude-languages matlab' leaves out only the MATLAB '.m' files and counts the
+      Objective-C ones. An extension given to either names every language that claims it.
   -> '--log' and '--compare' typed beside '--output json' now say they are ignored, since a
       document run writes no log and shows no history; the log entry used to be left unwritten
       without a word.

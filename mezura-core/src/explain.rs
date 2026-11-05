@@ -188,6 +188,8 @@ pub enum ExplainError {
     LanguagesFromAnotherConfig,
     /// No language in play claims this file, so there are no symbols to read it with.
     UnclaimedFile,
+    /// The file was identified as a language the run's selection leaves out.
+    NotSelected(String),
     /// The path is a directory, so there is no file to read.
     IsADirectory,
     /// The file could not be read, with what the operating system said.
@@ -201,6 +203,7 @@ impl std::fmt::Display for ExplainError {
         match self {
             Self::LanguagesFromAnotherConfig => write!(f, "The languages were resolved against a configuration that selects a different set of them than the one this explanation was given, so the file would be read with the wrong symbols. Resolve them against the same configuration."),
             Self::UnclaimedFile => write!(f, "No language in play claims this file, so there is nothing to read it with."),
+            Self::NotSelected(language) => write!(f, "The file is {language}, which the run's language selection leaves out."),
             Self::IsADirectory => write!(f, "The path is a directory, so there is nothing to read line by line."),
             Self::UnreadableFile(x) => write!(f, "The file could not be read: {x}"),
             Self::InvalidTestPattern(x) => write!(f, "{x}")
@@ -228,7 +231,7 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     if path.is_dir() {
         return Err(ExplainError::IsADirectory);
     }
-    let (by_name, lookups, nested_definitions) = languages.into_parts();
+    let (by_name, lookups, extension_to_name) = languages.into_parts();
     let absolute = convert_to_absolute(&path.to_string_lossy());
     let targets = crate::engine::targets::resolve(&config.targets, crate::ObeyedIgnoreFiles::of(config),
             config.should_search_in_dotted).ok();
@@ -252,8 +255,11 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
         identified_by = Some((literal, line));
         lang_name = name;
     }
+    if !lookup.is_selected(&lang_name) {
+        return Err(ExplainError::NotSelected(lang_name.to_string()));
+    }
     let left_out_of_a_scan = find_scan_skip(&contents, extension_rules.as_deref(), config);
-    let nested_lookup = NestedLanguageLookup::of(&by_name, &nested_definitions);
+    let nested_lookup = NestedLanguageLookup { languages: &by_name, extension_to_name: &extension_to_name };
     let (tests_by_path, mut test_file_rule) = match config.detect_tests {
         true => decide_whole_file(&absolute, config, targets.as_ref(), by_name.get(lang_name.as_ref()).unwrap(),
                 &nested_lookup)?,

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::thread::{Scope, ScopedJoinHandle};
@@ -14,7 +14,6 @@ use crate::engine::file_parser;
 use crate::engine::identity::ModuleLookups;
 use crate::engine::targets::spell_out;
 use crate::engine::test_detection::ModuleRow;
-use crate::languages::NestedLanguageDefinitions;
 
 const INITIAL_FILE_BUFFER_BYTES : usize = 150;
 
@@ -23,7 +22,7 @@ pub(crate) fn start_parser_thread<'scope, W: RunWatcher>(scope: &'scope Scope<'s
         faulty_files: &'scope FaultyFilesListMut, finish_condition: &'scope AtomicBool,
         stats_per_module: &'scope StatsMapMut, nested_per_module: &'scope NestedLanguageMapMut,
         tests_per_module: &'scope TestCodeMapMut, files_per_module: &'scope FilesPerModuleMut, module_rows: &'scope ModuleRowsMut,
-        language_map: &'scope HashMap<String,Language>, nested_definitions: &'scope NestedLanguageDefinitions,
+        language_map: &'scope HashMap<String,Language>, extension_to_name: &'scope HashMap<String, Arc<str>>,
         language_lookups: &'scope ModuleLookups,
         config: &'scope EngineConfig, started: Instant, counting_ended: &'scope AtomicU64,
         consumer_exits: &'scope (AtomicU64, AtomicU64), skipped_files: &'scope Mutex<SkippedFiles>,
@@ -31,7 +30,7 @@ pub(crate) fn start_parser_thread<'scope, W: RunWatcher>(scope: &'scope Scope<'s
 {
     thread::Builder::new().name(format!("consumer-{id}")).spawn_scoped(scope, move || {
         start_parsing_files(id, files_injector, worker, peers, faulty_files, finish_condition, stats_per_module,
-                nested_per_module, tests_per_module, files_per_module, module_rows, language_map, nested_definitions,
+                nested_per_module, tests_per_module, files_per_module, module_rows, language_map, extension_to_name,
                 language_lookups, config, skipped_files, watcher);
         // The last thing this thread does, and the only honest answer to how long the counting took:
         // 'run' joins these threads after calling the caller's callback, so its own clock cannot tell
@@ -50,7 +49,7 @@ fn start_parsing_files<W: RunWatcher>(id: usize, files_injector: &Injector<Parsa
     peers: &[Stealer<ParsableFile>], faulty_files: &FaultyFilesListMut, finish_condition: &AtomicBool,
     stats_per_module: &StatsMapMut, nested_per_module: &NestedLanguageMapMut, tests_per_module: &TestCodeMapMut,
     files_per_module: &FilesPerModuleMut, module_rows: &ModuleRowsMut,
-    language_map: &HashMap<String,Language>, nested_definitions: &NestedLanguageDefinitions,
+    language_map: &HashMap<String,Language>, extension_to_name: &HashMap<String, Arc<str>>,
     language_lookups: &ModuleLookups,
     config: &EngineConfig, skipped_files: &Mutex<SkippedFiles>, watcher: &W)
 {
@@ -105,12 +104,11 @@ fn start_parsing_files<W: RunWatcher>(id: usize, files_injector: &Injector<Parsa
                 }
                 idle_iterations = 0;
                 let lang_name = parsable_file.language_name.as_ref();
-                let lookup = file_parser::NestedLanguageLookup::of(language_map, nested_definitions);
-                let shebang_map = &language_lookups.get_of_module(parsable_file.module).by_shebang;
+                let lookup = file_parser::NestedLanguageLookup { languages: language_map, extension_to_name };
                 match file_parser::parse_file(&parsable_file.path, parsable_file.size, lang_name, &mut buf,
                         &mut parse_buffers, &lookup, &mut keyword_matchers, &mut identification_matchers,
                         config, parsable_file.written_by_hand, parsable_file.test_scope,
-                        parsable_file.extension_rules.as_deref(), shebang_map) {
+                        parsable_file.extension_rules.as_deref(), language_lookups.get_of_module(parsable_file.module)) {
                     Ok(file_parser::FileOutcome::Counted(mut report, resolved)) => {
                         for preset in parsable_file.decided_by_presets.iter().flat_map(|presets| presets.iter()) {
                             preset.record_match();
@@ -189,6 +187,7 @@ fn start_parsing_files<W: RunWatcher>(id: usize, files_injector: &Injector<Parsa
                         watcher.record_file_parsed(0);
                         local_skipped.get_of_kind_mut(kind).push(spell_out(&parsable_file.path));
                     },
+                    Ok(file_parser::FileOutcome::NotSelected) => watcher.record_file_parsed(0),
                     Err(x) => {
                         watcher.record_file_parsed(0);
                         // The listing gives no size on unix, and the json report carries one for

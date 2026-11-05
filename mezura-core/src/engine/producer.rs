@@ -376,10 +376,10 @@ mod tests {
         let files_injector = Injector::new();
         let dirs_injector = Injector::new();
         let idle_producers = AtomicUsize::new(0);
-        let language_lookups = ModuleLookups::OfTheWholeRun(LanguageLookup {
+        let language_lookups = ModuleLookups::OfTheWholeRun(Box::new(LanguageLookup {
                         by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
                         by_shebang: build_language_map_by(ClaimKind::Shebang, &language_map, &Default::default(), &Default::default()).0,
-                        ..Default::default() });
+                        ..Default::default() }));
         let modules = Modules::of(&targets);
         let mut files_present = FilesPresent::default();
         let test_patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed).unwrap();
@@ -631,9 +631,9 @@ mod tests {
                 config.should_search_in_dotted).unwrap();
         let language_map = crate::languages::keyed_by_name(
                 crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0);
-        let language_lookups = ModuleLookups::OfTheWholeRun(
+        let language_lookups = ModuleLookups::OfTheWholeRun(Box::new(
                 LanguageLookup { by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
-                        ..Default::default() });
+                        ..Default::default() }));
         let modules = Modules::of(&targets);
         let (files_injector, dirs_injector) = (Injector::new(), Injector::new());
         let mut files_present = FilesPresent::default();

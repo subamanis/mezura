@@ -317,7 +317,8 @@ pub struct Performance {
 pub struct FilesPresent {
     /// Every file the scan reached, whatever it was. Links are not followed and are not in here.
     pub total_files: usize,
-    /// Those belonging to a language the run counts, which are the ones it went on to read.
+    /// Those whose name a language the run counts may claim, which are the ones it went on to read.
+    /// A file read and then identified as a language the run leaves out is among them.
     pub relevant_files: usize,
     /// Those a language claims that an exclude pattern or an ignore file then took out. A file no
     /// language claims is not in here, since it was never identified in the first place.

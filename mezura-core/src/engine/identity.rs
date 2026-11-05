@@ -1,6 +1,6 @@
 // Which language owns an extension, a whole filename or a shebang interpreter, and how a contest
 // between two of them is settled.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::path::Path;
@@ -239,7 +239,12 @@ pub(crate) struct LanguageLookup {
     pub by_extension: HashMap<String, Arc<str>>,
     pub by_filename: HashMap<String, Arc<str>>,
     pub by_shebang: HashMap<String, Arc<str>>,
-    pub extension_rules: HashMap<String, Arc<ExtensionRules>>
+    pub extension_rules: HashMap<String, Arc<ExtensionRules>>,
+    // The languages the run's selection does not count. The name and interpreter maps hold them
+    // too, so a file is identified as in a run without a selection and only then left out.
+    pub not_selected: HashSet<String>,
+    // No counted language claims an interpreter, so no file is opened for its '#!' line
+    pub skips_shebangs: bool
 }
 
 // What the head of a file wearing this extension can still change. The contenders are the
@@ -262,7 +267,7 @@ impl LanguageLookup {
         if !self.by_filename.is_empty()
                 && let Some(text) = name.to_str()
                 && let Some(language) = find_language_of_identity(&self.by_filename, text) {
-            return Some(language);
+            return self.is_selected(&language).then_some(language);
         }
         let extension = name.extension().and_then(|x| x.to_str())?;
         find_language_of_identity(&self.by_extension, extension)
@@ -297,7 +302,8 @@ impl LanguageLookup {
         // 'extension()' answers None for dotfiles too, so a '.bashrc'-shaped name qualifies. The
         // candidates stay few because '.git' is never walked and dotted directories are skipped
         // unless '--search-in-dotted' asks for them.
-        !self.by_shebang.is_empty() && path.extension().is_none()
+        !self.skips_shebangs && !self.by_shebang.is_empty() && path.extension().is_none()
+                && !self.claims_the_whole_name(path)
     }
 
     pub(crate) fn of_shebang(&self, path: &Path) -> Option<Arc<str>> {
@@ -314,7 +320,11 @@ impl LanguageLookup {
             line = &line[..last_space];
         }
         let interpreter = std::str::from_utf8(find_interpreter(line)?).ok()?;
-        find_language_of_interpreter(&self.by_shebang, interpreter)
+        find_language_of_interpreter(&self.by_shebang, interpreter).filter(|language| self.is_selected(language))
+    }
+
+    pub(crate) fn is_selected(&self, language: &str) -> bool {
+        !self.not_selected.contains(language)
     }
 
     fn claims_the_whole_name(&self, name: &Path) -> bool {
@@ -350,7 +360,7 @@ impl ScopedLookups {
                         .and_then(|name| self.per_module.remove(name)))
                 .collect::<Vec<_>>();
         if of_each.iter().all(Option::is_none) {
-            return ModuleLookups::OfTheWholeRun(self.whole_run);
+            return ModuleLookups::OfTheWholeRun(Box::new(self.whole_run));
         }
 
         ModuleLookups::OfEachModule(of_each.into_iter()
@@ -362,7 +372,7 @@ impl ScopedLookups {
 // every file would be a string comparison per file.
 #[derive(Debug)]
 pub(crate) enum ModuleLookups {
-    OfTheWholeRun(LanguageLookup),
+    OfTheWholeRun(Box<LanguageLookup>),
     OfEachModule(Vec<LanguageLookup>)
 }
 

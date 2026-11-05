@@ -166,7 +166,7 @@ pub fn run_watched_by<W: RunWatcher>(config: &EngineConfig, languages: Languages
             config.should_search_in_dotted).map_err(RunError::InvalidTargets)?;
     let faulty_files : FaultyFilesListMut = Mutex::new(Vec::with_capacity(10));
     let finish_condition = AtomicBool::new(false);
-    let (language_map, lookups, nested_definitions) = languages.into_parts();
+    let (language_map, lookups, extension_to_name) = languages.into_parts();
     let modules = Modules::of(&targets);
     // Only here can the lookups be put in the order the walk wants them: which number a module was
     // given is decided by the targets, and the languages were resolved before they were seen.
@@ -241,7 +241,7 @@ pub fn run_watched_by<W: RunWatcher>(config: &EngineConfig, languages: Languages
         for (i, worker) in consumer_workers.into_iter().enumerate() {
             match engine::consumer::start_parser_thread(scope, i, &files_injector, worker, &consumer_peers, &faulty_files,
                     &finish_condition, &stats_per_module, &nested_per_module, &tests_per_module, &files_per_module,
-                    &module_rows, &language_map, &nested_definitions, &language_lookups, config, parsing_started_instant,
+                    &module_rows, &language_map, &extension_to_name, &language_lookups, config, parsing_started_instant,
                     &counting_ended, &consumer_exits, &skipped_files, watcher) {
                 Ok(handle) => consumer_handles.push(handle),
                 Err(x) => last_refusal = Some(x)
@@ -340,7 +340,7 @@ pub fn run_watched_by<W: RunWatcher>(config: &EngineConfig, languages: Languages
     // Inside the count, since the caller's callback ran before this
     let promotion_started = Instant::now();
     let module_rows = std::mem::take(&mut *module_rows.lock().unwrap());
-    let lookup = NestedLanguageLookup::of(&language_map, &nested_definitions);
+    let lookup = NestedLanguageLookup { languages: &language_map, extension_to_name: &extension_to_name };
     let mut files_on_disk = FilesOnDisk { lookup: &lookup, config, is_whole: &|_| false };
     let promotion = promote_declared_test_modules(&module_rows, tests_by_module, files_by_module, &language_map,
             &mut files_on_disk);
@@ -353,7 +353,7 @@ pub fn run_watched_by<W: RunWatcher>(config: &EngineConfig, languages: Languages
 
     let mut per_language = merge_over_modules(per_module, Stats::add);
     // Dropped before the total is summed, or the total's keyword map would name the keywords of
-    // every language the run selected, including the ones no file was written in. The figures are
+    // every language, including the ones no file was written in. The figures are
     // the same either way, since an empty language adds nothing.
     remove_languages_with_0_files(&mut per_language);
     let total = Stats::calculate_total_of(&per_language);

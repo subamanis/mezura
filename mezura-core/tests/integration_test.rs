@@ -92,8 +92,8 @@ fn a_language_of_my_own_is_counted_under_the_name_it_carries() {
 
 // A container file weighs whole on its own language's row, and the sections inside it come back
 // decomposed in 'embedded', never added to any row: that is the whole counting model, asserted
-// through the public surface. The second run narrows itself to the container language alone, which
-// is the case the machinery keeps definitions aside for: the sections must still resolve.
+// through the public surface. The second run counts the container language alone, and its sections
+// must still resolve by the extension of a language the run does not count.
 #[test]
 fn a_container_file_is_one_file_of_its_language_and_its_sections_are_the_decomposition() {
     let root = std::env::temp_dir().join("mezura-embedded-sections");
@@ -105,7 +105,7 @@ fn a_container_file_is_one_file_of_its_language_and_its_sections_are_the_decompo
     let web = mezura_core::Language::new("Web", ["web"], StringRules::escaping_nothing(), [""; 0],
                     &[("<!--", "-->")], [])
             .with_nested_languages(&[mezura_core::NestedLanguage::of("<script", "</script>", "js")]);
-    let js = mezura_core::Language::new("JS", ["js"], StringRules::escaping_with(b'\\').with_symbols(["\""]),
+    let js = mezura_core::Language::new("Script", ["js"], StringRules::escaping_with(b'\\').with_symbols(["\""]),
             ["//"], &[("/*", "*/")], []);
     let definitions = || [web.clone(), js.clone()];
 
@@ -118,11 +118,11 @@ fn a_container_file_is_one_file_of_its_language_and_its_sections_are_the_decompo
 
     // the rows: the container holds all five of its lines, the plain js file its two, nothing twice
     assert_eq!((1, 5), (result.per_language["Web"].files, result.per_language["Web"].lines));
-    assert_eq!((1, 2), (result.per_language["JS"].files, result.per_language["JS"].lines));
+    assert_eq!((1, 2), (result.per_language["Script"].files, result.per_language["Script"].lines));
     assert_eq!(7, result.total.lines);
 
     // the decomposition: two js lines inside one container file, with their own reading
-    let section = &result.nested_languages["Web"]["JS"];
+    let section = &result.nested_languages["Web"]["Script"];
     assert_eq!((1, 2, 1, 1), (section.files, section.lines,
             section.calculate_code_lines(CountingModel::Content),
             section.calculate_comment_lines(CountingModel::Content)));
@@ -135,7 +135,7 @@ fn a_container_file_is_one_file_of_its_language_and_its_sections_are_the_decompo
     std::fs::remove_dir_all(&root).unwrap();
 
     assert_eq!(vec!["Web"], result.per_language.keys().collect::<Vec<_>>());
-    assert_eq!(2, result.nested_languages["Web"]["JS"].lines,
+    assert_eq!(2, result.nested_languages["Web"]["Script"].lines,
             "a narrowed run lost the decomposition of its own container files");
 }
 
@@ -250,6 +250,79 @@ fn a_contested_extension_is_identified_by_its_content_and_falls_back_without_any
             "'use_heuristics: false' still identified by content: {fallback:?}");
 
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn the_language_selection_decides_after_each_file_is_identified_as_in_a_run_without_it() {
+    let root = std::env::temp_dir().join("mezura-language-selection");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("plot.m"), "% a comment\nfunction plot_it(x)\n  disp(x)\nend\n").unwrap();
+    std::fs::write(root.join("View.m"), "#import <Foundation/Foundation.h>\n@interface View : NSObject\n@end\n").unwrap();
+    std::fs::write(root.join("main.c"), "int main(void) { return 0; }\n").unwrap();
+    let base = EngineConfig { threads: Threads::new(1, 2), ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")]) };
+    let named = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect::<Vec<_>>();
+
+    let counted = |config: EngineConfig| {
+        let result = count_with_shipped_languages(&config);
+        (collect_files_per_language(&result.per_language), result.files_present.relevant_files)
+    };
+
+    let whole_extension = counted(EngineConfig { languages_of_interest: named(&["m"]).into(), ..base.clone() });
+    assert_eq!(rows(&[("MATLAB", 1), ("Objective-C", 1)]), whole_extension.0,
+            "the Objective-C file was counted as the extension's owner, or the C file came along");
+    let excluding_matlab = counted(EngineConfig { excluded_languages: named(&["matlab"]).into(), ..base.clone() });
+    assert_eq!(rows(&[("C", 1), ("Objective-C", 1)]), excluding_matlab.0,
+            "the MATLAB file was counted, or the Objective-C file went out with it");
+    assert_eq!(3, excluding_matlab.1, "the '.m' file read and left out was dropped from the files of interest");
+    let only_objective_c = counted(EngineConfig { languages_of_interest: named(&["objective-c"]).into(), ..base.clone() });
+    assert_eq!(rows(&[("Objective-C", 1)]), only_objective_c.0);
+    let forced = counted(EngineConfig { excluded_languages: named(&["matlab"]).into(),
+            forced_languages: HashMap::from([("m".to_owned(), "matlab".to_owned())]).into(), ..base.clone() });
+    assert_eq!(rows(&[("C", 1)]), forced.0, "a forced pair makes every '.m' file MATLAB, which is left out");
+    let no_heuristics = counted(EngineConfig { excluded_languages: named(&["matlab"]).into(), use_heuristics: false,
+            ..base.clone() });
+    assert_eq!(rows(&[("C", 1)]), no_heuristics.0, "without heuristics every '.m' file is MATLAB by the priority file");
+    let whole_extension_out = counted(EngineConfig { excluded_languages: named(&["m"]).into(), ..base.clone() });
+    assert_eq!(rows(&[("C", 1)]), whole_extension_out.0, "an excluded extension left one of its claimants in");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_shebang_or_a_whole_name_naming_a_language_the_selection_leaves_out_leaves_the_file_out() {
+    let root = std::env::temp_dir().join("mezura-selection-by-shebang-and-name");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("tool.pl"), "#!/usr/bin/env python\nprint(\"hi\")\n").unwrap();
+    std::fs::write(root.join("plot.m"), "% a comment\nfunction plot_it(x)\n  disp(x)\nend\n").unwrap();
+    let base = EngineConfig { threads: Threads::new(1, 2), ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")]) };
+    let counted = |config: EngineConfig| collect_files_per_language(&count_with_shipped_languages(&config).per_language);
+
+    let without_python = counted(EngineConfig { excluded_languages: vec!["python".to_owned()].into(), ..base.clone() });
+    assert_eq!(rows(&[("MATLAB", 1)]), without_python, "the '#!' line was read without Python and the file became Perl");
+
+    let forced = HashMap::from([("plot.m".to_owned(), "objective-c".to_owned())]);
+    let without_objective_c = counted(EngineConfig { excluded_languages: vec!["objective-c".to_owned()].into(),
+            forced_languages: forced.into(), ..base.clone() });
+    assert_eq!(rows(&[("Python", 1)]), without_objective_c, "the forced name was dropped and the file fell to its extension");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn a_generated_file_of_a_language_the_selection_leaves_out_is_not_reported_as_skipped() {
+    let root = std::env::temp_dir().join("mezura-generated-outside-the-selection");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("opcodes.h"), "// Generated by the protocol buffer compiler.  DO NOT EDIT!\nint x;\n").unwrap();
+    std::fs::write(root.join("View.m"), "#import <Foundation/Foundation.h>\n@interface View : NSObject\n@end\n").unwrap();
+    let config = EngineConfig { threads: Threads::new(1, 2), languages_of_interest: vec!["objective-c".to_owned()].into(),
+            ..EngineConfig::new([root.to_string_lossy().replace('\\', "/")]) };
+
+    let result = count_with_shipped_languages(&config);
+    std::fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(rows(&[("Objective-C", 1)]), collect_files_per_language(&result.per_language));
+    assert_eq!(0, result.skipped_files.calculate_files(), "a C header outside the selection was reported as generated");
 }
 
 // Through the shipped rules on purpose, so emptying their block fails here and not in a build dir.
@@ -462,6 +535,46 @@ fn asking_for_some_languages_leaves_the_others_out_of_the_result() {
     let without_rust = counted_with(|config| config.excluded_languages = vec!["Rust".to_owned()].into());
     assert!(!without_rust.contains(&"Rust".to_owned()), "an excluded language was counted anyway");
     assert_eq!(everything.len() - 1, without_rust.len(), "excluding one language removed more than one");
+}
+
+#[test]
+fn a_module_leaves_files_out_by_its_own_selection_after_identifying_them_by_its_own_rules() {
+    let root = std::env::temp_dir().join("mezura-per-module-language-selection");
+    let _ = std::fs::remove_dir_all(&root);
+    for folder in ["ios", "analysis"] {
+        std::fs::create_dir_all(root.join(folder)).unwrap();
+        std::fs::write(root.join(folder).join("plot.m"), "% a comment\nfunction plot_it(x)\n  disp(x)\nend\n").unwrap();
+        std::fs::write(root.join(folder).join("View.m"), "#import <Foundation/Foundation.h>\n@interface View : NSObject\n@end\n").unwrap();
+    }
+    let at = |folder: &str| format!("{}/{folder}", root.to_string_lossy().replace('\\', "/"));
+    let base = EngineConfig {
+        threads: Threads::new(1, 2),
+        targets: vec![Target::named("ios", at("ios")), Target::named("analysis", at("analysis"))],
+        ..Default::default()
+    };
+    let counted = |config: EngineConfig| {
+        let (languages, warnings) = Languages::shipped(&config);
+        assert!(!warnings.iter().any(|x| x.code == mezura_core::Code::UnknownModuleScope), "{warnings:?}");
+        let result = run(&config, languages).unwrap();
+        result.modules.iter().map(|module| (module.name.clone().unwrap_or_default(),
+                collect_files_per_language(&module.per_language))).collect::<HashMap<_, _>>()
+    };
+
+    let forced_and_excluded = counted(EngineConfig {
+        forced_languages: ForcedLanguages::of(HashMap::new(),
+                [("ios".to_owned(), HashMap::from([("m".to_owned(), "objective-c".to_owned())]))]),
+        excluded_languages: vec!["analysis/matlab".to_owned()].into(),
+        ..base.clone()
+    });
+    assert_eq!(rows(&[("Objective-C", 2)]), forced_and_excluded["ios"], "'ios/m=objective-c' did not make both files Objective-C");
+    assert_eq!(rows(&[("Objective-C", 1)]), forced_and_excluded["analysis"],
+            "'analysis/matlab' left the MATLAB file in, or took the Objective-C one out with it");
+
+    let selected_in_one = counted(EngineConfig { languages_of_interest: vec!["ios/objective-c".to_owned()].into(),
+            ..base.clone() });
+    assert_eq!(rows(&[("Objective-C", 1)]), selected_in_one["ios"]);
+    assert_eq!(rows(&[("MATLAB", 1), ("Objective-C", 1)]), selected_in_one["analysis"], "a selection inside 'ios' reached 'analysis'");
+    std::fs::remove_dir_all(&root).unwrap();
 }
 
 // One repository with MATLAB in one folder and Objective-C in another used to have to be counted
@@ -1750,6 +1863,16 @@ fn write_tree(name: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
 fn count_with_shipped_languages(config: &EngineConfig) -> mezura_core::RunResult {
     let (languages, _) = Languages::shipped(config);
     run(config, languages).unwrap()
+}
+
+fn collect_files_per_language(per_language: &HashMap<String, Stats>) -> Vec<(String, usize)> {
+    let mut files = per_language.iter().map(|(name, stats)| (name.clone(), stats.files)).collect::<Vec<_>>();
+    files.sort();
+    files
+}
+
+fn rows(of: &[(&str, usize)]) -> Vec<(String, usize)> {
+    of.iter().map(|(name, files)| ((*name).to_owned(), *files)).collect()
 }
 
 fn find_file_named<'a>(files: impl IntoIterator<Item = &'a mezura_core::FileEntry>, name: &str) -> &'a mezura_core::FileEntry {

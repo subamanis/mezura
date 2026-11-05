@@ -186,8 +186,8 @@ pub const LANGUAGES_HELP  :  &str =
     A language is named either by the name a file in the 'data/languages/' directory gives it under
     'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
 
-    An extension that two languages claim names whichever of them owns it for this run, which is
-    the answer in 'language_conflicts.txt' or the one '--force-language' gave.
+    An extension that several languages claim names all of them, so '--languages m' is
+    '--languages matlab,objective-c,mercury'. Each file is identified by its content, as in any run.
 
     Writing a module and a slash before the name holds it inside that module, and a module that
     names any language of its own counts only those: '--languages rust,web/js' counts
@@ -202,6 +202,10 @@ pub const EXCLUDE_LANGUAGES_HELP  :  &str =
 
     A language is named either by the name a file in the 'data/languages/' directory gives it under
     'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
+
+    An extension that several languages claim names all of them, so '--exclude-languages m' is
+    '--exclude-languages matlab,objective-c,mercury'. Naming MATLAB leaves out only the files
+    identified as MATLAB, and Objective-C's '.m' files stay.
 
     A name that nothing in the scan answers to is reported as having changed nothing, and the run
     carries on.
@@ -1584,15 +1588,33 @@ pub fn print_the_command_list() {
 }
 
 fn print_the_help(body: &str) {
-    let mut msg ="
-    │  ╲     ╱  ╲
-    │ $$╲   ╱  $$  ______   ________  __    __   ______   ______
-    │ $$$╲ ╱  $$$ ╱      ╲ │        ╲│  ╲  │  ╲ ╱      ╲ │      ╲
-    │ $$$$╲  $$$$│  $$$$$$╲ ╲$$$$$$$$│ $$  │ $$│  $$$$$$╲ ╲$$$$$$╲
-    │ $$╲$$ $$ $$│ $$    $$  ╱    $$ │ $$  │ $$│ $$   ╲$$╱      $$
-    │ $$ ╲$$$│ $$│ $$$$$$$$ ╱  $$$$_ │ $$__╱ $$│ $$     │  $$$$$$$
-    │ $$  ╲$ │ $$ ╲$$     ╲│  $$    ╲ ╲$$    $$│ $$      ╲$$    $$
-     ╲$$      ╲$$  ╲$$$$$$$ ╲$$$$$$$$  ╲$$$$$$  ╲$$       ╲$$$$$$$\n\n".to_owned();
+    const ICON : [(&str, &str, &str); 8] = [
+        ("", "", "                      "),
+        ("           ", "$$$╱", "       "),
+        ("  ╱$$     ", "$$═╱", " $$╲    "),
+        (" ╱$$     ", "$$$╱", "   $$╲   "),
+        (" $$     ", "$$═╱", "     $$   "),
+        (" ╲$$   ", "$$$╱", "     $$╱   "),
+        ("  ╲$$ ", "$$═╱", "     $$╱    "),
+        ("     ", "$$$╱", "             ")
+    ];
+    const NAME : [&str; 8] = [
+        "│  ╲     ╱  ╲",
+        "│ $$╲   ╱  $$  ______   ________  __    __   ______   ______",
+        "│ $$$╲ ╱  $$$ ╱      ╲ │        ╲│  ╲  │  ╲ ╱      ╲ │      ╲",
+        "│ $$$$╲  $$$$│  $$$$$$╲ ╲$$$$$$$$│ $$  │ $$│  $$$$$$╲ ╲$$$$$$╲",
+        "│ $$╲$$ $$ $$│ $$    $$  ╱    $$ │ $$  │ $$│ $$   ╲$$╱      $$",
+        "│ $$ ╲$$$│ $$│ $$$$$$$$ ╱  $$$$_ │ $$__╱ $$│ $$     │  $$$$$$$",
+        "│ $$  ╲$ │ $$ ╲$$     ╲│  $$    ╲ ╲$$    $$│ $$      ╲$$    $$",
+        " ╲$$      ╲$$  ╲$$$$$$$ ╲$$$$$$$$  ╲$$$$$$  ╲$$       ╲$$$$$$$"
+    ];
+
+    let mut msg = String::from("\n");
+    for ((left, ruler, right), name) in ICON.iter().zip(NAME) {
+        msg += &format!("    {}{}{}{name}\n", left.dimmed(), ruler.truecolor(HELP_COMMAND.0, HELP_COMMAND.1, HELP_COMMAND.2),
+                right.dimmed());
+    }
+    msg += "\n";
 
     msg += get_data_dir_str().as_str();
     msg += "Format of arguments: <path_here> --optional_command1 --optional_commandN\n\n";

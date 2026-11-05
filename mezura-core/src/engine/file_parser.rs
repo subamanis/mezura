@@ -21,7 +21,6 @@ use crate::engine::masks::MaskFinder;
 use crate::engine::masks::is_ascii;
 use crate::engine::masks::BLOCK_BYTES;
 use crate::engine::test_detection::{Declaration, ModuleDeclarations, TestScope, TestWalk, TestsByPath};
-use crate::languages::NestedLanguageDefinitions;
 
 pub(crate) const BYTE_ORDER_MARK : &[u8] = b"\xef\xbb\xbf";
 pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
@@ -120,14 +119,15 @@ impl FileReport {
 
 pub(crate) enum FileOutcome {
     Counted(FileReport, Option<Arc<str>>),
-    Skipped(ScanSkip)
+    Skipped(ScanSkip),
+    NotSelected
 }
 
 pub(crate) fn parse_file(path: &Path, size: u64, lang_name: &str, buf: &mut Vec<u8>, buffers: &mut ParseBuffers,
     lookup: &NestedLanguageLookup, matchers: &mut KeywordMatchers,
     id_matchers: &mut IdentificationMatchers, config: &EngineConfig,
     written_by_hand: bool, test_scope: TestScope, extension_rules: Option<&crate::engine::identity::ExtensionRules>,
-    shebang_map: &HashMap<String, Arc<str>>)
+    language_lookup: &crate::engine::identity::LanguageLookup)
 -> Result<FileOutcome,String>
 {
     // None unless MEZURA_PHASE_TIMING is set, so a normal run never reads the clock at all
@@ -163,17 +163,20 @@ pub(crate) fn parse_file(path: &Path, size: u64, lang_name: &str, buf: &mut Vec<
         contents
     };
 
+    let resolved = extension_rules.and_then(|rules| rules.contenders.as_deref())
+            .and_then(|c| identify_language(contents, c, lookup.languages, &language_lookup.by_shebang, id_matchers))
+            .map(|(name, _)| name);
+    let lang_name = resolved.as_deref().unwrap_or(lang_name);
+    // Before the skip, so a file the selection leaves out is never reported as generated or minified
+    if !language_lookup.is_selected(lang_name) {
+        return Ok(FileOutcome::NotSelected);
+    }
     // Before the parse, which is what the skip saves: a bundle is the most expensive file there is.
     // A file the user named is counted whatever it holds, the same way the directory scan counts a
     // named file that a '.gitignore' covers.
     if !written_by_hand && let Some(kind) = find_scan_skip(contents, extension_rules, config) {
         return Ok(FileOutcome::Skipped(kind));
     }
-
-    let resolved = extension_rules.and_then(|rules| rules.contenders.as_deref())
-            .and_then(|c| identify_language(contents, c, lookup.languages, shebang_map, id_matchers))
-            .map(|(name, _)| name);
-    let lang_name = resolved.as_deref().unwrap_or(lang_name);
     let language = lookup.languages.get(lang_name).unwrap();
     // Decided after the language is known, since a contested extension is only identified from here on
     let tests_by_path = if config.detect_tests { judge_tests_by_path(path, test_scope, language) } else { TestsByPath::Nothing };
@@ -1095,20 +1098,14 @@ impl KeywordMatcher {
     }
 }
 
-// 'extension_to_name' and 'set_aside' cover the whole shipped set even when a run narrowed its
-// languages, so that '--languages vue' still knows what JavaScript is; a caller with no sections
-// in play hands empty maps.
+// 'extension_to_name' covers the whole set, so that a section inside a container file can name
+// any language; a caller with no sections in play hands an empty map.
 pub(crate) struct NestedLanguageLookup<'a> {
     pub languages: &'a HashMap<String, Language>,
     pub extension_to_name: &'a HashMap<String, std::sync::Arc<str>>,
-    pub set_aside: &'a HashMap<String, Language>,
 }
 
-impl<'a> NestedLanguageLookup<'a> {
-    pub(crate) fn of(languages: &'a HashMap<String, Language>, nested: &'a NestedLanguageDefinitions) -> Self {
-        NestedLanguageLookup { languages, extension_to_name: &nested.extension_to_name, set_aside: &nested.set_aside }
-    }
-
+impl NestedLanguageLookup<'_> {
     // What a tag says its section is written in, which people write either way: 'lang="scss"' is an
     // extension and 'type="text/typescript"' is a language's name. The extension is tried first,
     // since it is the form the declared defaults use and the one the user's priority rules answer
@@ -1118,12 +1115,11 @@ impl<'a> NestedLanguageLookup<'a> {
         if let Some(name) = self.extension_to_name.get(&lowered) {
             return self.find_by_name(name.as_ref());
         }
-        self.languages.values().chain(self.set_aside.values())
-                .find(|language| language.name.to_lowercase() == lowered)
+        self.languages.values().find(|language| language.name.to_lowercase() == lowered)
     }
 
     pub(crate) fn find_by_name(&self, name: &str) -> Option<&Language> {
-        self.languages.get(name).or_else(|| self.set_aside.get(name))
+        self.languages.get(name)
     }
 }
 
@@ -3296,7 +3292,7 @@ mod tests {
     static JAVA_MATCHER : LazyLock<KeywordMatcher> = LazyLock::new(|| KeywordMatcher::build(&JAVA).unwrap());
 
     static NO_EXTENSIONS : LazyLock<HashMap<String, Arc<str>>> = LazyLock::new(HashMap::new);
-    static NO_SET_ASIDE : LazyLock<HashMap<String, Language>> = LazyLock::new(HashMap::new);
+    static NO_LANGUAGES : LazyLock<HashMap<String, Language>> = LazyLock::new(HashMap::new);
 
     // With the real extension map, so a fixture or a stress case whose sections name a language
     // resolves it the way a run does; without priority rules, which no fixture contests
@@ -3304,11 +3300,11 @@ mod tests {
             build_language_map_by(ClaimKind::Extension, &LANGUAGE_MAP_REF, &HashMap::new(), &HashMap::new()).0);
 
     fn shipped_lookup() -> NestedLanguageLookup<'static> {
-        NestedLanguageLookup { languages: &LANGUAGE_MAP_REF, extension_to_name: &SHIPPED_EXTENSIONS, set_aside: &NO_SET_ASIDE }
+        NestedLanguageLookup { languages: &LANGUAGE_MAP_REF, extension_to_name: &SHIPPED_EXTENSIONS }
     }
 
     fn empty_lookup() -> NestedLanguageLookup<'static> {
-        NestedLanguageLookup { languages: &NO_SET_ASIDE, extension_to_name: &NO_EXTENSIONS, set_aside: &NO_SET_ASIDE }
+        NestedLanguageLookup { languages: &NO_LANGUAGES, extension_to_name: &NO_EXTENSIONS }
     }
 
     fn parse_file_whole(path: &Path, lang_name: &str, buf: &mut Vec<u8>, config: &EngineConfig) -> Result<FileStats, String> {
@@ -3318,9 +3314,10 @@ mod tests {
     fn parse_file_report(path: &Path, lang_name: &str, buf: &mut Vec<u8>, config: &EngineConfig) -> Result<FileReport, String> {
         match parse_file(path, get_size_of(path), lang_name, buf, &mut ParseBuffers::default(), &shipped_lookup(),
                 &mut KeywordMatchers::default(), &mut IdentificationMatchers::default(), config,
-                false, TestScope::Ordinary, None, &HashMap::new())? {
+                false, TestScope::Ordinary, None, &LanguageLookup::default())? {
             FileOutcome::Counted(report, _) => Ok(report),
-            FileOutcome::Skipped(kind) => panic!("{} was skipped as {}", path.display(), kind.as_str())
+            FileOutcome::Skipped(kind) => panic!("{} was skipped as {}", path.display(), kind.as_str()),
+            FileOutcome::NotSelected => panic!("{} was left out by the language selection", path.display())
         }
     }
 
@@ -5073,7 +5070,7 @@ mod tests {
     fn parse_with_sections(contents: &str, shell: &Language,
         languages: &HashMap<String, Language>, extensions: &HashMap<String, Arc<str>>) -> FileReport
     {
-        let lookup = NestedLanguageLookup { languages, extension_to_name: extensions, set_aside: &NO_SET_ASIDE };
+        let lookup = NestedLanguageLookup { languages, extension_to_name: extensions };
         parse_lines_report(contents, shell, &lookup, &EngineConfig::default(), TestsByPath::Nothing)
     }
 
@@ -6148,7 +6145,7 @@ mod tests {
             let mut buf = Vec::new();
             match parse_file(&path, size, "Rust", &mut buf, &mut ParseBuffers::default(),
                     &shipped_lookup(), &mut KeywordMatchers::default(),
-                    &mut IdentificationMatchers::default(), &config, false, TestScope::Ordinary, None, &HashMap::new()) {
+                    &mut IdentificationMatchers::default(), &config, false, TestScope::Ordinary, None, &LanguageLookup::default()) {
                 Ok(FileOutcome::Counted(report, _)) => report.into_whole().lines,
                 _ => panic!("{} was not counted", path.display())
             }
@@ -6188,7 +6185,7 @@ mod tests {
             let mut buf = Vec::new();
             matches!(parse_file(path, get_size_of(path), "JavaScript", &mut buf, &mut ParseBuffers::default(),
                     &shipped_lookup(), &mut KeywordMatchers::default(),
-                    &mut IdentificationMatchers::default(), config, false, TestScope::Ordinary, None, &HashMap::new()),
+                    &mut IdentificationMatchers::default(), config, false, TestScope::Ordinary, None, &LanguageLookup::default()),
                     Ok(FileOutcome::Skipped(ScanSkip::Minified)))
         };
 
@@ -6279,7 +6276,7 @@ mod tests {
             let mut buf = Vec::new();
             matches!(parse_file(&path, get_size_of(&path), "JavaScript", &mut buf, &mut ParseBuffers::default(),
                     &shipped_lookup(), &mut KeywordMatchers::default(),
-                    &mut IdentificationMatchers::default(), config, false, TestScope::Ordinary, None, &HashMap::new()),
+                    &mut IdentificationMatchers::default(), config, false, TestScope::Ordinary, None, &LanguageLookup::default()),
                     Ok(FileOutcome::Skipped(ScanSkip::Generated)))
         };
         let default = EngineConfig::default();
@@ -6318,7 +6315,7 @@ mod tests {
                     &conflicts.by_filename, &HashMap::new()).0,
             by_shebang: build_language_map_by(ClaimKind::Shebang, &LANGUAGE_MAP_REF,
                     &HashMap::new(), &HashMap::new()).0,
-            extension_rules: HashMap::new()
+            ..Default::default()
         }
     }
 
@@ -6635,9 +6632,10 @@ mod tests {
             let mut buf = Vec::new();
             match parse_file(path, get_size_of(path), "Go", &mut buf, &mut ParseBuffers::default(), &shipped_lookup(),
                     &mut KeywordMatchers::default(), &mut IdentificationMatchers::default(), config,
-                    false, scope, None, &HashMap::new()).unwrap() {
+                    false, scope, None, &LanguageLookup::default()).unwrap() {
                 FileOutcome::Counted(report, _) => report.tests.map(|tests| (tests.stats.lines, tests.stats.classes.clone(), tests.bytes)),
-                FileOutcome::Skipped(kind) => panic!("skipped as {}", kind.as_str())
+                FileOutcome::Skipped(kind) => panic!("skipped as {}", kind.as_str()),
+                FileOutcome::NotSelected => panic!("left out by the language selection")
             }
         };
         let whole = (6, parse_lines_whole(go, LANGUAGE_MAP_REF.get("Go").unwrap()).classes, go.len());
@@ -6699,7 +6697,7 @@ mod tests {
     #[test]
     fn a_file_of_test_code_whole_keeps_its_sections_in_its_own_row() {
         let (languages, extensions) = section_fixture();
-        let lookup = NestedLanguageLookup { languages: &languages, extension_to_name: &extensions, set_aside: &NO_SET_ASIDE };
+        let lookup = NestedLanguageLookup { languages: &languages, extension_to_name: &extensions };
         let contents = "<p>hello</p>\n<script>\nvar s = \"x\";\n</script>\n<style>\n/* css */\n</style>\n";
         let parse = |by_path| parse_lines_report(contents, &web_shell(), &lookup, &EngineConfig::default(), by_path);
 
@@ -6814,7 +6812,7 @@ mod tests {
                 ["//"], &[("/*", "*/")], []);
         let map = hashmap!("ZigWithBlocks".to_owned() => with_block_comments.clone());
         let ext = hashmap!("zwb".to_owned() => Arc::<str>::from("ZigWithBlocks"));
-        let lookup = NestedLanguageLookup { languages: &map, extension_to_name: &ext, set_aside: &NO_SET_ASIDE };
+        let lookup = NestedLanguageLookup { languages: &map, extension_to_name: &ext };
         let commented = parse_lines_report("/* \\\\ */ \"// in string\"\n// after\n", &with_block_comments,
                 &lookup, &EngineConfig::default(), TestsByPath::Nothing);
         assert_eq!((2, 1, 1), content_counts(&commented.shell));

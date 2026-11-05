@@ -220,8 +220,8 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     A language is named either by the name a file in the 'data/languages/' directory gives it under
     'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
 
-    An extension that two languages claim names whichever of them owns it for this run, which is
-    the answer in 'language_conflicts.txt' or the one '--force-language' gave.
+    An extension that several languages claim names all of them, so '--languages m' is
+    '--languages matlab,objective-c,mercury'. Each file is identified by its content, as in any run.
 
     Writing a module and a slash before the name holds it inside that module, and a module that
     names any language of its own counts only those: '--languages rust,web/js' counts
@@ -238,6 +238,10 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
     A language is named either by the name a file in the 'data/languages/' directory gives it under
     'Language', or by any extension it claims, so 'javascript' and 'js' name the same one.
+
+    An extension that several languages claim names all of them, so '--exclude-languages m' is
+    '--exclude-languages matlab,objective-c,mercury'. Naming MATLAB leaves out only the files
+    identified as MATLAB, and Objective-C's '.m' files stay.
 
     A name that nothing in the scan answers to is reported as having changed nothing, and the run
     carries on.
