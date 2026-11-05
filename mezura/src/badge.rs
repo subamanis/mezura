@@ -92,8 +92,8 @@ const VERDANA_BOLD_WIDTHS : [(char, f64); 15] = [
 ];
 const UNLISTED_GLYPH_WIDTH : f64 = 0.65;
 
-// What '--badge' asked for: the shape, and the figures in the order they were written, none when
-// none was
+// The figures are kept in the order of BADGE_FIGURES whatever order they were written in, and are
+// none when none was named
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BadgeSpec {
     shape: BadgeShape,
@@ -108,18 +108,15 @@ impl BadgeSpec {
     // The words in any order, separated by spaces or commas. The shape is a word like the others.
     pub fn parse(words: &str) -> Result<BadgeSpec, String> {
         let mut shape = BadgeShape::Pill;
-        let mut figures = Vec::new();
+        let mut named = Vec::new();
         for word in words.split([',', ' ', '\t']).map(str::trim).filter(|x| !x.is_empty()) {
             match (BadgeShape::parse(word), BadgeFigure::parse(word)) {
                 (Some(found), _) => shape = found,
-                (_, Some(figure)) => {
-                    if !figures.contains(&figure) {
-                        figures.push(figure);
-                    }
-                },
+                (_, Some(figure)) => named.push(figure),
                 _ => return Err(word.to_owned())
             }
         }
+        let figures = BADGE_FIGURES.into_iter().filter(|figure| named.contains(figure)).collect();
 
         Ok(BadgeSpec { shape, figures })
     }
@@ -493,10 +490,11 @@ mod tests {
     use crate::test_support::{plain_result_of, plain_stats_of};
 
     #[test]
-    fn the_words_name_a_shape_and_the_figures_in_their_order_and_nothing_else() {
+    fn the_words_name_a_shape_and_the_figures_in_one_order_whatever_order_they_were_written_in() {
         let typed = BadgeSpec::parse("card, tests code").unwrap();
         assert_eq!(BadgeShape::Card, typed.shape);
-        assert_eq!(vec![BadgeFigure::Tests, BadgeFigure::Code], typed.figures);
+        assert_eq!(vec![BadgeFigure::Code, BadgeFigure::Tests], typed.figures);
+        assert_eq!(typed.figures, BadgeSpec::parse("code tests").unwrap().figures);
         assert!(typed.names_tests());
 
         let bare = BadgeSpec::parse("").unwrap();

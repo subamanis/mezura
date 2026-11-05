@@ -980,7 +980,7 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     Words separated by spaces or commas, in any order. Without any, a pill with the code lines.
 
       pill       one line like the badges at the top of a README, 'mezura' on the left and a
-                 cell per figure on the right, in the order written
+                 cell per figure on the right, in the order of the list below
       card       the box GitHub draws for a repository's languages, with the first figure beside
                  the title, a bar of the languages, the biggest of them with their share of the
                  lines, and the other figures underneath. With no figure named it shows code,
