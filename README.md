@@ -876,7 +876,7 @@ Remove-MpPreference -ExclusionProcess "mezura.exe"
 
 ## Contributing
 
-See [CONTRIBUTING.md](https://github.com/subamanis/mezura/blob/HEAD/CONTRIBUTING.md) for how to get a change in.
+See [CONTRIBUTING.md](https://github.com/subamanis/mezura/blob/HEAD/CONTRIBUTING.md) for how to get a change in. Pull requests go against `dev`.
 
 
 ## Acknowledgements

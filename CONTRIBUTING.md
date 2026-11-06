@@ -34,6 +34,9 @@ macOS     ~/Library/Application Support/mezura/
 
 ## Before you open a pull request
 
+Work happens on `dev`, and `main` only moves at a release and minor doc cleanups. Branch from `dev` and open the pull
+request against `dev`.
+
 CI runs these three, so if they pass here they pass there.
 
 ```
