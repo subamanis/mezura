@@ -59,7 +59,7 @@ The whole Linux kernel, in some of the bundled themes:
 
 Things it does that most counters do not:
 
-- **Ensures the right language for each file.** When two languages claim one extension, the way `.m` is MATLAB and Objective-C and Mercury all at once, every file is identified by its own content: a `#!` line first, then  heuristics on its content. And you always have the last word: set your preferences globally in `language_conflicts.txt`, or per-project through its configuration, or `--force-language` for one run, or even per module in the same run. See [Supported languages](#supported-languages).
+- **Ensures the right language for each file.** When two languages claim one extension, the way `.h` is C, C++ and Objective-C, or `.m` is MATLAB, Objective-C and Mercury, every file is identified by its own content: a `#!` line first, then heuristics on its content. And you always have the last word: set your preferences globally in `language_conflicts.txt`, or per-project through its configuration, or `--force-language` for one run, or even per module in the same run. See [Supported languages](#supported-languages).
 - **Discards non-code files with a matching extension** (no more Make dependency `.d` files counted as the D language!). Alongside the minified and generated files that are skipped by default, they are reported as skipped. See [What is skipped](#what-is-skipped).
 - **Test code detection.** Each language's tests are a row under it and under the total. It automatically identifies test code
   by the test marks inside the code, by what the toolchain names as a test, by what a build tool compiles for tests, and by the
