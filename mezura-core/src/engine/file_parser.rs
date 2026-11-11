@@ -385,13 +385,8 @@ impl ScanPlan {
         let mut entries : Vec<PlanEntry> = Vec::new();
         let (symbols, literals) = (language.strings.get_symbols(), language.strings.get_char_literals());
         for i in 0..symbols.len() {
-            match language.get_string_pair_of(i as u8) {
-                (open, close) if open == close => entries.push(PlanEntry::of(STRINGS, i as u8, ROLE_EITHER, open.as_bytes())),
-                (open, close) => {
-                    entries.push(PlanEntry::of(STRINGS, i as u8, ROLE_OPEN, open.as_bytes()));
-                    entries.push(PlanEntry::of(STRINGS, i as u8, ROLE_CLOSE, close.as_bytes()));
-                }
-            }
+            let (open, close) = language.get_string_pair_of(i as u8);
+            push_string_entries(&mut entries, i as u8, open.as_bytes(), close.as_bytes(), true);
         }
         for (i, symbol) in literals.iter().enumerate() {
             let index = (symbols.len() + i) as u8;
@@ -415,12 +410,8 @@ impl ScanPlan {
                 let mut entry = PlanEntry::of(STRINGS, index, ROLE_DELIMITED, &open.as_bytes()[..open.len().saturating_sub(1)]);
                 entry.suffix = open.as_bytes().last().copied().unwrap_or(0);
                 entries.push(entry);
-            } else if open != close {
-                entries.push(PlanEntry::of(STRINGS, index, ROLE_OPEN, open.as_bytes()));
-                entries.push(PlanEntry::of(STRINGS, index, ROLE_CLOSE, close.as_bytes()));
             } else {
-                let role = if crossing.escapes {ROLE_EITHER} else {ROLE_RAW};
-                entries.push(PlanEntry::of(STRINGS, index, role, open.as_bytes()));
+                push_string_entries(&mut entries, index, open.as_bytes(), close.as_bytes(), crossing.escapes);
             }
         }
         // A closer several pairs share is searched once, under the first of them
@@ -520,6 +511,17 @@ impl ScanPlan {
         }).collect();
         let regex_after = strings.get_regex_after().iter().map(|word| word.as_bytes().into()).collect();
         ScanPlan { first, slots, symbols, finder, string_bounds, regex_after, hole_braces, heredoc, string_shapes }
+    }
+}
+
+// A string closed by its own symbol is one entry read either way; one with a closer of its own,
+// '$"' with '"' or 'R"(' with ')"', is an opener and a closer
+fn push_string_entries(entries: &mut Vec<PlanEntry>, index: u8, open: &[u8], close: &[u8], escapes: bool) {
+    if open == close {
+        entries.push(PlanEntry::of(STRINGS, index, if escapes { ROLE_EITHER } else { ROLE_RAW }, open));
+    } else {
+        entries.push(PlanEntry::of(STRINGS, index, ROLE_OPEN, open));
+        entries.push(PlanEntry::of(STRINGS, index, ROLE_CLOSE, close));
     }
 }
 
@@ -796,14 +798,14 @@ fn match_slot(index: usize, at: usize, bytes: &[u8], plan: &ScanPlan, escape: Op
             _ => ()
         }
     }
-    if role == ROLE_LITERAL {
+    // A literal is whole on its line, or it is no literal and the byte goes to the next symbol
+    if matches!(role, ROLE_LITERAL | ROLE_REGEX) {
         if !in_code { return None }
-        let closed_at = find_literal_closer(bytes, start + width, symbol_bytes, escape)?;
-        width = closed_at + symbol_bytes.len() - start;
-    }
-    if role == ROLE_REGEX {
-        if !in_code || !a_pattern_may_begin_at(bytes, start, &plan.regex_after) { return None }
-        let closed_at = find_regex_closer(bytes, start + width, symbol_bytes)?;
+        let closed_at = match role {
+            ROLE_LITERAL => find_literal_closer(bytes, start + width, symbol_bytes, escape),
+            _ => a_pattern_may_begin_at(bytes, start, &plan.regex_after)
+                    .then(|| find_regex_closer(bytes, start + width, symbol_bytes)).flatten()
+        }?;
         width = closed_at + symbol_bytes.len() - start;
     }
     if role == ROLE_DELIMITED {
@@ -2543,9 +2545,8 @@ fn lex_line<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: 
                             _ => language.string_is_closed_by((symbol, level), (found.symbol, found.level))
                         }) else { continue };
                 if found.role == ROLE_HOLE_OPEN {
-                    // The opener written twice is one brace of the text
-                    if found.width == 1 && bytes.get(found.start + 1) == Some(&bytes[found.start]) {
-                        cursor = found.start + 2;
+                    if is_written_twice_at(bytes, found.start, found.width) {
+                        cursor = found.start + 2 * found.width;
                         continue;
                     }
                     cursor = found.start + found.width;
@@ -2557,8 +2558,7 @@ fn lex_line<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: 
                     continue;
                 }
                 let length = shape.closer as usize + level as usize;
-                // The closer written twice inside the string is one quote of its text
-                if shape.doubling && bytes[found.start + length..].starts_with(&bytes[found.start..found.start + length]) {
+                if shape.doubling && is_written_twice_at(bytes, found.start, length) {
                     cursor = found.start + 2 * length;
                     continue;
                 }
@@ -2689,6 +2689,12 @@ fn lex_line<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: 
     };
     info.in_tag_after = in_tag;
     (info, opened)
+}
+
+// A symbol written twice inside a string is one of its text: the closer of a string escaped by
+// doubling, and the opener of a hole
+fn is_written_twice_at(bytes: &[u8], start: usize, width: usize) -> bool {
+    bytes[start + width..].starts_with(&bytes[start..start + width])
 }
 
 // Only the front of the first stretch and the back of the last are trimmed, and a stretch that
