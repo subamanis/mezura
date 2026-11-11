@@ -5,8 +5,10 @@
 // so that a run of plain lines is classified off the masks without being read.
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::{__m256i, _mm256_and_si256, _mm256_cmpeq_epi8, _mm256_movemask_epi8, _mm256_or_si256,
-        _mm256_set1_epi8, _mm256_set_epi64x, _mm256_shuffle_epi8, _mm256_srli_epi16};
+use std::arch::x86_64::{__m256i, __m512i, _mm256_and_si256, _mm256_cmpeq_epi8, _mm256_movemask_epi8, _mm256_or_si256,
+        _mm256_set1_epi8, _mm256_set_epi64x, _mm256_shuffle_epi8, _mm256_srli_epi16, _mm512_and_si512,
+        _mm512_cmpeq_epi8_mask, _mm512_set1_epi8, _mm512_set_epi64, _mm512_shuffle_epi8, _mm512_srli_epi16,
+        _mm512_test_epi8_mask};
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::{uint8x16_t, vandq_u8, vceqq_u8, vcombine_u8, vcreate_u8, vdupq_n_u8, vgetq_lane_u64,
         vmaxvq_u8, vorrq_u8, vpaddq_u8, vreinterpretq_u64_u8};
@@ -24,10 +26,15 @@ const SPACE : u8 = 0x10;
 const CONTROL_SPACE : u8 = 0x20;
 const WORD_CLASSES : u8 = DIGIT | LETTER_FROM_ONE | LETTER_UP_TO_TEN | ABOVE_ASCII;
 const SPACE_CLASSES : u8 = SPACE | CONTROL_SPACE;
+// Each table holds its sixteen entries once per 128-bit lane of the shuffle that reads it
 #[cfg(target_arch = "x86_64")]
-const LOW_NIBBLE_CLASSES : [u8; 32] = build_low_nibble_classes();
+const LOW_NIBBLE_CLASSES_32 : [u8; 32] = repeat_table(build_low_nibble_classes());
 #[cfg(target_arch = "x86_64")]
-const HIGH_NIBBLE_CLASSES : [u8; 32] = build_high_nibble_classes();
+const HIGH_NIBBLE_CLASSES_32 : [u8; 32] = repeat_table(build_high_nibble_classes());
+#[cfg(target_arch = "x86_64")]
+const LOW_NIBBLE_CLASSES_64 : [u8; 64] = repeat_table(build_low_nibble_classes());
+#[cfg(target_arch = "x86_64")]
+const HIGH_NIBBLE_CLASSES_64 : [u8; 64] = repeat_table(build_high_nibble_classes());
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Masks {
@@ -35,12 +42,14 @@ pub(crate) struct Masks {
     pub candidates: u64,
 }
 
-// Which bytes are searched, and whether this machine can do it 32 bytes at a time
+// Which bytes are searched, and whether this machine can do it 64 or 32 bytes at a time
 #[derive(Debug, Clone)]
 pub(crate) struct MaskFinder {
     is_searched: [bool; 256],
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     searched: Box<[u8]>,
+    #[cfg(target_arch = "x86_64")]
+    avx512: bool,
     #[cfg(target_arch = "x86_64")]
     avx2: bool,
     #[cfg(target_arch = "aarch64")]
@@ -56,6 +65,8 @@ impl MaskFinder {
             #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
             searched: searched.into(),
             #[cfg(target_arch = "x86_64")]
+            avx512: std::is_x86_feature_detected!("avx512bw"),
+            #[cfg(target_arch = "x86_64")]
             avx2: std::is_x86_feature_detected!("avx2"),
             #[cfg(target_arch = "aarch64")]
             neon: std::arch::is_aarch64_feature_detected!("neon"),
@@ -67,10 +78,11 @@ impl MaskFinder {
     #[allow(unsafe_code)]
     pub(crate) fn scan_block(&self, block: &[u8]) -> Masks {
         #[cfg(target_arch = "x86_64")]
-        if self.avx2 && block.len() == BLOCK_BYTES {
-            // The feature was checked once when the finder was built, which is the whole
-            // requirement of calling a function compiled for it
-            return unsafe { scan_block_avx2(block, &self.searched) };
+        if block.len() == BLOCK_BYTES {
+            // The features were checked once when the finder was built, which is the whole
+            // requirement of calling a function compiled for them
+            if self.avx512 { return unsafe { scan_block_avx512(block, &self.searched) }; }
+            if self.avx2 { return unsafe { scan_block_avx2(block, &self.searched) }; }
         }
         #[cfg(target_arch = "aarch64")]
         if self.neon && block.len() == BLOCK_BYTES {
@@ -83,10 +95,11 @@ impl MaskFinder {
     #[allow(unsafe_code)]
     pub(crate) fn classify_block(&self, block: &[u8]) -> Classes {
         #[cfg(target_arch = "x86_64")]
-        if self.avx2 && block.len() == BLOCK_BYTES {
-            // The feature was checked once when the finder was built, which is the whole
-            // requirement of calling a function compiled for it
-            return unsafe { classify_block_avx2(block) };
+        if block.len() == BLOCK_BYTES {
+            // The features were checked once when the finder was built, which is the whole
+            // requirement of calling a function compiled for them
+            if self.avx512 { return unsafe { classify_block_avx512(block) }; }
+            if self.avx2 { return unsafe { classify_block_avx2(block) }; }
         }
         classify_block_scalar(block)
     }
@@ -111,6 +124,20 @@ pub(crate) fn is_ascii(bytes: &[u8]) -> bool {
         return unsafe { is_ascii_neon(bytes) };
     }
     bytes.is_ascii()
+}
+
+// The features of the AVX2 tier of the parser: the vectors, and the bit instructions every x86-64
+// of the last fifteen years has
+#[cfg(target_arch = "x86_64")]
+pub(crate) fn has_avx2_tier() -> bool {
+    std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("bmi1") && std::is_x86_feature_detected!("bmi2")
+            && std::is_x86_feature_detected!("lzcnt") && std::is_x86_feature_detected!("popcnt")
+}
+
+// The AVX-512 tier adds the 64-byte compares and shuffles of the masks, which need no VBMI
+#[cfg(target_arch = "x86_64")]
+pub(crate) fn has_avx512_tier() -> bool {
+    has_avx2_tier() && std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw")
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -143,34 +170,77 @@ fn classify_block_scalar(block: &[u8]) -> Classes {
 }
 
 #[cfg(target_arch = "x86_64")]
-const fn build_high_nibble_classes() -> [u8; 32] {
+const fn build_high_nibble_classes() -> [u8; 16] {
     let by_nibble = [CONTROL_SPACE, 0, SPACE, DIGIT, LETTER_FROM_ONE, LETTER_UP_TO_TEN, LETTER_FROM_ONE, LETTER_UP_TO_TEN];
-    let mut table = [ABOVE_ASCII; 32];
+    let mut table = [ABOVE_ASCII; 16];
     let mut high = 0;
     while high < 8 {
         table[high] = by_nibble[high];
-        table[high + 16] = by_nibble[high];
         high += 1;
     }
     table
 }
 
 #[cfg(target_arch = "x86_64")]
-const fn build_low_nibble_classes() -> [u8; 32] {
-    let mut table = [0u8; 32];
-    let mut low = 0;
-    while low < 32 {
-        let nibble = low % 16;
+const fn build_low_nibble_classes() -> [u8; 16] {
+    let mut table = [0u8; 16];
+    let mut nibble = 0;
+    while nibble < 16 {
         let mut classes = ABOVE_ASCII;
         if nibble <= 9 { classes |= DIGIT; }
         if nibble >= 1 { classes |= LETTER_FROM_ONE; }
         if nibble <= 10 { classes |= LETTER_UP_TO_TEN; }
         if nibble == 0 { classes |= SPACE; }
         if matches!(nibble, 9 | 10 | 12 | 13) { classes |= CONTROL_SPACE; }
-        table[low] = classes;
-        low += 1;
+        table[nibble] = classes;
+        nibble += 1;
     }
     table
+}
+
+#[cfg(target_arch = "x86_64")]
+const fn repeat_table<const N: usize>(table: [u8; 16]) -> [u8; N] {
+    let mut repeated = [0u8; N];
+    let mut at = 0;
+    while at < N {
+        repeated[at] = table[at % 16];
+        at += 1;
+    }
+    repeated
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512bw")]
+fn scan_block_avx512(block: &[u8], searched: &[u8]) -> Masks {
+    let bytes = load_64(block);
+    let newlines = _mm512_cmpeq_epi8_mask(bytes, _mm512_set1_epi8(b'\n' as i8));
+    let mut candidates = 0;
+    for &byte in searched {
+        candidates |= _mm512_cmpeq_epi8_mask(bytes, _mm512_set1_epi8(byte as i8));
+    }
+    Masks { newlines, candidates }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f,avx512bw")]
+fn classify_block_avx512(block: &[u8]) -> Classes {
+    let bytes = load_64(block);
+    let nibble = _mm512_set1_epi8(0x0F);
+    let low = _mm512_shuffle_epi8(load_64(&LOW_NIBBLE_CLASSES_64), _mm512_and_si512(bytes, nibble));
+    let high = _mm512_shuffle_epi8(load_64(&HIGH_NIBBLE_CLASSES_64), _mm512_and_si512(_mm512_srli_epi16::<4>(bytes), nibble));
+    let classes = _mm512_and_si512(low, high);
+    Classes {
+        words: _mm512_test_epi8_mask(classes, _mm512_set1_epi8(WORD_CLASSES as i8)),
+        content: !_mm512_test_epi8_mask(classes, _mm512_set1_epi8(SPACE_CLASSES as i8)),
+    }
+}
+
+// Eight lanes from eight little-endian words, which the compiler turns into one unaligned load
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx512f")]
+fn load_64(bytes: &[u8]) -> __m512i {
+    let word = |at: usize| i64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
+    _mm512_set_epi64(word(56), word(48), word(40), word(32), word(24), word(16), word(8), word(0))
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -187,13 +257,12 @@ fn classify_block_avx2(block: &[u8]) -> Classes {
     }
 }
 
-// Each table holds its sixteen entries twice, once per 128-bit lane of the shuffle
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 fn find_classes(half: __m256i) -> __m256i {
     let nibble = _mm256_set1_epi8(0x0F);
-    let low = _mm256_shuffle_epi8(load_32(&LOW_NIBBLE_CLASSES), _mm256_and_si256(half, nibble));
-    let high = _mm256_shuffle_epi8(load_32(&HIGH_NIBBLE_CLASSES), _mm256_and_si256(_mm256_srli_epi16::<4>(half), nibble));
+    let low = _mm256_shuffle_epi8(load_32(&LOW_NIBBLE_CLASSES_32), _mm256_and_si256(half, nibble));
+    let high = _mm256_shuffle_epi8(load_32(&HIGH_NIBBLE_CLASSES_32), _mm256_and_si256(_mm256_srli_epi16::<4>(half), nibble));
     _mm256_and_si256(low, high)
 }
 
@@ -305,6 +374,31 @@ mod tests {
             assert_eq!(expected.newlines, actual.newlines, "newlines of {block:?}");
             assert_eq!(expected.candidates, actual.candidates, "candidates of {block:?}");
         }
+    }
+
+    // Each vector arm on its own, so the machine with the widest one still checks the narrower
+    #[test]
+    #[allow(unsafe_code)]
+    #[cfg(target_arch = "x86_64")]
+    fn every_vector_arm_answers_exactly_as_the_scalar_one() {
+        let mut is_searched = [false; 256];
+        for &byte in b"\"/'" { is_searched[byte as usize] = true; }
+        let (avx2, avx512) = (std::is_x86_feature_detected!("avx2"), std::is_x86_feature_detected!("avx512bw"));
+        assert!(avx2, "this machine has no AVX2, so the arms are untested here");
+        for block in every_block_shape() {
+            let (masks, classes) = (scan_block_scalar(&block, &is_searched), classify_block_scalar(&block));
+            // Checked two lines above, which is the whole requirement of calling a function
+            // compiled for the feature
+            let (vector_masks, vector_classes) = unsafe { (scan_block_avx2(&block, b"\"/'"), classify_block_avx2(&block)) };
+            assert_eq!((masks.newlines, masks.candidates, classes), (vector_masks.newlines, vector_masks.candidates, vector_classes),
+                    "avx2 over {block:?}");
+            if avx512 {
+                let (wide_masks, wide_classes) = unsafe { (scan_block_avx512(&block, b"\"/'"), classify_block_avx512(&block)) };
+                assert_eq!((masks.newlines, masks.candidates, classes), (wide_masks.newlines, wide_masks.candidates, wide_classes),
+                        "avx512 over {block:?}");
+            }
+        }
+        if !avx512 { eprintln!("no AVX-512 on this machine, its arm is untested here"); }
     }
 
     #[test]

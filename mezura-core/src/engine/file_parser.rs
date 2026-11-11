@@ -18,6 +18,10 @@ use crate::{EngineConfig, HeredocRules, Language, LineClass, LineClasses, Nested
 use crate::domain::{CommentPair, FileStats, LineContinuation};
 use crate::engine::masks::Classes;
 use crate::engine::masks::MaskFinder;
+#[cfg(target_arch = "x86_64")]
+use crate::engine::masks::has_avx2_tier;
+#[cfg(target_arch = "x86_64")]
+use crate::engine::masks::has_avx512_tier;
 use crate::engine::masks::is_ascii;
 use crate::engine::masks::BLOCK_BYTES;
 use crate::engine::test_detection::{Declaration, ModuleDeclarations, TestScope, TestWalk, TestsByPath};
@@ -753,6 +757,7 @@ fn read_symbol_at(at: usize, cursor: usize, bytes: &[u8], plan: &ScanPlan, escap
     best
 }
 
+#[inline(always)]
 fn match_slot(index: usize, at: usize, bytes: &[u8], plan: &ScanPlan, escape: Option<u8>, in_code: bool) -> Option<Found> {
     let slot = plan.slots[index];
     let symbol_bytes = &plan.symbols[index];
@@ -1598,7 +1603,50 @@ impl PendingTag<'_> {
     }
 }
 
+// The loop compiled once per CPU tier and chosen per file: on the baseline x86-64 each popcount and
+// each bit scan of the block booking is a dozen instructions
+#[allow(unsafe_code)]
 fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup: &NestedLanguageLookup,
+    matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
+    tests_by_path: TestsByPath, log: &mut ExplainLog) -> FileReport
+{
+    // Each tier's features were checked on the line above its call, which is the whole requirement
+    // of calling a function compiled for them
+    #[cfg(target_arch = "x86_64")]
+    if has_avx512_tier() {
+        return unsafe { read_file_lines_on_avx512_tier::<EXPLAIN>(contents, language, lookup, matchers, config, buffers,
+                tests_by_path, log) };
+    }
+    #[cfg(target_arch = "x86_64")]
+    if has_avx2_tier() {
+        return unsafe { read_file_lines_on_avx2_tier::<EXPLAIN>(contents, language, lookup, matchers, config, buffers,
+                tests_by_path, log) };
+    }
+    read_file_lines::<EXPLAIN>(contents, language, lookup, matchers, config, buffers, tests_by_path, log)
+}
+
+// The features of each tier are the ones its 'has_' check asks for
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,bmi1,bmi2,lzcnt,popcnt,avx512f,avx512bw")]
+fn read_file_lines_on_avx512_tier<const EXPLAIN: bool>(contents: &str, language: &Language, lookup: &NestedLanguageLookup,
+    matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
+    tests_by_path: TestsByPath, log: &mut ExplainLog) -> FileReport
+{
+    read_file_lines::<EXPLAIN>(contents, language, lookup, matchers, config, buffers, tests_by_path, log)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,bmi1,bmi2,lzcnt,popcnt")]
+fn read_file_lines_on_avx2_tier<const EXPLAIN: bool>(contents: &str, language: &Language, lookup: &NestedLanguageLookup,
+    matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
+    tests_by_path: TestsByPath, log: &mut ExplainLog) -> FileReport
+{
+    read_file_lines::<EXPLAIN>(contents, language, lookup, matchers, config, buffers, tests_by_path, log)
+}
+
+// Forced in, with everything below it, so that each tier's copy holds the whole loop
+#[inline(always)]
+fn read_file_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup: &NestedLanguageLookup,
     matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
     tests_by_path: TestsByPath, log: &mut ExplainLog) -> FileReport
 {
@@ -1618,6 +1666,7 @@ fn parse_lines<const EXPLAIN: bool>(contents: &str, language: &Language, lookup:
     }
 }
 
+#[inline(always)]
 fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, language: &'a Language,
     lookup: &NestedLanguageLookup, matchers: &mut KeywordMatchers, config: &EngineConfig, buffers: &mut ParseBuffers,
     tests_by_path: TestsByPath, test_walk: Option<TestWalk<'a>>, mut declarations: Option<ModuleDeclarations<'a>>,
@@ -1918,6 +1967,7 @@ fn walk_plain_line<const EXPLAIN: bool>(raw_line: &str, line_start: usize, langu
 
 // Returns the line's class and whether the line left code behind, which is what the section
 // machinery and the test extent need from it.
+#[inline(always)]
 fn walk_line<const EXPLAIN: bool, const FULL: bool>(raw_line: &str, line_start: usize, language: &Language, collecting_spans: bool,
     ranges_wanted: bool, candidates: Candidates, scan: &mut ScanBuffers, state: &mut WalkState,
     file_stats: &mut FileStats, code_spans: &mut Vec<(u32, u32)>, log: &mut ExplainLog) -> (LineClass, bool)
@@ -2526,6 +2576,7 @@ fn ends_with_continuation(line: &str, language: &Language) -> bool {
 // A stretch of nothing but whitespace is not code, and recording one would say that the line has
 // code on it: the space in '*/ /*' between a comment closing and the next one opening is the
 // shape that reaches here.
+#[inline(always)]
 fn push_code(ranges: &mut Vec<(usize, usize)>, line: &str, from: usize, to: usize) {
     if to > from && !line[from..to].trim_ascii().is_empty() {
         ranges.push((from, to));
@@ -2548,6 +2599,7 @@ fn has_word_byte(bytes: &[u8]) -> bool {
     bytes.iter().any(|byte| byte.is_ascii_alphanumeric() || *byte >= 0x80)
 }
 
+#[inline(always)]
 fn has_word_byte_in(ranges: &[(usize, usize)], line: &str) -> bool {
     let bytes = line.as_bytes();
     ranges.iter().any(|(from, to)| has_word_byte(&bytes[*from..*to]))
@@ -2575,6 +2627,7 @@ fn note_span<const EXPLAIN: bool>(spans: &mut Vec<Span>, from: usize, to: usize,
 
 // One pass over the candidate bytes of a line with what is open carried along. The code stretches
 // go to 'ScanBuffers::code_ranges', the spans to 'spans' when explaining.
+#[inline(always)]
 fn lex_line<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
     open_str_symbol: Option<(u8, u32)>, in_tag: bool, holes: &mut Vec<Hole>, candidates: Candidates,
     buffers: &mut ScanBuffers, spans: &mut Vec<Span>) -> (LineInfo, OpenedHere)
@@ -5681,6 +5734,42 @@ mod tests {
             .collect::<Vec<_>>();
         paths.sort();
         paths
+    }
+
+    // One source compiled per tier; the machine with the widest tier holds the narrower copies to
+    // the baseline one over the language fixtures
+    #[test]
+    #[allow(unsafe_code)]
+    #[cfg(target_arch = "x86_64")]
+    fn every_cpu_tier_counts_the_fixtures_as_the_baseline_copy_does() {
+        let (lookup, config) = (shipped_lookup(), EngineConfig::default());
+        let (avx2, avx512) = (has_avx2_tier(), has_avx512_tier());
+        assert!(avx2, "this machine has no AVX2 tier, so the tiers are untested here");
+        for path in fixture_paths(&fixtures_dir()) {
+            let contents = std::fs::read_to_string(&path).unwrap();
+            let lang_name = match parse_expectations(contents.lines().next().unwrap_or_default()).and_then(|(declared, _)| declared) {
+                Some(declared) => Arc::from(declared.as_str()),
+                None => fixture_lookup().of_path_or_shebang(&path).unwrap(),
+            };
+            let language = LANGUAGE_MAP_REF.get(lang_name.as_ref()).unwrap();
+            let count = |tier: u8| {
+                let (mut matchers, mut buffers, mut log) = (KeywordMatchers::default(), ParseBuffers::default(), ExplainLog::default());
+                // Each tier's features were checked above, which is the whole requirement of calling
+                // a function compiled for them
+                let report = match tier {
+                    0 => read_file_lines::<false>(&contents, language, &lookup, &mut matchers, &config, &mut buffers, TestsByPath::Nothing, &mut log),
+                    1 => unsafe { read_file_lines_on_avx2_tier::<false>(&contents, language, &lookup, &mut matchers, &config, &mut buffers, TestsByPath::Nothing, &mut log) },
+                    _ => unsafe { read_file_lines_on_avx512_tier::<false>(&contents, language, &lookup, &mut matchers, &config, &mut buffers, TestsByPath::Nothing, &mut log) },
+                };
+                report.into_whole()
+            };
+            let baseline = count(0);
+            assert_eq!(baseline, count(1), "the AVX2 tier over {}", path.display());
+            if avx512 {
+                assert_eq!(baseline, count(2), "the AVX-512 tier over {}", path.display());
+            }
+        }
+        if !avx512 { eprintln!("no AVX-512 on this machine, its tier is untested here"); }
     }
 
     #[test]

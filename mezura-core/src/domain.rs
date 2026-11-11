@@ -304,6 +304,7 @@ impl Language {
 
     // Rust's three raw prefixes share one closer, which the scan reports once under the first of
     // them, so a leveled string closes at the end of any pair written with the same end
+    #[inline(always)]
     pub(crate) fn string_is_closed_by(&self, open: (u8, u32), closer: (u8, u32)) -> bool {
         match (self.find_leveled_string(open.0), self.find_leveled_string(closer.0)) {
             (Some(opened), Some(closing)) => opened.has_the_end_of(closing) && opened.is_closed_by(open.1, closer.1),
