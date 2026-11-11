@@ -16,6 +16,7 @@ use memchr::memmem;
 
 use crate::{EngineConfig, HeredocRules, Language, LineClass, LineClasses, NestedLanguage, ScanSkip, Span, SpanKind, phase_timing};
 use crate::domain::{CommentPair, FileStats, LineContinuation};
+use crate::engine::masks::Classes;
 use crate::engine::masks::MaskFinder;
 use crate::engine::masks::is_ascii;
 use crate::engine::masks::BLOCK_BYTES;
@@ -1120,6 +1121,12 @@ fn is_generated(contents: &str) -> bool {
 // whether it holds a byte the scan plan searches. Both are read off the masks of one 64-byte block
 // at a time, so nothing is searched per line: every symbol a language declares begins at one of the
 // searched bytes, and a line holding none of them holds no symbol and needs no scan.
+fn add_with_carry(a: u64, b: u64, carry: bool) -> (u64, bool) {
+    let (sum, first) = a.overflowing_add(b);
+    let (sum, second) = sum.overflowing_add(carry as u64);
+    (sum, first || second)
+}
+
 struct MaskedLines<'a> {
     contents: &'a str,
     finder: &'a MaskFinder,
@@ -1133,12 +1140,20 @@ struct MaskedLines<'a> {
     positions: Vec<u32>,
     // The line a section handed back as its closer's, read next and with its positions still in place
     put_back: Option<(usize, &'a str, bool)>,
+    // The newlines of the blocks read so far against the blocks: a file of lines longer than a
+    // block is booked one line at a time, since its lines give their class away at their first bytes
+    newlines_read: usize,
+    blocks_read: usize,
+    // The classes of the block at 'classified_at', computed once however often the booking enters it
+    classified_at: usize,
+    classes: Classes,
 }
 
 impl<'a> MaskedLines<'a> {
     fn of(contents: &'a str, finder: &'a MaskFinder, positions: Vec<u32>) -> MaskedLines<'a> {
         let mut lines = MaskedLines { contents, finder, start: 0, block_at: 0, newlines: 0, candidates: 0,
-                booked: [[0; 3]; 3], positions, put_back: None };
+                booked: [[0; 3]; 3], positions, put_back: None, newlines_read: 0, blocks_read: 0,
+                classified_at: usize::MAX, classes: Classes { words: 0, content: 0 } };
         lines.read_block();
         lines
     }
@@ -1153,6 +1168,8 @@ impl<'a> MaskedLines<'a> {
         let block = &bytes[self.block_at..bytes.len().min(self.block_at + BLOCK_BYTES)];
         let masks = self.finder.scan_block(block);
         (self.newlines, self.candidates) = (masks.newlines, masks.candidates);
+        self.newlines_read += masks.newlines.count_ones() as usize;
+        self.blocks_read += 1;
     }
 
     // The lines from the next one up to the first that holds a searched byte, booked off the masks
@@ -1163,9 +1180,62 @@ impl<'a> MaskedLines<'a> {
     // searched byte.
     #[inline(always)]
     fn book_plain_lines(&mut self, inside: Inside, up_to: usize, collecting_spans: bool, code_spans: &mut Vec<(u32, u32)>) {
-        let bytes = self.contents.as_bytes();
         debug_assert!(self.put_back.is_none(), "a line handed back is read before anything is booked");
         if self.start.wrapping_sub(self.block_at) >= BLOCK_BYTES { return }
+        if up_to == usize::MAX && self.newlines_read >= self.blocks_read {
+            return self.book_plain_blocks(inside, collecting_spans, code_spans);
+        }
+        self.book_plain_lines_one_by_one(inside, up_to, collecting_spans, code_spans)
+    }
+
+    // Every line ending in the block is answered at once: adding the word bits to the mask of
+    // every byte that is not a newline carries from each word byte up to its line's own newline
+    // and stops there, so a newline's bit comes out set when its line holds a word, and the same
+    // for the bytes that are not blank. What overflows is the line still open at the block's end,
+    // carried into the next one.
+    #[inline(always)]
+    fn book_plain_blocks(&mut self, inside: Inside, collecting_spans: bool, code_spans: &mut Vec<(u32, u32)>) {
+        let bytes = self.contents.as_bytes();
+        let (mut carried_words, mut carried_content) = (false, false);
+        loop {
+            let before_candidate = match self.candidates { 0 => u64::MAX, bits => (1u64 << bits.trailing_zeros()) - 1 };
+            let plain = self.newlines & before_candidate;
+            if plain == 0 && self.candidates != 0 { return }
+            if self.classified_at != self.block_at {
+                self.classes = self.finder.classify_block(&bytes[self.block_at..bytes.len().min(self.block_at + BLOCK_BYTES)]);
+                self.classified_at = self.block_at;
+            }
+            let from_start = u64::MAX << self.start.saturating_sub(self.block_at);
+            let not_newlines = !self.newlines;
+            let (words_sum, words_out) = add_with_carry(not_newlines, self.classes.words & from_start, carried_words);
+            let (content_sum, content_out) = add_with_carry(not_newlines, self.classes.content & from_start, carried_content);
+            if plain != 0 {
+                let (with_words, with_content) = (words_sum & plain, content_sum & plain);
+                let booked = &mut self.booked[inside as usize];
+                booked[2] += with_words.count_ones() as usize;
+                booked[1] += (with_content & !with_words).count_ones() as usize;
+                booked[0] += (plain & !with_content).count_ones() as usize;
+                let last = 63 - plain.leading_zeros() as usize;
+                // One span for the run: a keyword sits in a line of words, and the line ends and
+                // the indentation between the lines are boundaries a keyword may stand beside
+                if collecting_spans && matches!(inside, Inside::Code) && with_words != 0 {
+                    code_spans.push((self.start as u32, (self.block_at + last) as u32));
+                }
+                self.start = self.block_at + last + 1;
+                self.newlines &= !(u64::MAX >> (63 - last));
+            }
+            if self.candidates != 0 || self.block_at + BLOCK_BYTES >= bytes.len() { return }
+            (carried_words, carried_content) = (words_out, content_out);
+            self.block_at += BLOCK_BYTES;
+            self.read_block();
+            let line_end = match self.newlines { 0 => u64::MAX, bits => u64::MAX >> (63 - bits.trailing_zeros()) };
+            if self.candidates & line_end != 0 || self.newlines == 0 && self.block_at + BLOCK_BYTES >= bytes.len() { return }
+        }
+    }
+
+    #[inline(always)]
+    fn book_plain_lines_one_by_one(&mut self, inside: Inside, up_to: usize, collecting_spans: bool, code_spans: &mut Vec<(u32, u32)>) {
+        let bytes = self.contents.as_bytes();
         loop {
             let before_candidate = match self.candidates { 0 => u64::MAX, bits => (1u64 << bits.trailing_zeros()) - 1 };
             let mut plain = self.newlines & before_candidate;
@@ -3984,6 +4054,37 @@ mod tests {
         // a hole spanning lines of a template, with a template inside it
         let first = bounds_multi("x = `a ${", js, None, None);
         assert_eq!((Some("x = ".to_owned()), true, None), (first.cleansed_string, first.has_string_literal, first.open_str_symbol_after));
+    }
+
+    // The booking by whole blocks and the booking line by line hand out the same lines, book the
+    // same classes and count the same keywords, over random files of short lines in every mix of
+    // blanks, tabs, carriage returns, punctuation, words above ASCII and candidate bytes
+    #[test]
+    fn plain_lines_booked_by_the_block_read_as_the_lines_booked_one_by_one() {
+        let language = Language::new("xs", ["xs"], build_backslashed_quotes(), [""; 0], &[], [Keyword::new("xs", ["x"])]);
+        let matcher = KeywordMatcher::build(&language).unwrap();
+        let finder = MaskFinder::of(b"\"");
+        let alphabet = ['\n', '\n', '\n', ' ', '\t', '\r', '"', '.', '{', 'é', 'x', 'x', 'y'];
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+        let drive = |contents: &str, up_to: usize| {
+            let mut lines = MaskedLines::of(contents, &finder, Vec::new());
+            let (mut spans, mut handed) = (Vec::new(), Vec::new());
+            loop {
+                lines.book_plain_lines(Inside::Code, up_to, true, &mut spans);
+                let Some((start, line, has_candidates)) = lines.next() else { break };
+                handed.push((start, line.to_owned(), has_candidates));
+            }
+            let mut stats = FileStats::with_keywords(&language.keywords);
+            count_keywords(contents, &spans, &matcher, &mut stats, &mut Vec::new(), None);
+            (lines.booked, handed, stats.keyword_occurrences)
+        };
+        for _ in 0..300 {
+            let length = (next() % 700) as usize;
+            let contents = (0..length).map(|_| alphabet[(next() % alphabet.len() as u64) as usize]).collect::<String>();
+            // 'usize::MAX' books by blocks, anything below it one line at a time
+            assert_eq!(drive(&contents, usize::MAX - 1), drive(&contents, usize::MAX), "{contents:?}");
+        }
     }
 
     // The symbol is found by the quote the language already declares and checked backwards, so

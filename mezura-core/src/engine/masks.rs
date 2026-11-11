@@ -1,15 +1,33 @@
 // One pass over a 64-byte block answers two questions for every byte at once: is it a newline, and
 // is it one of the bytes the scan plan searches. The answers come back as bitmasks, bit i for byte
 // i, so the line splitting and the candidate question are read off them without a search per line.
+// A second pass answers what a line is made of, the word bytes and the bytes that are not blank,
+// so that a run of plain lines is classified off the masks without being read.
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::{__m256i, _mm256_cmpeq_epi8, _mm256_movemask_epi8, _mm256_or_si256,
-        _mm256_set1_epi8, _mm256_set_epi64x};
+use std::arch::x86_64::{__m256i, _mm256_and_si256, _mm256_cmpeq_epi8, _mm256_movemask_epi8, _mm256_or_si256,
+        _mm256_set1_epi8, _mm256_set_epi64x, _mm256_shuffle_epi8, _mm256_srli_epi16};
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::{uint8x16_t, vandq_u8, vceqq_u8, vcombine_u8, vcreate_u8, vdupq_n_u8, vgetq_lane_u64,
         vmaxvq_u8, vorrq_u8, vpaddq_u8, vreinterpretq_u64_u8};
 
 pub(crate) const BLOCK_BYTES : usize = 64;
+// The class of a byte is the AND of what its high nibble allows and what its low nibble allows,
+// one table lookup each: a digit is high nibble 3 with a low one up to 9, a letter is high nibble
+// 4 or 6 with a low one from 1, or 5 or 7 with a low one up to 10, a space is 0x20, a control
+// space is 0x09, 0x0A, 0x0C or 0x0D, and anything from 0x80 up is above ASCII
+const DIGIT : u8 = 0x01;
+const LETTER_FROM_ONE : u8 = 0x02;
+const LETTER_UP_TO_TEN : u8 = 0x04;
+const ABOVE_ASCII : u8 = 0x08;
+const SPACE : u8 = 0x10;
+const CONTROL_SPACE : u8 = 0x20;
+const WORD_CLASSES : u8 = DIGIT | LETTER_FROM_ONE | LETTER_UP_TO_TEN | ABOVE_ASCII;
+const SPACE_CLASSES : u8 = SPACE | CONTROL_SPACE;
+#[cfg(target_arch = "x86_64")]
+const LOW_NIBBLE_CLASSES : [u8; 32] = build_low_nibble_classes();
+#[cfg(target_arch = "x86_64")]
+const HIGH_NIBBLE_CLASSES : [u8; 32] = build_high_nibble_classes();
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Masks {
@@ -60,6 +78,24 @@ impl MaskFinder {
         }
         scan_block_scalar(block, &self.is_searched)
     }
+
+    // The word bytes and the bytes that are not blank, as 'has_word_byte' and 'trim_ascii' read them
+    #[allow(unsafe_code)]
+    pub(crate) fn classify_block(&self, block: &[u8]) -> Classes {
+        #[cfg(target_arch = "x86_64")]
+        if self.avx2 && block.len() == BLOCK_BYTES {
+            // The feature was checked once when the finder was built, which is the whole
+            // requirement of calling a function compiled for it
+            return unsafe { classify_block_avx2(block) };
+        }
+        classify_block_scalar(block)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Classes {
+    pub words: u64,
+    pub content: u64,
 }
 
 #[allow(unsafe_code)]
@@ -95,6 +131,70 @@ fn scan_block_scalar(block: &[u8], is_searched: &[bool; 256]) -> Masks {
         if is_searched[byte as usize] { candidates |= 1 << at; }
     }
     Masks { newlines, candidates }
+}
+
+fn classify_block_scalar(block: &[u8]) -> Classes {
+    let (mut words, mut content) = (0u64, 0u64);
+    for (at, &byte) in block.iter().enumerate() {
+        if byte.is_ascii_alphanumeric() || byte >= 0x80 { words |= 1 << at; }
+        if !byte.is_ascii_whitespace() { content |= 1 << at; }
+    }
+    Classes { words, content }
+}
+
+#[cfg(target_arch = "x86_64")]
+const fn build_high_nibble_classes() -> [u8; 32] {
+    let by_nibble = [CONTROL_SPACE, 0, SPACE, DIGIT, LETTER_FROM_ONE, LETTER_UP_TO_TEN, LETTER_FROM_ONE, LETTER_UP_TO_TEN];
+    let mut table = [ABOVE_ASCII; 32];
+    let mut high = 0;
+    while high < 8 {
+        table[high] = by_nibble[high];
+        table[high + 16] = by_nibble[high];
+        high += 1;
+    }
+    table
+}
+
+#[cfg(target_arch = "x86_64")]
+const fn build_low_nibble_classes() -> [u8; 32] {
+    let mut table = [0u8; 32];
+    let mut low = 0;
+    while low < 32 {
+        let nibble = low % 16;
+        let mut classes = ABOVE_ASCII;
+        if nibble <= 9 { classes |= DIGIT; }
+        if nibble >= 1 { classes |= LETTER_FROM_ONE; }
+        if nibble <= 10 { classes |= LETTER_UP_TO_TEN; }
+        if nibble == 0 { classes |= SPACE; }
+        if matches!(nibble, 9 | 10 | 12 | 13) { classes |= CONTROL_SPACE; }
+        table[low] = classes;
+        low += 1;
+    }
+    table
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+fn classify_block_avx2(block: &[u8]) -> Classes {
+    let (low, high) = (load_32(&block[..32]), load_32(&block[32..64]));
+    let (low_classes, high_classes) = (find_classes(low), find_classes(high));
+    let (word_bits, space_bits, zero) = (_mm256_set1_epi8(WORD_CLASSES as i8), _mm256_set1_epi8(SPACE_CLASSES as i8),
+            _mm256_set1_epi8(0));
+    let lacks = |classes: __m256i, bits: __m256i| _mm256_cmpeq_epi8(_mm256_and_si256(classes, bits), zero);
+    Classes {
+        words: !gather_bits(lacks(low_classes, word_bits), lacks(high_classes, word_bits)),
+        content: gather_bits(lacks(low_classes, space_bits), lacks(high_classes, space_bits)),
+    }
+}
+
+// Each table holds its sixteen entries twice, once per 128-bit lane of the shuffle
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+fn find_classes(half: __m256i) -> __m256i {
+    let nibble = _mm256_set1_epi8(0x0F);
+    let low = _mm256_shuffle_epi8(load_32(&LOW_NIBBLE_CLASSES), _mm256_and_si256(half, nibble));
+    let high = _mm256_shuffle_epi8(load_32(&HIGH_NIBBLE_CLASSES), _mm256_and_si256(_mm256_srli_epi16::<4>(half), nibble));
+    _mm256_and_si256(low, high)
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -205,6 +305,23 @@ mod tests {
             assert_eq!(expected.newlines, actual.newlines, "newlines of {block:?}");
             assert_eq!(expected.candidates, actual.candidates, "candidates of {block:?}");
         }
+    }
+
+    #[test]
+    fn the_classifier_answers_exactly_as_the_scalar_one() {
+        let finder = MaskFinder::of(b"\"/'");
+        for block in every_block_shape() {
+            assert_eq!(classify_block_scalar(&block), finder.classify_block(&block), "classes of {block:?}");
+        }
+        // every byte value in turn, against what the line rules say of it
+        for byte in 0..=255u8 {
+            let block = [byte; BLOCK_BYTES];
+            let classes = finder.classify_block(&block);
+            let is_word = byte.is_ascii_alphanumeric() || byte >= 0x80;
+            assert_eq!(if is_word { u64::MAX } else { 0 }, classes.words, "word bits of {byte:#04x}");
+            assert_eq!(if byte.is_ascii_whitespace() { 0 } else { u64::MAX }, classes.content, "content bits of {byte:#04x}");
+        }
+        assert_eq!(Classes { words: 0b001, content: 0b101 }, finder.classify_block(b"a\n."));
     }
 
     #[test]
