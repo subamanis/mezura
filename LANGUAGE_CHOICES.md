@@ -33,6 +33,13 @@ of the build directory. mezura looks in the head of the file for the give-away l
 `--show-skipped` prints the paths, `--explain` says which check set a file aside,
 `--count-not-code` counts them anyway, and `--no-heuristics` turns the check off.
 
+## Regular expressions in JSX and TSX
+
+JavaScript and TypeScript read `/.../` as a regular expression where the code expects a value. A
+quote inside one opens no string. JSX and TSX leave the rule out, since the `/` of a closing tag
+such as `</div>` would open a regular expression. In a `.jsx` or `.tsx` file, a quote inside one
+opens a string to the end of its line.
+
 ## Not counted at all
 
 JSON, YAML, TOML, XML, CSV, Markdown and plain text ship with no language file. They are not code.
