@@ -1,3 +1,23 @@
+v3.5.0 - unreleased
+
+Main changes:
+  -> Counting is faster, most of all on an x86-64 with AVX2 or AVX-512. Building mezura needs Rust
+      1.89 or newer.
+  -> HTML's quotes are read as strings inside a tag, so a '<!--' written in an attribute value no
+      longer opens a comment; outside a tag an apostrophe in the text is text as before. A
+      language file may confine its strings to a pair of symbols with the new 'Strings only
+      between' block.
+  -> The markup of a PHP file between '?>' and the next '<?' is counted as HTML, with its scripts
+      and styles as JavaScript and CSS. A 'Nested language' opener ending in '>' matches whole,
+      and an end without '>' matches as written.
+  -> A regular expression literal of JavaScript or TypeScript is read as a string, so a quote or a
+      '//' inside '/.../' opens nothing. A language file declares them with the new 'Regular
+      expression symbols' and 'Regular expression after' blocks.
+  -> The holes of an interpolated string are code: '{x}' in C#'s '$"..."' and '$"""..."""',
+      '${x}' in the template literals of JavaScript, TypeScript, JSX and TSX. A language file
+      declares them with the new 'Interpolated string openers' and 'Interpolation hole' blocks,
+      and a 'String symbols' entry of several bytes, such as '$"', names a prefix and its quote.
+
 v3.4.0 - 2026-11-05
 
   55,476 Total lines  -  37,239 Code lines

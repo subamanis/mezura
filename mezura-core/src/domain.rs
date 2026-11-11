@@ -277,6 +277,13 @@ impl Language {
         symbol as usize >= self.count_single_line_strings()
     }
 
+    // A string ending with its line obeys the language's escape; a crossing one says so itself; a
+    // leveled pair and a heredoc escape nothing
+    pub(crate) fn string_obeys_the_escape(&self, symbol: u8) -> bool {
+        (symbol as usize) < self.count_single_line_strings()
+                || self.find_crossing_string(symbol).is_some_and(|crossing| crossing.escapes)
+    }
+
     pub(crate) fn string_escapes_by_doubling(&self, symbol: u8) -> bool {
         self.find_crossing_string(symbol).is_some_and(|crossing| crossing.escapes_by_doubling)
     }

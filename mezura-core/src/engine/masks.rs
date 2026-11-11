@@ -42,6 +42,12 @@ pub(crate) struct Masks {
     pub candidates: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Classes {
+    pub words: u64,
+    pub content: u64,
+}
+
 // Which bytes are searched, and whether this machine can do it 64 or 32 bytes at a time
 #[derive(Debug, Clone)]
 pub(crate) struct MaskFinder {
@@ -65,7 +71,7 @@ impl MaskFinder {
             #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
             searched: searched.into(),
             #[cfg(target_arch = "x86_64")]
-            avx512: std::is_x86_feature_detected!("avx512bw"),
+            avx512: std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw"),
             #[cfg(target_arch = "x86_64")]
             avx2: std::is_x86_feature_detected!("avx2"),
             #[cfg(target_arch = "aarch64")]
@@ -103,12 +109,6 @@ impl MaskFinder {
         }
         classify_block_scalar(block)
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Classes {
-    pub words: u64,
-    pub content: u64,
 }
 
 #[allow(unsafe_code)]
@@ -247,7 +247,7 @@ fn load_64(bytes: &[u8]) -> __m512i {
 #[target_feature(enable = "avx2")]
 fn classify_block_avx2(block: &[u8]) -> Classes {
     let (low, high) = (load_32(&block[..32]), load_32(&block[32..64]));
-    let (low_classes, high_classes) = (find_classes(low), find_classes(high));
+    let (low_classes, high_classes) = (classify_half(low), classify_half(high));
     let (word_bits, space_bits, zero) = (_mm256_set1_epi8(WORD_CLASSES as i8), _mm256_set1_epi8(SPACE_CLASSES as i8),
             _mm256_set1_epi8(0));
     let lacks = |classes: __m256i, bits: __m256i| _mm256_cmpeq_epi8(_mm256_and_si256(classes, bits), zero);
@@ -259,7 +259,7 @@ fn classify_block_avx2(block: &[u8]) -> Classes {
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-fn find_classes(half: __m256i) -> __m256i {
+fn classify_half(half: __m256i) -> __m256i {
     let nibble = _mm256_set1_epi8(0x0F);
     let low = _mm256_shuffle_epi8(load_32(&LOW_NIBBLE_CLASSES_32), _mm256_and_si256(half, nibble));
     let high = _mm256_shuffle_epi8(load_32(&HIGH_NIBBLE_CLASSES_32), _mm256_and_si256(_mm256_srli_epi16::<4>(half), nibble));
@@ -383,8 +383,9 @@ mod tests {
     fn every_vector_arm_answers_exactly_as_the_scalar_one() {
         let mut is_searched = [false; 256];
         for &byte in b"\"/'" { is_searched[byte as usize] = true; }
-        let (avx2, avx512) = (std::is_x86_feature_detected!("avx2"), std::is_x86_feature_detected!("avx512bw"));
-        assert!(avx2, "this machine has no AVX2, so the arms are untested here");
+        let avx2 = std::is_x86_feature_detected!("avx2");
+        let avx512 = std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw");
+        if !avx2 { eprintln!("no AVX2 on this machine, the vector arms are untested here"); return }
         for block in every_block_shape() {
             let (masks, classes) = (scan_block_scalar(&block, &is_searched), classify_block_scalar(&block));
             // Checked two lines above, which is the whole requirement of calling a function
@@ -429,7 +430,6 @@ mod tests {
 
     #[test]
     fn a_buffer_of_ascii_of_any_length_is_ascii() {
-        assert!(is_ascii(b""));
         for length in 0..=200usize {
             let buffer = (0..length).map(|at| (at % 128) as u8).collect::<Vec<u8>>();
             assert_eq!(buffer.is_ascii(), is_ascii(&buffer), "pure ascii of {length} bytes");

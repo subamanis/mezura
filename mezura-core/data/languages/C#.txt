@@ -14,14 +14,14 @@ Multi line raw string symbols
 """
 
 Paired string openers
-@" @$" $@"
+@" @$" $@" $"""
 Paired string closers
-" " "
+" " " """
 Paired strings escaped by doubling
 @" @$" $@"
 
 Interpolated string openers
-$" @$" $@"
+$" @$" $@" $"""
 Interpolation hole
 { }
 

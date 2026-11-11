@@ -368,9 +368,7 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines)?;
     }
 
-    // A pattern between two slashes, JavaScript's '/re/', which opens only where the code expects
-    // an operand: after an operator, an opening bracket, a separator, the start of the line, or
-    // one of the words of the second block. After a name, a number, ')' or ']' the slash divides.
+    // A pattern between two slashes, JavaScript's '/re/', and the words after which one may begin
     let mut regexes = Vec::new();
     let mut regex_after = Vec::new();
     if header == REGEX_SYMBOLS {
