@@ -40,8 +40,12 @@ NAME
 classes
 ALIASES
 class
+FOLLOWED BY
+{ :
 Keyword
 NAME
 structs
 ALIASES
 struct
+FOLLOWED BY
+{ :

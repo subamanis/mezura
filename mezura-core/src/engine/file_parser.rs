@@ -52,6 +52,8 @@ const NOT_CODE_MARKER_LINES : usize = 8;
 const NO_SLOT : u16 = u16::MAX;
 // C++ refuses a raw string whose delimiter is longer
 const MAX_DELIMITER_BYTES : usize = 16;
+// The bytes a definition's name is written with, read where a keyword declares what follows one
+const IS_NAME_BYTE : [bool; 256] = build_name_bytes();
 
 // The four kinds of declared symbol, as indices into the per-kind arrays of a scan
 const STRINGS    : u8 = 0;
@@ -1072,6 +1074,8 @@ fn first_line_of(head: &[u8]) -> &[u8] {
 
 pub(crate) struct KeywordMatcher {
     aliases_with_indices: Vec<(memmem::Finder<'static>, usize, usize)>,
+    // Per keyword, the symbols one of which follows a definition's name; empty, every occurrence counts
+    followed_by: Vec<Vec<Box<[u8]>>>,
 }
 
 impl KeywordMatcher {
@@ -1085,7 +1089,9 @@ impl KeywordMatcher {
         if aliases_with_indices.is_empty() {
             None
         } else {
-            Some(KeywordMatcher { aliases_with_indices })
+            let followed_by = language.keywords.iter()
+                    .map(|keyword| keyword.followed_by.iter().map(|symbol| symbol.as_bytes().into()).collect()).collect();
+            Some(KeywordMatcher { aliases_with_indices, followed_by })
         }
     }
 }
@@ -2942,6 +2948,7 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
         indices.clear();
         indices.extend(alias_finder.find_iter(bytes));
         if indices.is_empty() { continue; }
+        let followed_by = &matcher.followed_by[*keyword_index];
 
         // both lists ascend, so the stretch that could hold the next hit is never behind us
         let mut span = 0;
@@ -2961,7 +2968,8 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
 
             let before = if *at > from { bytes.get(*at - 1) } else { None };
             let after = if at + alias_len < to { bytes.get(at + alias_len) } else { None };
-            if is_acceptable_before(before) && is_acceptable_after(after) {
+            if is_acceptable_before(before) && is_acceptable_after(after)
+                    && (followed_by.is_empty() || is_followed_by_a_definition(&bytes[at + alias_len..], followed_by)) {
                 file_stats.keyword_occurrences[*keyword_index] += 1;
                 if let Some((ranges, test_stats)) = &mut tests {
                     while range < ranges.len() && (ranges[range].1 as usize) <= *at { range += 1; }
@@ -2972,6 +2980,26 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
             }
         }
     }
+}
+
+// After the keyword comes any run of names, whitespace and line ends, then one of the symbols.
+// So 'struct Foo {', 'struct {' and 'class EXPORT Foo final {' define, while 'struct Foo *x' and
+// 'struct Foo f(void)' use. Run on every occurrence of the keyword, a million and a half on the
+// kernel, so a name byte is read through one table and the loop indexes the bytes
+fn is_followed_by_a_definition(rest: &[u8], symbols: &[Box<[u8]>]) -> bool {
+    let mut at = 0;
+    while at < rest.len() && (rest[at].is_ascii_whitespace() || IS_NAME_BYTE[rest[at] as usize]) { at += 1 }
+    symbols.iter().any(|symbol| rest[at..].starts_with(symbol))
+}
+
+const fn build_name_bytes() -> [bool; 256] {
+    let mut table = [false; 256];
+    let mut byte = 0;
+    while byte < 256 {
+        table[byte] = (byte as u8).is_ascii_alphanumeric() || byte == b'_' as usize;
+        byte += 1;
+    }
+    table
 }
 
 // A delimiter holds no bracket, backslash, whitespace or byte above ASCII. One of those before the
@@ -3580,6 +3608,29 @@ mod tests {
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
         count_keywords(line, &spans, &matcher, &mut file_stats, &mut Vec::new(), None);
         assert_eq!(1, file_stats.keyword_occurrences[0]);
+    }
+
+    // C's 'struct' defines where a name or none and then '{' follow it, on the line or the next;
+    // C++'s takes ':' as well, for a base list
+    #[test]
+    fn a_keyword_followed_by_a_definition_symbol_counts_only_where_it_defines() {
+        let structs = Keyword::new("structs", ["struct"]).with_followed_by(["{", ":"]);
+        let language = Language::new("c-like", ["c"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], [structs.clone()]);
+        let matcher = KeywordMatcher::build(&language).unwrap();
+        let count = |contents: &str| {
+            let mut file_stats = FileStats::with_keywords(std::slice::from_ref(&structs));
+            keywords_of(contents, &matcher, &mut file_stats);
+            file_stats.keyword_occurrences[0]
+        };
+        for defines in ["struct Foo {", "struct {", "typedef struct Foo{", "struct Foo\n{", "struct Foo : Base {",
+                "struct Foo\n    : Base\n{", "struct Foo {}; struct Bar {", "struct EXPORT Foo {", "struct Foo final : Base {"] {
+            assert_eq!(contents_matches(defines), count(defines), "{defines:?} defines");
+        }
+        for uses in ["struct Foo *x;", "sizeof(struct Foo)", "struct Foo v = {0};", "struct Foo;", "struct Foo f(void) {",
+                "struct Foo\n\nint y;", "struct __attribute__((packed)) Foo {", "struct"] {
+            assert_eq!(0, count(uses), "{uses:?} uses");
+        }
+        fn contents_matches(contents: &str) -> usize { contents.matches("struct").count() }
     }
 
     #[test]
@@ -4991,7 +5042,7 @@ mod tests {
     // name, and the attribute values by extension.
     fn section_fixture() -> (HashMap<String, Language>, HashMap<String, Arc<str>>) {
         let js = Language::new("JS", ["js"], build_backslashed_quotes(), ["//"], &[("/*", "*/")],
-                [Keyword { descriptive_name: "functions".to_owned(), aliases: vec!["function".to_owned()] }]);
+                [Keyword::new("functions", ["function"])]);
         let css = Language::new("CSS", ["css"], StringRules::escaping_nothing(), [""; 0], &[("/*", "*/")], []);
         let languages = crate::languages::keyed_by_name(vec![js, css]);
         let extensions = HashMap::from([("js".to_owned(), Arc::from("JS")), ("css".to_owned(), Arc::from("CSS"))]);

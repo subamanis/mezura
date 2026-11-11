@@ -442,7 +442,26 @@ class record
 ```
 
 They are counted as plain words: a word in a string or a comment never counts, `aclass` is not a
-`class`, and a language that uses `class` for a second purpose has those counted too.
+`class`, and a language that uses `class` for a second purpose has those counted too, unless the
+block says what follows a definition:
+
+```
+Keyword
+NAME
+structs
+ALIASES
+struct
+FOLLOWED BY
+{ :
+```
+
+With `FOLLOWED BY`, an occurrence counts only where the word is followed by names or none and then
+by one of the listed symbols, with whitespace and line ends allowed between them. C's
+`struct Foo {` and `struct {` count, and so does C++'s `class EXPORT Foo final {`. `struct Foo *x`,
+`sizeof(struct Foo)` and `struct Foo;` do not count. C++ lists `:` as well, for
+`class Foo : Base {`. Anything else before the symbol, like the parentheses of
+`struct __attribute__((packed)) foo {`, is read as no definition. Leave the line out where the
+rules of the language are not known, and every occurrence counts as before.
 
 ## Naming a language on the command line
 

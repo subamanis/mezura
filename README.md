@@ -755,7 +755,7 @@ With that said, it is important to mention the following limitations:
 
 - Another language inside a file is only found where a tag opens it, the way ```<script>``` and ```<style>``` do, the tag running over as many lines as it needs, and where PHP's ```?>``` returns to its page until the next ```<?``` or the end of the file. The section begins on the line after the tag and the line holding either tag belongs to the language around the section, so a ```?>``` followed by markup on its own line leaves that markup to PHP. A ```.php``` file is PHP from its first byte, so markup written before its first ```<?php``` counts as PHP. Languages that interleave mid-line are outside that: the ERB, JSP and Blade family are read as one language from beginning to end. A section fenced by something that is not a tag is outside it too: the ```---``` frontmatter at the top of an Astro file holds TypeScript, and its ```//``` lines are counted as code. The ```<script>``` and ```<style>``` blocks of the same file are read as the languages they hold, as they are in Vue and Svelte.
 
-- Keywords are counted as words. Every ```class``` in code is counted, whatever it means there.
+- Keywords are counted as words. Every ```class``` in code is counted, whatever it means there, unless the language file says what follows a definition: C's ```struct``` and C++'s ```struct``` and ```class``` count where a name or none and then ```{``` (or ```:``` in C++) follow them, so a declaration, a parameter, a cast or a ```sizeof``` adds nothing. A definition with anything but names before the brace, like ```__attribute__((packed))```, is missed.
 
 - Hard links count twice. Symbolic links and nested targets are dropped, but a hard link is indistinguishable from an ordinary file.
 

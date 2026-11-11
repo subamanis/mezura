@@ -868,7 +868,10 @@ pub struct Keyword {
     pub descriptive_name : String,
     /// The spellings that count towards it, so `classes` can be raised by both `class` and
     /// `record`.
-    pub aliases : Vec<String>
+    pub aliases : Vec<String>,
+    /// The symbols one of which follows the name of a definition, `{` for C's `struct`, so that
+    /// `struct a *x` and `sizeof(struct a)` add nothing. Empty, every occurrence counts.
+    pub followed_by : Vec<String>
 }
 
 impl Keyword {
@@ -876,8 +879,16 @@ impl Keyword {
     pub fn new(descriptive_name: impl AsRef<str>, aliases: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         Keyword {
             descriptive_name : descriptive_name.as_ref().to_owned(),
-            aliases : owned_strings(aliases)
+            aliases : owned_strings(aliases),
+            followed_by : Vec::new()
         }
+    }
+
+    /// The same count, raised only where a spelling, a name or none, and then one of these
+    /// symbols stand together, whitespace and line ends between them.
+    pub fn with_followed_by(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.followed_by = owned_strings(symbols);
+        self
     }
 }
 

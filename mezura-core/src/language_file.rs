@@ -143,6 +143,7 @@ const TEST_FILE_NAMES          : &str = "FILE NAMES";
 const KEYWORD                  : &str = "Keyword";
 const KEYWORD_NAME             : &str = "NAME";
 const KEYWORD_ALIASES          : &str = "ALIASES";
+const KEYWORD_FOLLOWED_BY      : &str = "FOLLOWED BY";
 
 // The markers that open the rule blocks of the language conflicts file
 const CONTESTED_EXTENSIONS     : &str = "contested-extensions";
@@ -704,9 +705,15 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         if read_next_header(lines)?.as_str() != KEYWORD_ALIASES {return None;}
         let aliases = split_line_on_whitespace(&read_value_line(lines)?);
         if name.is_empty() || aliases.is_empty() {return None;}
-
-        keywords.push(Keyword{descriptive_name: name, aliases});
         header = read_next_header(lines);
+
+        let mut followed_by = Vec::new();
+        if header.as_deref() == Some(KEYWORD_FOLLOWED_BY) {
+            followed_by = split_line_on_whitespace(&read_value_line(lines)?);
+            if followed_by.is_empty() {return None;}
+            header = read_next_header(lines);
+        }
+        keywords.push(Keyword{descriptive_name: name, aliases, followed_by});
     }
 
     // Anything still standing here is a header this parser has no block for, and the lines under it
@@ -1825,5 +1832,17 @@ pl      Perl, Prolog
                 .map(|pair| format!("'{}' ({}, {})", pair[0].0, pair[0].1, pair[1].1))
                 .collect::<Vec<_>>();
         assert!(contested.is_empty(), "these interpreters are claimed by more than one shipped file: {contested:?}");
+    }
+
+    #[test]
+    fn a_keyword_block_may_name_the_symbols_a_definition_is_followed_by() {
+        let with_symbols = "Language\nClike\n\nExtensions\ncl\n\nString symbols\n\n\nComment symbols\n//\n\n\
+                Keyword\n    NAME\n    structs\n    ALIASES\n    struct\n    FOLLOWED BY\n    { :\n\
+                Keyword\n    NAME\n    unions\n    ALIASES\n    union\n";
+        let parsed = parse(with_symbols).expect("the declaration must parse");
+        assert_eq!(vec!["{".to_owned(), ":".to_owned()], parsed.keywords[0].followed_by);
+        assert!(parsed.keywords[1].followed_by.is_empty(), "the line of one keyword reached the next");
+        let empty = with_symbols.replace("    { :\n", "    \n");
+        assert!(parse(&empty).is_none(), "an empty FOLLOWED BY line was accepted");
     }
 }

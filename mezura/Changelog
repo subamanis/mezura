@@ -17,6 +17,10 @@ Main changes:
       '${x}' in the template literals of JavaScript, TypeScript, JSX and TSX. A language file
       declares them with the new 'Interpolated string openers' and 'Interpolation hole' blocks,
       and a 'String symbols' entry of several bytes, such as '$"', names a prefix and its quote.
+  -> The structs of C and the classes and structs of C++ are counted where they are defined: the
+      word, any names, and then '{' (or ':' before a base list in C++), so a declaration or a
+      parameter adds nothing. A language file declares the rule with the new 'FOLLOWED BY' line of
+      a keyword block; a keyword without it counts every occurrence.
 
 v3.4.0 - 2026-11-05
 
