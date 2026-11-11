@@ -1235,7 +1235,6 @@ impl<'a> MaskedLines<'a> {
         self.book_plain_lines_one_by_one(inside, up_to, collecting_spans, code_spans)
     }
 
-    // Every line ending in the block is booked at once, off the class masks of the block
     #[inline(always)]
     fn book_plain_blocks(&mut self, inside: Inside, collecting_spans: bool, code_spans: &mut Vec<(u32, u32)>) {
         let bytes = self.contents.as_bytes();
@@ -2985,10 +2984,8 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
     }
 }
 
-// After the keyword comes any run of names, whitespace and line ends, then one of the symbols.
-// So 'struct Foo {', 'struct {' and 'class EXPORT Foo final {' define, while 'struct Foo *x' and
-// 'struct Foo f(void)' use. Run on every occurrence of the keyword, a million and a half on the
-// kernel, so a name byte is read through one table and the loop indexes the bytes
+// Run on every occurrence of the keyword, a million and a half on the kernel, so a name byte is
+// read through one table
 fn is_followed_by_a_definition(rest: &[u8], symbols: &[Box<[u8]>]) -> bool {
     let mut at = 0;
     while at < rest.len() && (rest[at].is_ascii_whitespace() || IS_NAME_BYTE[rest[at] as usize]) { at += 1 }

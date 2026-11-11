@@ -176,8 +176,7 @@ pub enum Carried {
         /// The line that comment opened on.
         since_line: usize
     },
-    /// A hole of an interpolated string, read as code, such as the `${ }` of a JavaScript
-    /// template literal.
+    /// A hole of an interpolated string, such as the `${ }` of a JavaScript template literal.
     Hole {
         /// The opening symbol of the hole.
         opener: String,

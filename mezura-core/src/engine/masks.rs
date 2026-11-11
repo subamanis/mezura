@@ -494,7 +494,6 @@ mod tests {
         assert_eq!(finder.scan_block(&block).newlines, 0);
     }
 
-    // From several starts and with each carry in, against a walk over the bytes
     #[test]
     fn the_lines_holding_words_and_content_are_the_ones_a_byte_walk_finds() {
         for block in every_block_shape() {
