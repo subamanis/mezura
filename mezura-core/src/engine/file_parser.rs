@@ -359,6 +359,9 @@ pub(crate) struct ScanPlan {
     slots: Vec<Slot>,
     symbols: Vec<Box<[u8]>>,
     finder: MaskFinder,
+    // The finder with the hole's braces added, for the lines read inside an interpolating string
+    // or a hole; the block pass and every other line never search a brace
+    hole_finder: Option<MaskFinder>,
     // The bytes the string symbols count between, HTML's '<' and '>', candidates like the symbols
     string_bounds: Option<(u8, u8)>,
     // The words a regular expression literal may directly follow
@@ -470,7 +473,7 @@ impl ScanPlan {
         entries.sort_by_key(|entry| (std::cmp::Reverse(entry.bytes.len()), entry.kind != COMMENTS));
 
         let string_bounds = language.strings_only_between;
-        let presearched = [string_bounds, hole_braces].iter().flatten().flat_map(|(open, close)| [*open, *close]).collect::<Vec<u8>>();
+        let presearched = string_bounds.iter().flat_map(|(open, close)| [*open, *close]).collect::<Vec<u8>>();
         let anchors = anchors_of(&entries, &presearched);
         let mut first = [NO_SLOT; 256];
         let (mut slots, mut symbols) = (Vec::with_capacity(entries.len()), Vec::with_capacity(entries.len()));
@@ -501,7 +504,17 @@ impl ScanPlan {
             }
         }
 
-        let finder = MaskFinder::of(&collect_searched_bytes(&entries, &anchors, presearched));
+        let searched = collect_searched_bytes(&entries, &anchors, presearched);
+        let finder = MaskFinder::of(&searched);
+        let hole_finder = hole_braces.map(|(nest, close)| {
+            let mut with_braces = searched.clone();
+            let opener_anchors = entries.iter().zip(&anchors).filter(|(entry, _)| entry.role == ROLE_HOLE_OPEN)
+                    .map(|(entry, anchor)| entry.bytes[*anchor as usize]);
+            for byte in [nest, close].into_iter().chain(opener_anchors) {
+                if !with_braces.contains(&byte) { with_braces.push(byte) }
+            }
+            MaskFinder::of(&with_braces)
+        });
         let strings = &language.strings;
         let heredoc = language.heredoc.map(|rules| (memmem::Finder::new(rules.get_opener().as_bytes()).into_owned(),
                 (single_line + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()) as u8, rules));
@@ -522,7 +535,8 @@ impl ScanPlan {
             let opener_read_inside = language.comment_nests(pair) || language.comment_closes_with_its_opener(pair);
             (slot_of(COM_ENDS), if opener_read_inside { slot_of(COM_STARTS) } else { NO_SLOT })
         }).collect();
-        ScanPlan { first, slots, symbols, finder, string_bounds, regex_after, hole_braces, heredoc, string_shapes, comment_slots }
+        ScanPlan { first, slots, symbols, finder, hole_finder, string_bounds, regex_after, hole_braces, heredoc, string_shapes,
+                comment_slots }
     }
 }
 
@@ -586,9 +600,12 @@ fn find_the_byte_reaching_most_of(entries: &[PlanEntry], searched: &[u8]) -> Opt
     best.map(|(byte, _)| byte)
 }
 
+// The hole's opener is left out: it is read only inside an interpolating string, through the finder
+// that holds the braces
 fn collect_searched_bytes(entries: &[PlanEntry], anchors: &[u8], presearched: Vec<u8>) -> Vec<u8> {
     let mut searched = presearched;
     for (entry, anchor) in entries.iter().zip(anchors) {
+        if entry.role == ROLE_HOLE_OPEN { continue }
         let byte = entry.bytes[*anchor as usize];
         if !searched.contains(&byte) { searched.push(byte) }
     }
@@ -695,6 +712,11 @@ impl<'a> Events<'a> {
             Candidates::At(offsets, lead) => Events::Listed { offsets: offsets.iter(), lead, len: bytes.len() },
             Candidates::Unsearched => Events::Scanned { bytes, finder, block_at: 0, bits: 0 }
         }
+    }
+
+    // The rest of the line from 'cursor' through another finder, beginning at the block holding it
+    fn scanned_from(bytes: &'a [u8], finder: &'a MaskFinder, cursor: usize) -> Events<'a> {
+        Events::Scanned { bytes, finder, block_at: cursor / BLOCK_BYTES * BLOCK_BYTES, bits: 0 }
     }
 }
 
@@ -1394,7 +1416,7 @@ struct WalkState {
 impl WalkState {
     fn holds_nothing(&self) -> bool {
         self.open_comment.is_none() && self.open_str_symbol.is_none() && !self.continued_comment
-                && self.line_bound.is_none()
+                && self.line_bound.is_none() && self.holes.is_empty()
     }
 }
 
@@ -1734,10 +1756,15 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
         // A string that ends with its line and a line comment carried by a continuation are left to the walk
         if books_lines && !shell.continued_comment {
             let up_to = if FULL { quiet_until } else { usize::MAX };
+            // Inside a hole, or a string with holes, a brace no mask searched may close or open
+            // one, so those lines are walked
             match (shell.open_comment, shell.open_str_symbol) {
-                (_, None) => lines.book_plain_lines(match shell.open_comment { None => Inside::Code, Some(_) => Inside::BlockComment },
+                (_, None) if shell.holes.is_empty() =>
+                    lines.book_plain_lines(match shell.open_comment { None => Inside::Code, Some(_) => Inside::BlockComment },
                         up_to, collecting_spans, code_spans),
-                (None, Some((symbol, _))) if language.string_crosses_lines(symbol) => lines.book_string_lines(up_to, code_spans),
+                (None, Some((symbol, _))) if language.string_crosses_lines(symbol)
+                        && !get_or_build_plan_of(language).string_shapes[symbol as usize].interpolates =>
+                    lines.book_string_lines(up_to, code_spans),
                 _ => ()
             }
         }
@@ -2676,8 +2703,16 @@ fn lex_line<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: 
         open_string = None;
     }
 
+    // A line beginning inside an interpolating string or a hole is read with the braces searched
+    let mut events = Events::of(candidates, bytes, &plan.finder);
+    let mut with_braces = false;
+    if let Some(hole_finder) = &plan.hole_finder
+            && (!holes.is_empty() || open_string.is_some_and(|(symbol, _)| plan.string_shapes[symbol as usize].interpolates)) {
+        events = Events::scanned_from(bytes, hole_finder, cursor);
+        with_braces = true;
+    }
     let mut info = 'read: {
-        for at in Events::of(candidates, bytes, &plan.finder) {
+        while let Some(at) = events.next() {
             if at < cursor { continue }
             if let Some((symbol, level)) = open_string {
                 let shape = plan.string_shapes[symbol as usize];
@@ -2810,6 +2845,12 @@ fn lex_line<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: 
                             _ => {
                                 open_string = Some((found.symbol, found.level));
                                 opened.string = true;
+                                // From here the holes' braces are candidates
+                                if !with_braces && let Some(hole_finder) = &plan.hole_finder
+                                        && plan.string_shapes[found.symbol as usize].interpolates {
+                                    events = Events::scanned_from(bytes, hole_finder, cursor);
+                                    with_braces = true;
+                                }
                             }
                         }
                     }
