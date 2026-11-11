@@ -7,8 +7,18 @@ ts mts cts
 String symbols
 " '
 
+Regular expression symbols
+/
+Regular expression after
+return typeof instanceof in of new delete void throw case do else
+
 Multi line string symbols
 `
+
+Interpolated string openers
+`
+Interpolation hole
+${ }
 
 Escape character
 \

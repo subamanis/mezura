@@ -77,6 +77,11 @@ const ROLE_RAW_ESCAPED : u8 = 5;
 const ROLE_DELIMITED : u8 = 6;
 // Opens a raw string running to the end of its own line with no closer
 const ROLE_LINE : u8 = 7;
+// A regular expression literal, opened only where the code expects an operand and resolved whole
+// on its line, like a character literal
+const ROLE_REGEX : u8 = 8;
+// The opener of a hole, which applies inside a string whose holes are code and nowhere else
+const ROLE_HOLE_OPEN : u8 = 9;
 
 pub(crate) struct FileReport {
     pub shell: FileStats,
@@ -353,6 +358,12 @@ pub(crate) struct ScanPlan {
     slots: Vec<Slot>,
     symbols: Vec<Box<[u8]>>,
     finder: MaskFinder,
+    // The bytes the string symbols count between, HTML's '<' and '>', candidates like the symbols
+    string_bounds: Option<(u8, u8)>,
+    // The words a regular expression literal may directly follow
+    regex_after: Vec<Box<[u8]>>,
+    // The brace that nests inside a hole and the one that closes it, candidates like the symbols
+    hole_braces: Option<(u8, u8)>,
     // Searched once over the whole file, never by the pass, and numbered after every crossing string
     heredoc: Option<(memmem::Finder<'static>, u8, HeredocRules)>,
     string_shapes: Vec<StringShape>,
@@ -363,6 +374,7 @@ struct StringShape {
     closer: u8,
     doubling: bool,
     run_closes: bool,
+    interpolates: bool,
 }
 
 impl ScanPlan {
@@ -372,8 +384,14 @@ impl ScanPlan {
         // 'Language::get_string_pair_of' answers to
         let mut entries : Vec<PlanEntry> = Vec::new();
         let (symbols, literals) = (language.strings.get_symbols(), language.strings.get_char_literals());
-        for (i, symbol) in symbols.iter().enumerate() {
-            entries.push(PlanEntry::of(STRINGS, i as u8, ROLE_EITHER, symbol.as_bytes()));
+        for i in 0..symbols.len() {
+            match language.get_string_pair_of(i as u8) {
+                (open, close) if open == close => entries.push(PlanEntry::of(STRINGS, i as u8, ROLE_EITHER, open.as_bytes())),
+                (open, close) => {
+                    entries.push(PlanEntry::of(STRINGS, i as u8, ROLE_OPEN, open.as_bytes()));
+                    entries.push(PlanEntry::of(STRINGS, i as u8, ROLE_CLOSE, close.as_bytes()));
+                }
+            }
         }
         for (i, symbol) in literals.iter().enumerate() {
             let index = (symbols.len() + i) as u8;
@@ -382,6 +400,10 @@ impl ScanPlan {
         for (i, symbol) in language.strings.get_line_strings().iter().enumerate() {
             let index = (symbols.len() + literals.len() + i) as u8;
             entries.push(PlanEntry::of(STRINGS, index, ROLE_LINE, symbol.as_bytes()));
+        }
+        for (i, symbol) in language.strings.get_regexes().iter().enumerate() {
+            let index = (symbols.len() + literals.len() + language.strings.get_line_strings().len() + i) as u8;
+            entries.push(PlanEntry::of(STRINGS, index, ROLE_REGEX, symbol.as_bytes()));
         }
         let single_line = language.count_single_line_strings();
         for (i, crossing) in language.strings.get_multiline_strings().iter().enumerate() {
@@ -442,12 +464,18 @@ impl ScanPlan {
                 entry.cancelled_by = *cancelling;
             }
         }
+        let hole_braces = language.strings.get_hole().map(|(open, close)| {
+            entries.push(PlanEntry::of(STRINGS, 0, ROLE_HOLE_OPEN, open.as_bytes()));
+            (open.as_bytes()[open.len() - 1], close.as_bytes()[0])
+        });
         entries.retain(|entry| !entry.bytes.is_empty());
         // Of two symbols beginning together the longer is read, and of two as long the line
         // comment: Vim's '"' opens a comment where it could open a string
         entries.sort_by_key(|entry| (std::cmp::Reverse(entry.bytes.len()), entry.kind != COMMENTS));
 
-        let anchors = anchors_of(&entries);
+        let string_bounds = language.strings_only_between;
+        let presearched = [string_bounds, hole_braces].iter().flatten().flat_map(|(open, close)| [*open, *close]).collect::<Vec<u8>>();
+        let anchors = anchors_of(&entries, &presearched);
         let mut first = [NO_SLOT; 256];
         let (mut slots, mut symbols) = (Vec::with_capacity(entries.len()), Vec::with_capacity(entries.len()));
         for (entry, anchor) in entries.iter().zip(&anchors) {
@@ -477,7 +505,7 @@ impl ScanPlan {
             }
         }
 
-        let finder = MaskFinder::of(&collect_searched_bytes(&entries, &anchors));
+        let finder = MaskFinder::of(&collect_searched_bytes(&entries, &anchors, presearched));
         let strings = &language.strings;
         let heredoc = language.heredoc.map(|rules| (memmem::Finder::new(rules.get_opener().as_bytes()).into_owned(),
                 (single_line + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()) as u8, rules));
@@ -487,8 +515,11 @@ impl ScanPlan {
             closer: language.calculate_string_closer_width(symbol, 0) as u8,
             doubling: language.string_escapes_by_doubling(symbol),
             run_closes: language.string_closes_at_the_end_of_a_run(symbol),
+            interpolates: language.find_leveled_string(symbol).is_none()
+                    && strings.get_interpolating().iter().any(|opener| opener == language.get_string_pair_of(symbol).0),
         }).collect();
-        ScanPlan { first, slots, symbols, finder, heredoc, string_shapes }
+        let regex_after = strings.get_regex_after().iter().map(|word| word.as_bytes().into()).collect();
+        ScanPlan { first, slots, symbols, finder, string_bounds, regex_after, hole_braces, heredoc, string_shapes }
     }
 }
 
@@ -499,10 +530,10 @@ impl ScanPlan {
 //
 // 'r#"' and 'R"(' begin with a letter and are found by the quote their language declares anyway.
 // ')"' begins with a bracket, which stands in front of every call in C++, and is found by that
-// same quote.
-fn anchors_of(entries: &[PlanEntry]) -> Vec<u8> {
+// same quote. The bytes searched anyway, HTML's '<' and '>', come first and cost nothing.
+fn anchors_of(entries: &[PlanEntry], presearched: &[u8]) -> Vec<u8> {
     // A symbol offering one byte has no say in the matter: that byte is searched either way
-    let mut searched : Vec<u8> = Vec::new();
+    let mut searched : Vec<u8> = presearched.to_vec();
     for entry in entries {
         let mut bytes = get_candidate_bytes_of(entry);
         let Some(first) = bytes.next() else { continue };
@@ -541,8 +572,8 @@ fn find_the_byte_reaching_most_of(entries: &[PlanEntry], searched: &[u8]) -> Opt
     best.map(|(byte, _)| byte)
 }
 
-fn collect_searched_bytes(entries: &[PlanEntry], anchors: &[u8]) -> Vec<u8> {
-    let mut searched : Vec<u8> = Vec::new();
+fn collect_searched_bytes(entries: &[PlanEntry], anchors: &[u8], presearched: Vec<u8>) -> Vec<u8> {
+    let mut searched = presearched;
     for (entry, anchor) in entries.iter().zip(anchors) {
         let byte = entry.bytes[*anchor as usize];
         if !searched.contains(&byte) { searched.push(byte) }
@@ -760,7 +791,7 @@ fn match_slot(index: usize, at: usize, bytes: &[u8], plan: &ScanPlan, escape: Op
     let mut role = slot.role;
     if slot.kind == STRINGS && start != 0 && !is_not_escaped(start, bytes, escape) {
         match slot.role {
-            ROLE_EITHER | ROLE_LITERAL => return None,
+            ROLE_EITHER | ROLE_LITERAL | ROLE_REGEX => return None,
             ROLE_RAW => role = ROLE_RAW_ESCAPED,
             _ => ()
         }
@@ -768,6 +799,11 @@ fn match_slot(index: usize, at: usize, bytes: &[u8], plan: &ScanPlan, escape: Op
     if role == ROLE_LITERAL {
         if !in_code { return None }
         let closed_at = find_literal_closer(bytes, start + width, symbol_bytes, escape)?;
+        width = closed_at + symbol_bytes.len() - start;
+    }
+    if role == ROLE_REGEX {
+        if !in_code || !a_pattern_may_begin_at(bytes, start, &plan.regex_after) { return None }
+        let closed_at = find_regex_closer(bytes, start + width, symbol_bytes)?;
         width = closed_at + symbol_bytes.len() - start;
     }
     if role == ROLE_DELIMITED {
@@ -789,6 +825,39 @@ fn find_literal_closer(bytes: &[u8], text_from: usize, symbol: &[u8], escape: Op
         }
         cursor = candidate + 1;
     }
+}
+
+// A pattern stands where the code expects an operand: after an operator, an opening bracket, a
+// separator, one of the language's words that take an expression, or at the start of the line.
+// After a name, a number, ')' or ']' the slash divides. A pattern is never empty and never begins
+// with a quantifier, so '//' and '/*' are the comments they look like.
+fn a_pattern_may_begin_at(bytes: &[u8], start: usize, after_words: &[Box<[u8]>]) -> bool {
+    if matches!(bytes.get(start + 1), None | Some(b'/') | Some(b'*')) { return false }
+    let before = bytes[..start].trim_ascii_end();
+    let Some(&last) = before.last() else { return true };
+    if b"(,=:[!&|?{};+-*%<>~^".contains(&last) { return true }
+    let is_word = |byte: &u8| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$');
+    let word_from = before.iter().rposition(|byte| !is_word(byte)).map_or(0, |at| at + 1);
+    let word = &before[word_from..];
+    !word.is_empty() && after_words.iter().any(|known| **known == *word)
+}
+
+// The next closer outside a '[...]' class and behind no backslash, which is the escape of every
+// pattern whatever the language's strings escape with, on the same line
+fn find_regex_closer(bytes: &[u8], from: usize, closer: &[u8]) -> Option<usize> {
+    let mut cursor = from;
+    let mut in_class = false;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\\' => cursor += 1,
+            b'[' => in_class = true,
+            b']' => in_class = false,
+            _ if !in_class && bytes[cursor..].starts_with(closer) => return Some(cursor),
+            _ => ()
+        }
+        cursor += 1;
+    }
+    None
 }
 
 #[derive(Debug)]
@@ -1060,14 +1129,20 @@ struct MaskedLines<'a> {
     // The lines booked so far, by what they sit in: blank, punctuation, with words
     booked: [[usize; 3]; 3],
     positions: Vec<u32>,
+    // The line a section handed back as its closer's, read next and with its positions still in place
+    put_back: Option<(usize, &'a str, bool)>,
 }
 
 impl<'a> MaskedLines<'a> {
     fn of(contents: &'a str, finder: &'a MaskFinder, positions: Vec<u32>) -> MaskedLines<'a> {
         let mut lines = MaskedLines { contents, finder, start: 0, block_at: 0, newlines: 0, candidates: 0,
-                booked: [[0; 3]; 3], positions };
+                booked: [[0; 3]; 3], positions, put_back: None };
         lines.read_block();
         lines
+    }
+
+    fn put_back(&mut self, line: (usize, &'a str, bool)) {
+        self.put_back = Some(line);
     }
 
     #[inline(always)]
@@ -1087,6 +1162,7 @@ impl<'a> MaskedLines<'a> {
     #[inline(always)]
     fn book_plain_lines(&mut self, inside: Inside, up_to: usize, collecting_spans: bool, code_spans: &mut Vec<(u32, u32)>) {
         let bytes = self.contents.as_bytes();
+        debug_assert!(self.put_back.is_none(), "a line handed back is read before anything is booked");
         if self.start.wrapping_sub(self.block_at) >= BLOCK_BYTES { return }
         loop {
             let before_candidate = match self.candidates { 0 => u64::MAX, bits => (1u64 << bits.trailing_zeros()) - 1 };
@@ -1158,6 +1234,9 @@ impl<'a> Iterator for MaskedLines<'a> {
     // every line back through memory; forced in, since it runs once per line of the corpus
     #[inline(always)]
     fn next(&mut self) -> Option<(usize, &'a str, bool)> {
+        if let Some(line) = self.put_back.take() {
+            return Some(line);
+        }
         let bytes = self.contents.as_bytes();
         self.positions.clear();
         loop {
@@ -1204,10 +1283,14 @@ struct WalkState {
     open_str_symbol: Option<(u8, u32)>,
     // Opened on one line, they close one after the other
     heredocs: Vec<Heredoc>,
+    // The holes being read as code, innermost last, each with the string it resumes
+    holes: Vec<Hole>,
     // Read only while 'open_str_symbol' is a delimited string
     delimiter: Delimiter,
     continued_comment: bool,
     line_bound: Option<(u8, u32)>,
+    // Inside a tag of a language whose strings count only there
+    in_tag: bool,
     opened_line: usize,
 }
 
@@ -1223,6 +1306,13 @@ enum Inside {
     Code,
     BlockComment,
     CrossingString,
+}
+
+// A hole of an interpolated string, read as code down to the brace that brings its depth to zero
+#[derive(Debug, Clone, Copy)]
+struct Hole {
+    string: (u8, u32),
+    depth: u32,
 }
 
 // The closing line is the word behind the indent its opener allowed and alone on the line. Trailing
@@ -1424,18 +1514,15 @@ struct PendingTag<'a> {
 
 impl PendingTag<'_> {
     // Where the first '<' or '>' in the line's code stands, with the text before it gathered, and
-    // None with the whole of its code gathered when the line holds neither
+    // None with the whole line gathered when its code holds neither: the attribute values are
+    // strings, and they are what the text is read for.
     fn gather_line(&mut self, line: &str, code_ranges: &[(usize, usize)]) -> Option<usize> {
-        for (from, to) in code_ranges {
-            let found = memchr::memchr2(b'<', b'>', &line.as_bytes()[*from..*to]).map(|offset| from + offset);
-            // A space before each piece keeps a name at its start apart from the text before it
-            self.text.push(' ');
-            self.text.push_str(&line[*from..found.unwrap_or(*to)]);
-            if found.is_some() {
-                return found;
-            }
-        }
-        None
+        let found = code_ranges.iter().find_map(|(from, to)|
+                memchr::memchr2(b'<', b'>', &line.as_bytes()[*from..*to]).map(|offset| from + offset));
+        // A space before the line keeps a name at its start apart from the text before it
+        self.text.push(' ');
+        self.text.push_str(&line[..found.unwrap_or(line.len())]);
+        found
     }
 }
 
@@ -1502,7 +1589,6 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
     let books_lines = !FULL || (!EXPLAIN && language.heredoc.is_none() && !language.declares_line_bound_comments()
             && language.nested_languages.is_empty());
     let mut lines = MaskedLines::of(contents, &plan.finder, std::mem::take(positions));
-    let mut handed_back = None;
     loop {
         // A string that ends with its line and a line comment carried by a continuation are left to the walk
         if books_lines && !shell.continued_comment {
@@ -1514,13 +1600,7 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
                 _ => ()
             }
         }
-        let (line_start, raw_line, has_candidates) = match handed_back.take() {
-            Some(line) => line,
-            None => match lines.next() {
-                Some(line) => line,
-                None => break
-            }
-        };
+        let Some((line_start, raw_line, has_candidates)) = lines.next() else { break };
         let line_end = line_start + raw_line.len();
         let ranges_wanted = FULL && line_end > quiet_until;
         let plain = !has_candidates && shell.holds_nothing();
@@ -1583,58 +1663,15 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
         if ranges_wanted { quiet_until = find_quiet_until(&test_walk, &declarations); }
 
         // A region opener only counts where the shell left it as code, so one sitting inside a
-        // comment or a string of the shell opens nothing
+        // comment or a string of the shell opens nothing. The tag line itself belongs to the
+        // shell, and anything it left open is cut off at the section boundary: per the HTML
+        // reading, what follows the tag is section content.
         if FULL && had_code && !language.nested_languages.is_empty()
                 && let Some((region, inner)) = find_region_opening(raw_line.trim_ascii(), &scan.code_ranges, language, lookup,
-                        &mut pending_tag) {
-            let section_from = end_of_line(contents, line_start, raw_line);
-            // A section is only a section if it closes. Nothing forces an opener to be a tag rather
-            // than the same text written inside one, and on the strength of one word that is not a
-            // tag the whole rest of the file would go to another language.
-            let Some(closer_at) = find_tag_ignoring_case(&contents.as_bytes()[section_from..],
-                    region.end.as_bytes()) else { continue };
-            let closer_at = section_from + closer_at;
-
-            // The tag line itself belongs to the shell, and anything it left open is cut off at
-            // the section boundary: per the HTML reading, what follows the tag is section content
+                        &mut pending_tag)
+                && read_section::<EXPLAIN>(&mut lines, contents, region, inner, end_of_line(contents, line_start, raw_line),
+                        contents.len(), lookup, matchers, config, scan, &mut buckets, log).is_some() {
             shell = WalkState::default();
-
-            let bucket_at = match buckets.iter().position(|bucket| bucket.language.name == inner.name) {
-                Some(at) => at,
-                None => {
-                    buckets.push(SectionBucket { language: inner,
-                    stats: if config.count_keywords { FileStats::with_keywords(&inner.keywords) }
-                            else { FileStats::default() }, spans: Vec::new(),
-                    collecting_spans: config.count_keywords && matchers.for_language(inner).is_some(),
-                    bytes: 0 });
-                    buckets.len() - 1
-                }
-            };
-            let bucket = &mut buckets[bucket_at];
-            let mut inner_state = WalkState::default();
-            let mut section_to = contents.len();
-            for (inner_start, inner_raw, inner_candidates) in lines.by_ref() {
-                // Per the HTML reading the closer ends the section wherever it stands, even inside
-                // a string of the section's language: that is why one writes '<\/script>' in
-                // JavaScript. The closer's line belongs to the shell.
-                if inner_start + inner_raw.len() > closer_at {
-                    section_to = inner_start;
-                    handed_back = Some((inner_start, inner_raw, inner_candidates));
-                    break;
-                }
-                // A section is written in another language, whose symbols the masks never searched
-                let holds_opener = get_or_build_plan_of(inner).heredoc.as_ref()
-                        .is_some_and(|(finder, _, _)| finder.find(inner_raw.as_bytes()).is_some());
-                if holds_opener {
-                    let rest_from = end_of_line(contents, inner_start, inner_raw).min(closer_at);
-                    collect_heredoc_openings(inner_raw, &contents[rest_from..closer_at], inner, &mut scan.heredoc_openings);
-                }
-                walk_line::<EXPLAIN, true>(inner_raw, inner_start, inner, bucket.collecting_spans,
-                        !inner.nested_languages.is_empty(), Candidates::Unsearched, scan, &mut inner_state,
-                        &mut bucket.stats, &mut bucket.spans, log);
-                if holds_opener { scan.heredoc_openings.clear(); }
-            }
-            bucket.bytes += section_to - section_from;
         }
     }
 
@@ -1681,6 +1718,65 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
         tests: (tests.stats.lines > 0 || whole_file_is_tests).then(|| Box::new(tests)),
         declarations: declarations.map(ModuleDeclarations::into_declarations)
     }
+}
+
+// The lines of a section up to its closer, whose line is handed back to the language around the
+// section, and the bytes the section spans, its own sections included. None, with nothing read,
+// when the region never closes before 'bound': nothing forces an opener to be a tag rather than
+// the same text written inside one, and on the strength of one word that is not a tag the whole
+// rest of the file would go to another language.
+fn read_section<'a, const EXPLAIN: bool>(lines: &mut MaskedLines<'a>, contents: &'a str, region: &NestedLanguage,
+    language: &'a Language, section_from: usize, bound: usize, lookup: &'a NestedLanguageLookup, matchers: &mut KeywordMatchers,
+    config: &EngineConfig, scan: &mut ScanBuffers, buckets: &mut Vec<SectionBucket<'a>>, log: &mut ExplainLog) -> Option<usize>
+{
+    let closer_at = section_from + find_tag_ignoring_case(&contents.as_bytes()[section_from..bound], region.end.as_bytes())?;
+    let bucket_at = match buckets.iter().position(|bucket| bucket.language.name == language.name) {
+        Some(at) => at,
+        None => {
+            buckets.push(SectionBucket { language,
+                    stats: if config.count_keywords { FileStats::with_keywords(&language.keywords) } else { FileStats::default() },
+                    spans: Vec::new(),
+                    collecting_spans: config.count_keywords && matchers.for_language(language).is_some(),
+                    bytes: 0 });
+            buckets.len() - 1
+        }
+    };
+    let mut state = WalkState::default();
+    let mut pending_tag = None;
+    let mut inner_bytes = 0;
+    let mut section_to = contents.len();
+    while let Some((line_start, raw_line, has_candidates)) = lines.next() {
+        // Per the HTML reading the closer ends the section wherever it stands, even inside a
+        // string of the section's language: that is why one writes '<\/script>' in JavaScript.
+        if line_start + raw_line.len() > closer_at {
+            section_to = line_start;
+            lines.put_back((line_start, raw_line, has_candidates));
+            break;
+        }
+        // A section is written in another language, whose symbols the masks never searched
+        let holds_opener = get_or_build_plan_of(language).heredoc.as_ref()
+                .is_some_and(|(finder, _, _)| finder.find(raw_line.as_bytes()).is_some());
+        if holds_opener {
+            let rest_from = end_of_line(contents, line_start, raw_line).min(closer_at);
+            collect_heredoc_openings(raw_line, &contents[rest_from..closer_at], language, &mut scan.heredoc_openings);
+        }
+        let bucket = &mut buckets[bucket_at];
+        let (_, had_code) = walk_line::<EXPLAIN, true>(raw_line, line_start, language, bucket.collecting_spans,
+                !language.nested_languages.is_empty(), Candidates::Unsearched, scan, &mut state, &mut bucket.stats,
+                &mut bucket.spans, log);
+        if holds_opener { scan.heredoc_openings.clear(); }
+        if had_code && !language.nested_languages.is_empty()
+                && let Some((inner_region, inner)) = find_region_opening(raw_line.trim_ascii(), &scan.code_ranges, language,
+                        lookup, &mut pending_tag)
+                && let Some(bytes) = read_section::<EXPLAIN>(lines, contents, inner_region, inner,
+                        end_of_line(contents, line_start, raw_line), closer_at, lookup, matchers, config, scan, buckets, log) {
+            state = WalkState::default();
+            inner_bytes += bytes;
+        }
+    }
+    let bytes = section_to - section_from;
+    buckets[bucket_at].bytes += bytes - inner_bytes;
+    Some(bytes)
 }
 
 impl TestReport {
@@ -1881,9 +1977,12 @@ fn walk_line_symbols<const EXPLAIN: bool, const FULL: bool>(line: &str, lead: us
     }
     let mut line_spans: Vec<Span> = Vec::new();
     let (mut line_info, mut opened_here) = lex_line::<EXPLAIN>(line, language, state.open_comment,
-            state.open_str_symbol, candidates.behind(lead), scan, &mut line_spans);
+            state.open_str_symbol, state.in_tag, &mut state.holes, candidates.behind(lead), scan, &mut line_spans);
 
     state.open_comment = line_info.open_comment_after;
+    state.in_tag = line_info.in_tag_after;
+    // A hole of a string that ends with its line ends with the line too
+    state.holes.retain(|hole| language.string_crosses_lines(hole.string.0));
     // Only a symbol declared to cross lines carries its string to the next one, so the damage of
     // an unbalanced quote is this line and not the rest of the file. A line ending in the
     // continuation symbol is the exception: there the language says the line goes on.
@@ -2149,6 +2248,8 @@ fn mark_as_string(spans: &mut Vec<Span>, from: usize, to: usize) {
 // A region opener that survived the shell's own reading of the line, with the language its section
 // is in. None when its section also closes on the line of the tag's '>', or when no language can be
 // found for it, and both count as shell. A tag whose '>' is on a later line waits in 'pending_tag'.
+// An opener already ending in '>' is whole, PHP's '?>', and carries no attributes. The regions are
+// tried in the order the language declares them.
 fn find_region_opening<'a>(line: &str, code_ranges: &[(usize, usize)], language: &'a Language,
     lookup: &'a NestedLanguageLookup, pending_tag: &mut Option<PendingTag<'a>>) -> Option<(&'a NestedLanguage, &'a Language)>
 {
@@ -2168,32 +2269,38 @@ fn find_region_opening<'a>(line: &str, code_ranges: &[(usize, usize)], language:
             Some(_) => ()
         }
     }
-    for (from, to) in code_ranges {
-        let mut cursor = *from;
-        while let Some(offset) = memchr::memchr(b'<', &bytes[cursor..*to]) {
-            let at = cursor + offset;
-            cursor = at + 1;
-            for region in &language.nested_languages {
-                if !starts_with_ignoring_case(&bytes[at..], region.start.as_bytes()) {
+    for region in &language.nested_languages {
+        let start = region.start.as_bytes();
+        for (from, to) in code_ranges {
+            let mut cursor = *from;
+            while let Some(offset) = memchr::memchr(start[0], &bytes[cursor..*to]) {
+                let at = cursor + offset;
+                cursor = at + 1;
+                if !starts_with_ignoring_case(&bytes[at..], start) {
                     continue;
                 }
-                let after_start = at + region.start.len();
-                // Where the name of the tag ends, so that '<scriptures>' is a word in a page and
-                // not the opener of a script block
-                match bytes.get(after_start) {
-                    Some(byte) if byte.is_ascii_whitespace() || *byte == b'>' => (),
-                    None => (),
-                    _ => continue
-                }
-                let Some(tag_close) = memchr::memchr(b'>', &bytes[after_start..]) else {
-                    *pending_tag = Some(PendingTag { region, text: line[after_start.min(*to)..*to].to_owned() });
-                    return None;
+                let after_start = at + start.len();
+                let (tag_text, after_tag) = match start.ends_with(b">") {
+                    true => ("", after_start),
+                    false => {
+                        // Where the name of the tag ends, so that '<scriptures>' is a word in a
+                        // page and not the opener of a script block
+                        match bytes.get(after_start) {
+                            Some(byte) if byte.is_ascii_whitespace() || *byte == b'>' => (),
+                            None => (),
+                            _ => continue
+                        }
+                        let Some(tag_close) = memchr::memchr(b'>', &bytes[after_start..]) else {
+                            *pending_tag = Some(PendingTag { region, text: line[after_start..].to_owned() });
+                            return None;
+                        };
+                        (&line[after_start..after_start + tag_close], after_start + tag_close)
+                    }
                 };
                 // A section that opens and closes on one line stays shell whole, tags and all
-                if find_tag_ignoring_case(&bytes[after_start + tag_close..], region.end.as_bytes()).is_some() {
+                if find_tag_ignoring_case(&bytes[after_tag..], region.end.as_bytes()).is_some() {
                     continue;
                 }
-                let tag_text = &line[after_start..after_start + tag_close];
                 if let Some(inner) = find_section_language(region, tag_text, lookup) {
                     return Some((region, inner));
                 }
@@ -2249,12 +2356,17 @@ fn starts_with_ignoring_case(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 // Both cases of the needle's first byte are searched, so '</SCRIPT>' is found as readily as
-// '</script>'.
+// '</script>'. A needle ending in '>' is a tag and ends where a tag's name does; one without it
+// is matched as written, so PHP's '<?' finds '<?php' and '<?='.
 fn find_tag_ignoring_case(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    let name = needle.strip_suffix(b">").unwrap_or(needle);
+    let (name, is_tag) = match needle.strip_suffix(b">") {
+        Some(name) => (name, true),
+        None => (needle, false)
+    };
     let first = *name.first()?;
     memchr::memchr2_iter(first.to_ascii_lowercase(), first.to_ascii_uppercase(), haystack)
-            .find(|at| closes_a_tag(&haystack[*at..], name))
+            .find(|at| starts_with_ignoring_case(&haystack[*at..], name)
+                    && (!is_tag || ends_as_a_tag_name(&haystack[*at + name.len()..])))
 }
 
 // The closing tag is read the way 'find_region_opening' reads the opening one: the name, then
@@ -2262,15 +2374,12 @@ fn find_tag_ignoring_case(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 // browser agrees: measured, '</script >' and '</script foo>' both close the element while
 // '</scriptfoo>' is a different name and closes nothing. A closer that never reaches a '>' on the
 // line it began is not a tag.
-fn closes_a_tag(rest: &[u8], name: &[u8]) -> bool {
-    if !starts_with_ignoring_case(rest, name) {
-        return false;
-    }
-    match rest.get(name.len()) {
+fn ends_as_a_tag_name(after_name: &[u8]) -> bool {
+    match after_name.first() {
         Some(b'>') => true,
         Some(byte) if byte.is_ascii_whitespace() => {
-            let line_end = memchr::memchr(b'\n', rest).unwrap_or(rest.len());
-            memchr::memchr(b'>', &rest[name.len()..line_end]).is_some()
+            let line_end = memchr::memchr(b'\n', after_name).unwrap_or(after_name.len());
+            memchr::memchr(b'>', &after_name[..line_end]).is_some()
         },
         _ => false
     }
@@ -2293,20 +2402,24 @@ struct LineInfo {
     has_code: bool,
     has_string_literal: bool,
     open_comment_after: Option<(u8, u32)>,
-    open_str_symbol_after: Option<(u8, u32)>
+    open_str_symbol_after: Option<(u8, u32)>,
+    // Whether the line ends inside a tag of a language whose strings count only there
+    in_tag_after: bool,
 }
 
 impl LineInfo {
     fn of(has_code: bool, has_string_literal: bool) -> LineInfo {
-        LineInfo { has_code, has_string_literal, open_comment_after: None, open_str_symbol_after: None }
+        LineInfo { has_code, has_string_literal, open_comment_after: None, open_str_symbol_after: None, in_tag_after: false }
     }
 
     fn with_open_comment(has_code: bool, has_string_literal: bool, symbol: u8, depth: u32) -> LineInfo {
-        LineInfo { has_code, has_string_literal, open_comment_after: Some((symbol, depth)), open_str_symbol_after: None }
+        LineInfo { has_code, has_string_literal, open_comment_after: Some((symbol, depth)), open_str_symbol_after: None,
+                in_tag_after: false }
     }
 
     fn with_open_string(has_code: bool, symbol: Option<(u8, u32)>) -> LineInfo {
-        LineInfo { has_code, has_string_literal: true, open_comment_after: None, open_str_symbol_after: symbol }
+        LineInfo { has_code, has_string_literal: true, open_comment_after: None, open_str_symbol_after: symbol,
+                in_tag_after: false }
     }
 }
 
@@ -2391,15 +2504,15 @@ fn note_span<const EXPLAIN: bool>(spans: &mut Vec<Span>, from: usize, to: usize,
 // One pass over the candidate bytes of a line with what is open carried along. The code stretches
 // go to 'ScanBuffers::code_ranges', the spans to 'spans' when explaining.
 fn lex_line<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
-    open_str_symbol: Option<(u8, u32)>, candidates: Candidates, buffers: &mut ScanBuffers, spans: &mut Vec<Span>)
--> (LineInfo, OpenedHere)
+    open_str_symbol: Option<(u8, u32)>, in_tag: bool, holes: &mut Vec<Hole>, candidates: Candidates,
+    buffers: &mut ScanBuffers, spans: &mut Vec<Span>) -> (LineInfo, OpenedHere)
 {
     let plan = get_or_build_plan_of(language);
     let bytes = line.as_bytes();
     let escape = language.strings.get_escape();
     let ScanBuffers { code_ranges, delimiter, .. } = buffers;
     code_ranges.clear();
-    let (mut open_comment, mut open_string) = (open_comment, open_str_symbol);
+    let (mut open_comment, mut open_string, mut in_tag) = (open_comment, open_str_symbol, in_tag);
     let mut has_string_literal = open_string.is_some();
     let mut opened = OpenedHere::default();
     // Where the stretch being read began, and the first byte no symbol has taken yet
@@ -2410,7 +2523,7 @@ fn lex_line<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: 
         let closer = language.get_string_pair_of(symbol).1.as_bytes();
         let Some(closed_at) = find_delimited_closer(bytes, 0, closer, delimiter.as_bytes()) else {
             note_span::<EXPLAIN>(spans, 0, bytes.len(), SpanKind::String);
-            return (LineInfo::with_open_string(false, open_string), opened);
+            return (LineInfo { in_tag_after: in_tag, ..LineInfo::with_open_string(false, open_string) }, opened);
         };
         cursor = closed_at + delimiter.as_bytes().len() + closer.len();
         note_span::<EXPLAIN>(spans, 0, cursor, SpanKind::String);
@@ -2418,119 +2531,164 @@ fn lex_line<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: 
         open_string = None;
     }
 
-    for at in Events::of(candidates, bytes, &plan.finder) {
-        if at < cursor { continue }
-        if let Some((symbol, level)) = open_string {
-            let Some(found) = read_symbol_at(at, cursor, bytes, plan, escape, false, |found|
-                    found.kind == STRINGS && !matches!(found.role, ROLE_OPEN | ROLE_DELIMITED | ROLE_LINE)
-                    && language.string_is_closed_by((symbol, level), (found.symbol, found.level))) else { continue };
-            let shape = plan.string_shapes[symbol as usize];
-            let length = shape.closer as usize + level as usize;
-            // The closer written twice inside the string is one quote of its text
-            if shape.doubling && bytes[found.start + length..].starts_with(&bytes[found.start..found.start + length]) {
-                cursor = found.start + 2 * length;
-                continue;
-            }
-            // '""""' ends a '"""' string at its last quote, and the one before is text
-            let in_front = match shape.run_closes {
-                true => bytes[found.start + length..].iter().take_while(|byte| **byte == bytes[found.start]).count(),
-                false => 0
-            };
-            cursor = found.start + in_front + length;
-            note_span::<EXPLAIN>(spans, from, cursor, SpanKind::String);
-            from = cursor;
-            open_string = None;
-            has_string_literal = true;
-        } else if let Some((pair, carried)) = open_comment {
-            let leveled = language.comment_is_leveled(pair);
-            let nests = language.comment_nests(pair);
-            let Some(found) = read_symbol_at(at, cursor, bytes, plan, escape, false, |found| found.symbol == pair
-                    && match found.kind {
-                        COM_ENDS => !leveled || found.level == carried,
-                        COM_STARTS => nests || language.comment_closes_with_its_opener(pair),
-                        _ => false
-                    }) else { continue };
-            cursor = found.start + found.width;
-            if found.kind == COM_STARTS && nests {
-                open_comment = Some((pair, carried.saturating_add(1)));
-            } else if nests && carried > 1 {
-                open_comment = Some((pair, carried - 1));
-            } else {
-                note_span::<EXPLAIN>(spans, from, cursor, SpanKind::Comment);
-                from = cursor;
-                open_comment = None;
-            }
-        } else {
-            let Some(found) = read_symbol_at(at, cursor, bytes, plan, escape, true, |found| match found.kind {
-                        STRINGS => !matches!(found.role, ROLE_CLOSE | ROLE_RAW_ESCAPED),
-                        COM_ENDS => false,
-                        _ => true
-                    }) else { continue };
-            push_code(code_ranges, line, from, found.start);
-            note_span::<EXPLAIN>(spans, from, found.start, SpanKind::Code);
-            from = found.start;
-            cursor = found.start + found.width;
-            match found.kind {
-                COMMENTS => {
-                    note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::Comment);
-                    opened.ended_in_line_comment = true;
-                    return (LineInfo::of(!code_ranges.is_empty(), has_string_literal), opened);
-                },
-                COM_STARTS => {
-                    let level = if language.comment_is_leveled(found.symbol) { found.level } else { 1 };
-                    open_comment = Some((found.symbol, level));
-                    opened.comment = true;
-                },
-                _ => {
+    let mut info = 'read: {
+        for at in Events::of(candidates, bytes, &plan.finder) {
+            if at < cursor { continue }
+            if let Some((symbol, level)) = open_string {
+                let shape = plan.string_shapes[symbol as usize];
+                let Some(found) = read_symbol_at(at, cursor, bytes, plan, escape, false, |found|
+                        found.kind == STRINGS && match found.role {
+                            ROLE_HOLE_OPEN => shape.interpolates,
+                            ROLE_OPEN | ROLE_DELIMITED | ROLE_LINE | ROLE_REGEX => false,
+                            _ => language.string_is_closed_by((symbol, level), (found.symbol, found.level))
+                        }) else { continue };
+                if found.role == ROLE_HOLE_OPEN {
+                    // The opener written twice is one brace of the text
+                    if found.width == 1 && bytes.get(found.start + 1) == Some(&bytes[found.start]) {
+                        cursor = found.start + 2;
+                        continue;
+                    }
+                    cursor = found.start + found.width;
+                    note_span::<EXPLAIN>(spans, from, cursor, SpanKind::String);
+                    from = cursor;
+                    holes.push(Hole { string: (symbol, level), depth: 1 });
+                    open_string = None;
                     has_string_literal = true;
-                    match found.role {
-                        ROLE_LITERAL => {
-                            note_span::<EXPLAIN>(spans, from, cursor, SpanKind::String);
-                            from = cursor;
-                        },
-                        ROLE_LINE => {
-                            note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::String);
-                            return (LineInfo::of(!code_ranges.is_empty(), true), opened);
-                        },
-                        ROLE_DELIMITED => {
-                            let closer = language.get_string_pair_of(found.symbol).1.as_bytes();
-                            let width = found.level as usize;
-                            *delimiter = Delimiter::of(&bytes[cursor..cursor + width]);
-                            cursor += width + 1;
-                            match find_delimited_closer(bytes, cursor, closer, delimiter.as_bytes()) {
-                                Some(closed_at) => {
-                                    cursor = closed_at + width + closer.len();
-                                    note_span::<EXPLAIN>(spans, from, cursor, SpanKind::String);
-                                    from = cursor;
-                                },
-                                None => {
-                                    open_string = Some((found.symbol, 0));
-                                    opened.string = true;
+                    continue;
+                }
+                let length = shape.closer as usize + level as usize;
+                // The closer written twice inside the string is one quote of its text
+                if shape.doubling && bytes[found.start + length..].starts_with(&bytes[found.start..found.start + length]) {
+                    cursor = found.start + 2 * length;
+                    continue;
+                }
+                // '""""' ends a '"""' string at its last quote, and the one before is text
+                let in_front = match shape.run_closes {
+                    true => bytes[found.start + length..].iter().take_while(|byte| **byte == bytes[found.start]).count(),
+                    false => 0
+                };
+                cursor = found.start + in_front + length;
+                note_span::<EXPLAIN>(spans, from, cursor, SpanKind::String);
+                from = cursor;
+                open_string = None;
+                has_string_literal = true;
+            } else if let Some((pair, carried)) = open_comment {
+                let leveled = language.comment_is_leveled(pair);
+                let nests = language.comment_nests(pair);
+                let Some(found) = read_symbol_at(at, cursor, bytes, plan, escape, false, |found| found.symbol == pair
+                        && match found.kind {
+                            COM_ENDS => !leveled || found.level == carried,
+                            COM_STARTS => nests || language.comment_closes_with_its_opener(pair),
+                            _ => false
+                        }) else { continue };
+                cursor = found.start + found.width;
+                if found.kind == COM_STARTS && nests {
+                    open_comment = Some((pair, carried.saturating_add(1)));
+                } else if nests && carried > 1 {
+                    open_comment = Some((pair, carried - 1));
+                } else {
+                    note_span::<EXPLAIN>(spans, from, cursor, SpanKind::Comment);
+                    from = cursor;
+                    open_comment = None;
+                }
+            } else {
+                let Some(found) = read_symbol_at(at, cursor, bytes, plan, escape, true, |found| match found.kind {
+                            STRINGS => !matches!(found.role, ROLE_CLOSE | ROLE_RAW_ESCAPED | ROLE_HOLE_OPEN)
+                                    && (in_tag || plan.string_bounds.is_none()),
+                            COM_ENDS => false,
+                            _ => true
+                        }) else {
+                    // A tag opens at a '<' followed by a name, '/', '!' or '?', as HTML reads it
+                    if let Some((open, close)) = plan.string_bounds {
+                        if bytes[at] == close {
+                            in_tag = false;
+                        } else if bytes[at] == open && bytes.get(at + 1)
+                                .is_some_and(|next| next.is_ascii_alphabetic() || matches!(next, b'/' | b'!' | b'?')) {
+                            in_tag = true;
+                        }
+                    }
+                    // Inside a hole the braces nest, and the one bringing the depth to zero resumes
+                    // the string, as its text
+                    if let Some((nest, close)) = plan.hole_braces && let Some(hole) = holes.last_mut()
+                            && (bytes[at] == nest || bytes[at] == close) {
+                        hole.depth = if bytes[at] == nest { hole.depth + 1 } else { hole.depth - 1 };
+                        if hole.depth == 0 {
+                            open_string = holes.pop().map(|hole| hole.string);
+                            push_code(code_ranges, line, from, at);
+                            note_span::<EXPLAIN>(spans, from, at, SpanKind::Code);
+                            from = at;
+                            cursor = at + 1;
+                        }
+                    }
+                    continue;
+                };
+                push_code(code_ranges, line, from, found.start);
+                note_span::<EXPLAIN>(spans, from, found.start, SpanKind::Code);
+                from = found.start;
+                cursor = found.start + found.width;
+                match found.kind {
+                    COMMENTS => {
+                        note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::Comment);
+                        opened.ended_in_line_comment = true;
+                        break 'read LineInfo::of(!code_ranges.is_empty(), has_string_literal);
+                    },
+                    COM_STARTS => {
+                        let level = if language.comment_is_leveled(found.symbol) { found.level } else { 1 };
+                        open_comment = Some((found.symbol, level));
+                        opened.comment = true;
+                    },
+                    _ => {
+                        has_string_literal = true;
+                        match found.role {
+                            ROLE_LITERAL | ROLE_REGEX => {
+                                note_span::<EXPLAIN>(spans, from, cursor, SpanKind::String);
+                                from = cursor;
+                            },
+                            ROLE_LINE => {
+                                note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::String);
+                                break 'read LineInfo::of(!code_ranges.is_empty(), true);
+                            },
+                            ROLE_DELIMITED => {
+                                let closer = language.get_string_pair_of(found.symbol).1.as_bytes();
+                                let width = found.level as usize;
+                                *delimiter = Delimiter::of(&bytes[cursor..cursor + width]);
+                                cursor += width + 1;
+                                match find_delimited_closer(bytes, cursor, closer, delimiter.as_bytes()) {
+                                    Some(closed_at) => {
+                                        cursor = closed_at + width + closer.len();
+                                        note_span::<EXPLAIN>(spans, from, cursor, SpanKind::String);
+                                        from = cursor;
+                                    },
+                                    None => {
+                                        open_string = Some((found.symbol, 0));
+                                        opened.string = true;
+                                    }
                                 }
+                            },
+                            _ => {
+                                open_string = Some((found.symbol, found.level));
+                                opened.string = true;
                             }
-                        },
-                        _ => {
-                            open_string = Some((found.symbol, found.level));
-                            opened.string = true;
                         }
                     }
                 }
             }
         }
-    }
 
-    if let Some(open) = open_string {
-        note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::String);
-        return (LineInfo::with_open_string(!code_ranges.is_empty(), Some(open)), opened);
-    }
-    if let Some((pair, depth)) = open_comment {
-        note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::Comment);
-        return (LineInfo::with_open_comment(has_string_literal || !code_ranges.is_empty(), has_string_literal, pair, depth),
-                opened);
-    }
-    push_code(code_ranges, line, from, bytes.len());
-    note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::Code);
-    (LineInfo::of(!code_ranges.is_empty(), has_string_literal), opened)
+        if let Some(open) = open_string {
+            note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::String);
+            break 'read LineInfo::with_open_string(!code_ranges.is_empty(), Some(open));
+        }
+        if let Some((pair, depth)) = open_comment {
+            note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::Comment);
+            break 'read LineInfo::with_open_comment(has_string_literal || !code_ranges.is_empty(), has_string_literal, pair, depth);
+        }
+        push_code(code_ranges, line, from, bytes.len());
+        note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::Code);
+        LineInfo::of(!code_ranges.is_empty(), has_string_literal)
+    };
+    info.in_tag_after = in_tag;
+    (info, opened)
 }
 
 // Only the front of the first stretch and the back of the last are trimmed, and a stretch that
@@ -2709,8 +2867,8 @@ mod tests {
 
     fn bounds_multi_deep(line: &str, language: &Language, open_comment: Option<(u8, u32)>, open_str_symbol: Option<(u8, u32)>) -> TextInfo {
         let mut buffers = ScanBuffers::default();
-        let (info, _) = lex_line::<false>(line, language, open_comment, open_str_symbol, Candidates::Unsearched,
-                &mut buffers, &mut Vec::new());
+        let (info, _) = lex_line::<false>(line, language, open_comment, open_str_symbol, false, &mut Vec::new(),
+                Candidates::Unsearched, &mut buffers, &mut Vec::new());
         text_of(line, info, &buffers)
     }
 
@@ -2718,8 +2876,8 @@ mod tests {
     // before has no beginning here and one left open has no end.
     fn string_edges(line: &str, language: &Language, open_str_symbol: Option<u8>) -> Vec<usize> {
         let mut spans = Vec::new();
-        let (info, _) = lex_line::<true>(line, language, None, open_str_symbol.map(|symbol| (symbol, 0)),
-                Candidates::Unsearched, &mut ScanBuffers::default(), &mut spans);
+        let (info, _) = lex_line::<true>(line, language, None, open_str_symbol.map(|symbol| (symbol, 0)), false,
+                &mut Vec::new(), Candidates::Unsearched, &mut ScanBuffers::default(), &mut spans);
         let mut edges = spans.iter().filter(|span| span.kind == SpanKind::String)
                 .flat_map(|span| [span.from, span.to]).collect::<Vec<_>>();
         if info.open_str_symbol_after.is_some() {
@@ -2733,7 +2891,8 @@ mod tests {
 
     fn comment_edges(line: &str, language: &Language) -> Vec<usize> {
         let mut spans = Vec::new();
-        lex_line::<true>(line, language, None, None, Candidates::Unsearched, &mut ScanBuffers::default(), &mut spans);
+        lex_line::<true>(line, language, None, None, false, &mut Vec::new(), Candidates::Unsearched, &mut ScanBuffers::default(),
+                &mut spans);
         spans.iter().filter(|span| span.kind == SpanKind::Comment).map(|span| span.from).collect()
     }
 
@@ -3160,7 +3319,7 @@ mod tests {
         let read = |candidates: Candidates, open_comment, open_str_symbol| {
             let mut buffers = ScanBuffers::default();
             let mut spans = Vec::new();
-            let answer = lex_line::<true>(line, &RUST, open_comment, open_str_symbol, candidates,
+            let answer = lex_line::<true>(line, &RUST, open_comment, open_str_symbol, false, &mut Vec::new(), candidates,
                     &mut buffers, &mut spans);
             (answer, spans)
         };
@@ -3229,7 +3388,8 @@ mod tests {
         let mut file_stats = FileStats::with_keywords(&[STRUCT.clone(),ENUM.clone(),TRAIT.clone()]);
         let matcher = KeywordMatcher::build(&RUST).unwrap();
         let mut buffers = ScanBuffers::default();
-        let (info, _) = lex_line::<false>(line, &RUST, None, None, Candidates::Unsearched, &mut buffers, &mut Vec::new());
+        let (info, _) = lex_line::<false>(line, &RUST, None, None, false, &mut Vec::new(), Candidates::Unsearched, &mut buffers,
+                &mut Vec::new());
         let mut spans = Vec::new();
         assert!(info.has_code);
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
@@ -3240,7 +3400,8 @@ mod tests {
         let line = "struct a;";
         let mut file_stats = FileStats::with_keywords(&[STRUCT.clone(),ENUM.clone(),TRAIT.clone()]);
         let mut buffers = ScanBuffers::default();
-        let (info, _) = lex_line::<false>(line, &RUST, None, None, Candidates::Unsearched, &mut buffers, &mut Vec::new());
+        let (info, _) = lex_line::<false>(line, &RUST, None, None, false, &mut Vec::new(), Candidates::Unsearched, &mut buffers,
+                &mut Vec::new());
         let mut spans = Vec::new();
         assert!(info.has_code);
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
@@ -3752,6 +3913,71 @@ mod tests {
         // the literal's halves inside it read as text
         assert_eq!(TextInfo::new(Some(" after".to_owned()), true, None, None),
                 bounds_multi("tick ' text\" after", &RUST_CHARS, None, Some(1)));
+    }
+
+    // A pattern opens only where the code expects an operand and a division stands where it
+    // expects an operator, read off what stands before the slash. The pattern is resolved whole on
+    // its line like a character literal, so its quotes and comment symbols are text.
+    #[test]
+    fn a_regular_expression_opens_where_an_operand_may_stand_and_a_division_opens_nothing() {
+        let js = LANGUAGE_MAP_REF.get("JavaScript").unwrap();
+        // 7010: the quote in the pattern opens no string, so the comment after it is read
+        assert_eq!(TextInfo::new(Some("let re = ; ".to_owned()), true, Some((0, 1)), None),
+                bounds_multi("let re = /\"/; /* a real comment", js, None, None));
+        // 7020: a comment opener inside a class is text
+        assert_eq!(TextInfo::from_slice_w_literal("let re = ;"), bounds_multi("let re = /a[/*]b/;", js, None, None));
+        // after a name, a number, ')' or ']' the slash divides, and the comment after it is read
+        for line in ["x = a / b / c; // c", "x = 4 / 2; // c", "x = (a) / 2; // c", "x = a[0] / 2; // c"] {
+            let code = &line[..line.find("//").unwrap()];
+            assert_eq!(TextInfo::from_slice(code), bounds_multi(line, js, None, None), "{line}");
+        }
+        // after an operator, an opening bracket, a separator, a keyword or at the start of the line it opens
+        for line in ["x = /re/;", "f(/re/);", "return /re/.test(s);", "if (typeof /re/ === x) {}", "/re/.test(s);",
+                "x = y ? /a/ : /b/;", "x = a.b || /c/.test(d);"] {
+            assert!(bounds_multi(line, js, None, None).has_string_literal, "{line} opened no pattern");
+        }
+        // '//' and '/*' are the comments they look like wherever they stand
+        assert_eq!(TextInfo::none_all(false), bounds_multi("// x", js, None, None));
+        assert_eq!(vec![0], comment_edges("/* x */ y", js));
+        assert_eq!(TextInfo::from_slice("x = y; "), bounds_multi("x = y; // z", js, None, None));
+        // an escaped slash and one inside a class do not close the pattern
+        assert_eq!(TextInfo::from_slice_w_literal("x = .test(s);"), bounds_multi("x = /a\\/b[/]c/.test(s);", js, None, None));
+        // a slash with no closer on its line is no pattern, so the quote after it opens its string
+        assert_eq!(TextInfo::from_slice_w_literal("x = (/ ;"), bounds_multi("x = (/ \"s\";", js, None, None));
+        // and inside a string or a comment the slash is text
+        assert_eq!(TextInfo::from_slice_w_literal("s = ;"), bounds_multi("s = \"a /b\\\"/ c\";", js, None, None));
+    }
+
+    // The code in a hole is read with every rule of the language, so a quote there closes
+    // nothing, and the string resumes at the brace closing the hole, on this line or a later one
+    #[test]
+    fn a_hole_of_an_interpolated_string_is_code_and_the_string_resumes_at_its_closing_brace() {
+        let cs = LANGUAGE_MAP_REF.get("C#").unwrap();
+        // 2077: the string runs on past the hole and its quote
+        let first = bounds_multi("var row = $@\"Name: {(quoted ? '\"' : ' ')}", cs, None, None);
+        assert_eq!(Some("var row = (quoted ?  : )".to_owned()), first.cleansed_string);
+        let open = first.open_str_symbol_after.expect("the string was closed by the quote in its hole").0;
+        assert_eq!(TextInfo::new(None, true, None, Some(open)), bounds_multi("// still inside the string", cs, None, Some(open)));
+        assert_eq!(TextInfo::from_slice_w_literal(";"), bounds_multi("\";", cs, None, Some(open)));
+
+        // the opener written twice is text, braces nest inside a hole, and a hole may hold a string
+        assert_eq!(TextInfo::from_slice_w_literal("var s = y;"), bounds_multi("var s = $\"{{x}} {y}\";", cs, None, None));
+        assert_eq!(TextInfo::from_slice_w_literal("var s = new[] {1,2}.Length;"),
+                bounds_multi("var s = $\"{new[] {1,2}.Length}\";", cs, None, None));
+        assert_eq!(TextInfo::from_slice_w_literal("var s = a ?  : ;"), bounds_multi("var s = $\"{a ? \"b\" : \"c\"}\";", cs, None, None));
+        // a plain string has no holes, so its braces are text
+        assert_eq!(TextInfo::from_slice_w_literal("var s = ;"), bounds_multi("var s = \"{\\\"}\";", cs, None, None));
+        // the hole of a string that ends with its line ends with the line too, so a brace on the
+        // next line resumes nothing
+        let report = parse_lines_report("var s = $\"{x\n} var t = \"y\";\nvar u = 1;\n", cs, &shipped_lookup(),
+                &EngineConfig::default(), TestsByPath::Nothing);
+        assert_eq!((3, 3, 0), content_counts(&report.shell));
+
+        let js = LANGUAGE_MAP_REF.get("JavaScript").unwrap();
+        assert_eq!(TextInfo::from_slice_w_literal("x = b ?  : ;"), bounds_multi("x = `a ${b ? \"c\" : 'd'} e`;", js, None, None));
+        // a hole spanning lines of a template, with a template inside it
+        let first = bounds_multi("x = `a ${", js, None, None);
+        assert_eq!((Some("x = ".to_owned()), true, None), (first.cleansed_string, first.has_string_literal, first.open_str_symbol_after));
     }
 
     // The symbol is found by the quote the language already declares and checked backwards, so
@@ -4776,6 +5002,36 @@ mod tests {
         assert_eq!((3, 1, 2), content_counts(&report.sections[0].stats));
     }
 
+    // PHP returns to its page at '?>' and the page returns to PHP at '<?', the lines of both tags
+    // being PHP, and the page's own script is a section of the section
+    #[test]
+    fn a_php_file_returns_to_its_page_between_its_blocks_and_the_page_holds_its_own_sections() {
+        let php = LANGUAGE_MAP_REF.get("PHP").unwrap();
+        let contents = "<?php\n?>\n<p>hello</p>\n<!-- an html comment -->\n<?php\necho \"hi\";\n?>\n";
+        let report = parse_lines_report(contents, php, &shipped_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
+        assert_eq!((5, 3, 0), content_counts(&report.shell), "the tag lines belong to php, the '?>' ones as punctuation");
+        assert_eq!(1, report.sections.len());
+        assert_eq!(("HTML", (2, 1, 1)), (report.sections[0].language.as_str(), content_counts(&report.sections[0].stats)));
+        assert_eq!("<p>hello</p>\n<!-- an html comment -->\n".len(), report.sections[0].bytes);
+
+        let contents = "<?php\n?>\n<div>\n<script>\n// a js comment\nvar x = 1;\n</script>\n</div>\n<?php\necho \"hi\";\n?>\n";
+        let report = parse_lines_report(contents, php, &shipped_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
+        assert_eq!((5, 3, 0), content_counts(&report.shell));
+        let [html, js] = report.sections.as_slice() else { panic!("{} sections", report.sections.len()) };
+        assert_eq!(("HTML", (4, 4, 0)), (html.language.as_str(), content_counts(&html.stats)));
+        assert_eq!(("JavaScript", (2, 1, 1)), (js.language.as_str(), content_counts(&js.stats)));
+        assert_eq!("<div>\n<script>\n</script>\n</div>\n".len(), html.bytes, "the bytes of the script are the script's");
+        assert_eq!("// a js comment\nvar x = 1;\n".len(), js.bytes);
+        assert_eq!(contents.lines().count(), report.total_lines());
+
+        // A page whose script never closes before PHP resumes stays a page, and PHP resumes
+        let contents = "<?php\n?>\n<script>\n// text\n<?php\n?>\n";
+        let report = parse_lines_report(contents, php, &shipped_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
+        assert_eq!(1, report.sections.len(), "an unclosed script took the rest of the page");
+        assert_eq!(("HTML", (2, 2, 0)), (report.sections[0].language.as_str(), content_counts(&report.sections[0].stats)));
+        assert_eq!(4, report.shell.lines);
+    }
+
     // A string ends with its line unless its symbol was declared to cross lines.
     #[test]
     fn an_unbalanced_quote_costs_its_line_and_not_the_rest_of_the_file() {
@@ -4984,7 +5240,7 @@ mod tests {
             let lead = raw_line.len() - from_start.len();
             let lex = |candidates: Candidates| {
                 let (mut buffers, mut spans) = (ScanBuffers::default(), Vec::new());
-                let (info, _) = lex_line::<true>(line, &RUST, None, None, candidates, &mut buffers, &mut spans);
+                let (info, _) = lex_line::<true>(line, &RUST, None, None, false, &mut Vec::new(), candidates, &mut buffers, &mut spans);
                 (info, buffers.code_ranges, spans)
             };
             assert_eq!(lex(Candidates::Unsearched), lex(Candidates::At(lines.positions(), lead)),

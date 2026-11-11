@@ -107,9 +107,14 @@ const PAIRED_STRING_OPENERS    : &str = "Paired string openers";
 const PAIRED_STRING_CLOSERS    : &str = "Paired string closers";
 const PAIRED_STRINGS_ESCAPED_BY_DOUBLING : &str = "Paired strings escaped by doubling";
 const PAIRED_STRINGS_WITH_A_DELIMITER : &str = "Paired strings with a delimiter";
+const INTERPOLATED_STRING_OPENERS : &str = "Interpolated string openers";
+const INTERPOLATION_HOLE       : &str = "Interpolation hole";
 const HEREDOC                  : &str = "Heredoc";
 const CHARACTER_LITERALS       : &str = "Character literal symbols";
 const LINE_STRINGS             : &str = "Line string symbols";
+const REGEX_SYMBOLS            : &str = "Regular expression symbols";
+const REGEX_AFTER              : &str = "Regular expression after";
+const STRINGS_ONLY_BETWEEN     : &str = "Strings only between";
 const ESCAPE_CHARACTER         : &str = "Escape character";
 const ESCAPES_NOTHING          : &str = "none";
 const LINE_CONTINUATION        : &str = "Line continuation";
@@ -363,6 +368,22 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines)?;
     }
 
+    // A pattern between two slashes, JavaScript's '/re/', which opens only where the code expects
+    // an operand: after an operator, an opening bracket, a separator, the start of the line, or
+    // one of the words of the second block. After a name, a number, ')' or ']' the slash divides.
+    let mut regexes = Vec::new();
+    let mut regex_after = Vec::new();
+    if header == REGEX_SYMBOLS {
+        regexes = split_line_on_whitespace(&read_value_line(lines)?);
+        if regexes.is_empty() {return None;}
+        header = read_next_header(lines)?;
+        if header == REGEX_AFTER {
+            regex_after = split_line_on_whitespace(&read_value_line(lines)?);
+            if regex_after.is_empty() {return None;}
+            header = read_next_header(lines)?;
+        }
+    }
+
     // A symbol belongs to exactly one of the lists, the way a comment symbol does: a string that
     // ends with its line goes above, one that crosses lines goes here. Declaring the same symbol
     // twice would leave the two answers to argue, so it refuses the file.
@@ -433,6 +454,24 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         header = read_next_header(lines)?;
     }
 
+    // The strings whose holes are code, C#'s '$"' and JavaScript's backtick, each an opener
+    // declared above, and the hole's opener and one-byte closer. The code in a hole is read with
+    // every rule of the language and the string resumes at the brace closing the hole.
+    let mut interpolated_openers = Vec::new();
+    let mut hole = None;
+    if header == INTERPOLATED_STRING_OPENERS {
+        interpolated_openers = split_line_on_whitespace(&read_value_line(lines)?);
+        let is_declared = |opener: &String| string_symbols.contains(opener) || multiline_strings.contains(opener)
+                || raw_multiline_strings.contains(opener) || string_pairs.iter().any(|(open, _)| open == opener);
+        if interpolated_openers.is_empty() || !interpolated_openers.iter().all(is_declared) {return None;}
+        if read_next_header(lines)?.as_str() != INTERPOLATION_HOLE {return None;}
+        let braces = split_line_on_whitespace(&read_value_line(lines)?);
+        let [open, close] = braces.as_slice() else { return None };
+        if close.len() != 1 {return None;}
+        hole = Some((open.clone(), close.clone()));
+        header = read_next_header(lines)?;
+    }
+
     let mut heredoc = None;
     if header == HEREDOC {
         heredoc = Some(HeredocRules::parse(read_value_line(lines)?.trim())?);
@@ -445,8 +484,22 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     // escapes.
     let mut escape_character = None;
     let declares_a_string = !string_symbols.is_empty() || !char_literals.is_empty()
-            || !line_strings.is_empty() || !multiline_strings.is_empty() || !raw_multiline_strings.is_empty()
+            || !line_strings.is_empty() || !regexes.is_empty() || !multiline_strings.is_empty() || !raw_multiline_strings.is_empty()
             || !string_pairs.is_empty() || !leveled_strings.is_empty() || heredoc.is_some();
+
+    // Where the string symbols count, for a markup language: between HTML's '<' and '>' a quote
+    // delimits an attribute, and the text outside them is full of apostrophes. Two bytes, since
+    // the lexer reads them as single candidate bytes.
+    let mut strings_only_between = None;
+    if header == STRINGS_ONLY_BETWEEN {
+        let bounds = split_line_on_whitespace(&read_value_line(lines)?);
+        let [open, close] = bounds.as_slice() else { return None };
+        let ([open], [close]) = (open.as_bytes(), close.as_bytes()) else { return None };
+        if !declares_a_string || !open.is_ascii() || !close.is_ascii() { return None; }
+        strings_only_between = Some((*open, *close));
+        header = read_next_header(lines)?;
+    }
+
     if header == ESCAPE_CHARACTER {
         let value = read_value_line(lines)?;
         if value != ESCAPES_NOTHING {
@@ -603,9 +656,6 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
         if read_next_header(lines)?.as_str() != NESTED_LANGUAGE_DEFAULT {return None;}
         let defaults = split_line_on_whitespace(&read_value_line(lines)?);
         if ends.len() != starts.len() || defaults.len() != starts.len() {return None;}
-        // A section is looked for where a tag begins and nowhere else, so an opener that is not one
-        // could never match. Refused rather than carried as a declaration that does nothing.
-        if starts.iter().chain(&ends).any(|symbol| !symbol.starts_with('<')) {return None;}
         nested_languages = starts.iter().zip(&ends).zip(&defaults)
                 .map(|((start, end), default)| NestedLanguage::of(start, end, default))
                 .collect();
@@ -673,6 +723,8 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             .with_symbols(string_symbols)
             .with_char_literals(char_literals)
             .with_line_strings(line_strings)
+            .with_regexes(regexes)
+            .with_regex_after(regex_after)
             .with_multiline_strings(multiline_strings)
             .with_raw_multiline_strings(raw_multiline_strings);
     let strings = string_pairs.iter().fold(strings, |strings, pair| if doubling_openers.contains(&pair.0) {
@@ -682,10 +734,15 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
     } else {
         strings.with_string_pairs(std::slice::from_ref(pair))
     }).with_leveled_pairs(&leveled_strings);
+    let strings = match hole {
+        Some(hole) => strings.with_holes(&interpolated_openers, hole),
+        None => strings
+    };
 
     let mut language = Language::new(lang_name, extensions, strings, comment_symbols,
             &multiline_comments.iter().map(|(start, end): &(String, String)| (start.as_str(), end.as_str()))
                     .collect::<Vec<_>>(), keywords);
+    language.strings_only_between = strings_only_between;
     language.heredoc = heredoc;
     language.line_continuation = line_continuation;
     language.module_keyword = module_keyword;
@@ -1439,13 +1496,9 @@ pl      Perl, Prolog
         let empty = good.replace("<script <style", "");
         assert!(parse(&empty).is_none());
 
-        // A section is looked for where a tag begins, so an opener that is not one could never match
-        let fenced = good.replace("<script <style", "```py <style").replace("</script> </style>", "``` </style>");
-        assert!(parse(&fenced).is_none(),
-                "an opener that is not a tag was accepted");
-        let fenced_end = good.replace("</script> </style>", "``` </style>");
-        assert!(parse(&fenced_end).is_none(),
-                "a closer that is not a tag was accepted");
+        // PHP's return to the page is an opener that is no tag, and its closer is matched as written
+        let php = good.replace("<script <style", "?> <style").replace("</script> </style>", "<? </style>");
+        assert_eq!(Some(&NestedLanguage::of("?>", "<?", "js")), parse(&php).unwrap().nested_languages.first());
 
         // out of place it refuses the file whole, like every other block
         let misplaced = "Language\nWeblike\n\nExtensions\nwbl\n\n\
@@ -1557,6 +1610,52 @@ pl      Perl, Prolog
         assert!(parse(&with_line_string.replace("Line string symbols\n\\\\\n\n", "Line string symbols\n\n\n")).is_none());
         assert!(parse(&with_line_string.replace("Line string symbols\n\\\\", "Line string symbols\n\"")).is_none());
         assert!(parse(&with_line_string.replace("Line string symbols\n\\\\", "Line string symbols\n'")).is_none());
+    }
+
+    #[test]
+    fn a_regular_expression_block_declares_its_symbol_and_the_words_a_pattern_may_follow() {
+        let good = "Language\nJslike\n\nExtensions\njsl\n\nString symbols\n\"\n\n\
+                Regular expression symbols\n/\nRegular expression after\nreturn typeof\n\n\
+                Escape character\n\\\n\nComment symbols\n//\n";
+        let parsed = parse(good).expect("the declaration must parse");
+        assert_eq!(vec!["/".to_owned()], parsed.strings.get_regexes());
+        assert_eq!(vec!["return".to_owned(), "typeof".to_owned()], parsed.strings.get_regex_after());
+
+        // the words are optional, the symbol is not, and neither list may be empty
+        let no_words = good.replace("Regular expression after\nreturn typeof\n", "");
+        assert!(parse(&no_words).expect("the symbol alone must parse").strings.get_regex_after().is_empty());
+        assert!(parse(&good.replace("Regular expression symbols\n/\n", "")).is_none(), "words with no symbol were accepted");
+        assert!(parse(&good.replace("Regular expression symbols\n/\n", "Regular expression symbols\n\n")).is_none());
+        assert!(parse(&good.replace("return typeof\n", "\n")).is_none());
+
+        for name in ["JavaScript.txt", "TypeScript.txt"] {
+            let language = parse_language_file(LANGUAGES_DIR.to_owned() + name).unwrap();
+            assert_eq!(vec!["/".to_owned()], language.strings.get_regexes(), "{name} lost its pattern declaration");
+            assert!(language.strings.get_regex_after().contains(&"return".to_owned()), "{name}");
+        }
+    }
+
+    #[test]
+    fn an_interpolated_string_names_a_declared_opener_and_its_hole_has_a_one_byte_closer() {
+        let good = "Language\nCslike\n\nExtensions\ncsl\n\nString symbols\n\" $\"\n\n\
+                Paired string openers\n@\"\nPaired string closers\n\"\n\n\
+                Interpolated string openers\n$\" @\"\nInterpolation hole\n{ }\n\n\
+                Escape character\n\\\n\nComment symbols\n//\n";
+        let parsed = parse(good).expect("the declaration must parse");
+        assert_eq!(vec!["$\"".to_owned(), "@\"".to_owned()], parsed.strings.get_interpolating());
+        assert_eq!(Some(("{", "}")), parsed.strings.get_hole());
+
+        assert!(parse(&good.replace("$\" @\"\nInterpolation", "$\" x\"\nInterpolation")).is_none(),
+                "an opener no string block declares was accepted");
+        assert!(parse(&good.replace("Interpolation hole\n{ }\n\n", "")).is_none(), "openers with no hole were accepted");
+        assert!(parse(&good.replace("{ }", "{ }}")).is_none(), "a closer of two bytes was accepted");
+        assert!(parse(&good.replace("{ }", "{")).is_none());
+
+        let js = parse_language_file(LANGUAGES_DIR.to_owned() + "JavaScript.txt").unwrap();
+        assert_eq!((vec!["`".to_owned()], Some(("${", "}"))), (js.strings.get_interpolating().to_vec(), js.strings.get_hole()));
+        let cs = parse_language_file(LANGUAGES_DIR.to_owned() + "C#.txt").unwrap();
+        assert_eq!(Some(("{", "}")), cs.strings.get_hole());
+        assert!(cs.strings.get_interpolating().contains(&"$@\"".to_owned()));
     }
 
     #[test]
@@ -1703,16 +1802,16 @@ pl      Perl, Prolog
                 .map(|pair| pair[0]).collect::<Vec<_>>();
         assert!(duplicates.is_empty(), "these names are declared by more than one shipped file: {duplicates:?}");
 
-        // A language with no string symbol at all is markup and only markup: HTML, and the shells
-        // of Vue and Svelte, whose code lives in sections that carry their own languages' strings.
-        // Naming them keeps a symbol lost from any other file loud instead of allowed.
+        // A language with no string symbol at all is a shell of sections carrying their own
+        // languages' strings, Vue and Svelte. Naming the exception keeps a symbol lost from any
+        // other file loud.
         for language in &languages {
             let name = &language.name;
             assert!(!language.extensions.is_empty() || !language.filenames.is_empty(),
                     "{name} declares neither an extension nor a filename");
             assert!(!language.strings.get_symbols().is_empty() || !language.strings.get_line_strings().is_empty()
                     || !language.strings.get_multiline_strings().is_empty()
-                    || name == "HTML" || !language.nested_languages.is_empty(),
+                    || !language.nested_languages.is_empty(),
                     "{name} declares no string symbol");
         }
 

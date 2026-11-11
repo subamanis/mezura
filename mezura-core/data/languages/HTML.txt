@@ -5,7 +5,13 @@ Extensions
 html htm xhtml
 
 String symbols
+" '
 
+Strings only between
+< >
+
+Escape character
+none
 
 Comment symbols
 

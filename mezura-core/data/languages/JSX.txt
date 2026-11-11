@@ -10,6 +10,11 @@ String symbols
 Multi line string symbols
 `
 
+Interpolated string openers
+`
+Interpolation hole
+${ }
+
 Escape character
 \
 

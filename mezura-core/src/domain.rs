@@ -23,6 +23,9 @@ pub struct Language {
     pub shebangs : Vec<String>,
     /// Which quotes open a string, and what escapes one.
     pub strings : StringRules,
+    /// The two bytes the string symbols count between, for a markup language: inside HTML's `<`
+    /// and `>` a quote delimits an attribute, and the text outside them is full of apostrophes.
+    pub strings_only_between : Option<(u8, u8)>,
     /// Whose heredoc the language has. After the opener a word chosen on the spot opens a string
     /// that ends at the line holding that word.
     pub heredoc : Option<HeredocRules>,
@@ -88,6 +91,7 @@ impl Language {
             filenames : Vec::new(),
             shebangs : Vec::new(),
             strings,
+            strings_only_between : None,
             heredoc : None,
             comment_symbols : owned_strings(comment_symbols),
             multiline_comments : owned_pairs(multiline_comments),
@@ -180,6 +184,12 @@ impl Language {
         self
     }
 
+    /// Confines the string symbols to the text between the two bytes, HTML's `<` and `>`.
+    pub fn with_strings_only_between(mut self, open: u8, close: u8) -> Self {
+        self.strings_only_between = Some((open, close));
+        self
+    }
+
     /// Adds sections of the file that another language is counted inside.
     pub fn with_nested_languages(mut self, regions: &[NestedLanguage]) -> Self {
         self.nested_languages.extend(regions.iter().cloned());
@@ -227,17 +237,22 @@ impl Language {
     // leveled pairs last, which is the order the plan is built in. A leveled pair has no fixed
     // spelling to answer with here, and 'find_leveled_string' answers for it.
     pub(crate) fn get_string_pair_of(&self, symbol: u8) -> (&str, &str) {
-        let (symbols, literals, lines) = (self.strings.get_symbols(), self.strings.get_char_literals(),
-                self.strings.get_line_strings());
+        let (symbols, literals, lines, regexes) = (self.strings.get_symbols(), self.strings.get_char_literals(),
+                self.strings.get_line_strings(), self.strings.get_regexes());
         let symbol = symbol as usize;
+        // A symbol of several bytes is a prefix and a quote, C#'s '$"', and the quote alone closes it
         if let Some(single) = symbols.get(symbol) {
-            return (single, single);
+            let quote_at = single.len() - single.chars().last().map_or(0, char::len_utf8);
+            return (single, &single[quote_at..]);
         }
         if let Some(literal) = literals.get(symbol - symbols.len()) {
             return (literal, literal);
         }
         if let Some(line) = lines.get(symbol - symbols.len() - literals.len()) {
             return (line, "");
+        }
+        if let Some(regex) = regexes.get(symbol - symbols.len() - literals.len() - lines.len()) {
+            return (regex, regex);
         }
         let single_line = self.count_single_line_strings();
         match self.strings.get_multiline_strings().get(symbol - single_line) {
@@ -255,7 +270,7 @@ impl Language {
 
     pub(crate) fn count_single_line_strings(&self) -> usize {
         self.strings.get_symbols().len() + self.strings.get_char_literals().len()
-                + self.strings.get_line_strings().len()
+                + self.strings.get_line_strings().len() + self.strings.get_regexes().len()
     }
 
     pub(crate) fn string_crosses_lines(&self, symbol: u8) -> bool {
@@ -364,6 +379,7 @@ impl PartialEq for Language {
             && self.filenames == other.filenames
             && self.shebangs == other.shebangs
             && self.strings == other.strings
+            && self.strings_only_between == other.strings_only_between
             && self.heredoc == other.heredoc
             && self.comment_symbols == other.comment_symbols
             && self.multiline_comments == other.multiline_comments
@@ -437,21 +453,27 @@ pub struct StringRules {
     symbols : Vec<String>,
     char_literals : Vec<String>,
     line_strings : Vec<String>,
+    regexes : Vec<String>,
+    regex_after : Vec<String>,
     multiline : Vec<MultilineString>,
-    leveled : Vec<LeveledPair>
+    leveled : Vec<LeveledPair>,
+    interpolating : Vec<String>,
+    hole : Option<(String, String)>
 }
 
 impl StringRules {
     /// Rules whose strings are escaped by the given byte, usually a backslash.
     pub fn escaping_with(escape: u8) -> StringRules {
         StringRules { escape: Some(escape), symbols: Vec::new(), char_literals: Vec::new(),
-                line_strings: Vec::new(), multiline: Vec::new(), leveled: Vec::new() }
+                line_strings: Vec::new(), regexes: Vec::new(), regex_after: Vec::new(), multiline: Vec::new(),
+                leveled: Vec::new(), interpolating: Vec::new(), hole: None }
     }
 
     /// Rules for the languages that escape a quote by doubling it and have no escape byte at all.
     pub fn escaping_nothing() -> StringRules {
         StringRules { escape: None, symbols: Vec::new(), char_literals: Vec::new(), line_strings: Vec::new(),
-                multiline: Vec::new(), leveled: Vec::new() }
+                regexes: Vec::new(), regex_after: Vec::new(), multiline: Vec::new(), leveled: Vec::new(),
+                interpolating: Vec::new(), hole: None }
     }
 
     /// Adds quotes that open a string ending with its own line.
@@ -472,6 +494,21 @@ impl StringRules {
     /// delimiter, Zig's `\\`.
     pub fn with_line_strings(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         self.line_strings.extend(owned_strings(symbols));
+        self
+    }
+
+    /// Adds the symbol of a regular expression literal, JavaScript's `/`, which opens a pattern only
+    /// where the code expects an operand and closes on its own line. A quote or a comment symbol
+    /// inside the pattern is text.
+    pub fn with_regexes(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.regexes.extend(owned_strings(symbols));
+        self
+    }
+
+    /// Adds the words a pattern may directly follow, `return` and `typeof` in JavaScript. After any
+    /// other word, a number, `)` or `]` the symbol divides.
+    pub fn with_regex_after(mut self, words: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.regex_after.extend(owned_strings(words));
         self
     }
 
@@ -518,6 +555,16 @@ impl StringRules {
         self
     }
 
+    /// Declares which of the openers above open a string whose holes are code, C#'s `$"` and
+    /// JavaScript's backtick, and the hole's opener and closer, `{` with `}` or `${` with `}`. The
+    /// code inside a hole is read with every rule of the language, braces nesting, and the
+    /// string resumes at the closing brace; the opener written twice inside the string is text.
+    pub fn with_holes(mut self, openers: impl IntoIterator<Item = impl AsRef<str>>, hole: (impl AsRef<str>, impl AsRef<str>)) -> Self {
+        self.interpolating.extend(owned_strings(openers));
+        self.hole = Some((hole.0.as_ref().to_owned(), hole.1.as_ref().to_owned()));
+        self
+    }
+
     /// The byte that cancels the symbol after it, if this language has one.
     pub fn get_escape(&self) -> Option<u8> {
         self.escape
@@ -538,6 +585,16 @@ impl StringRules {
         &self.line_strings
     }
 
+    /// The symbols that open and close a regular expression literal.
+    pub fn get_regexes(&self) -> &[String] {
+        &self.regexes
+    }
+
+    /// The words a regular expression literal may directly follow.
+    pub fn get_regex_after(&self) -> &[String] {
+        &self.regex_after
+    }
+
     /// The forms whose string may run past the end of its line.
     pub fn get_multiline_strings(&self) -> &[MultilineString] {
         &self.multiline
@@ -546,6 +603,16 @@ impl StringRules {
     /// The pairs whose run decides which closer ends them, which cross lines as well.
     pub fn get_leveled_pairs(&self) -> &[LeveledPair] {
         &self.leveled
+    }
+
+    /// The openers of the strings whose holes are code.
+    pub fn get_interpolating(&self) -> &[String] {
+        &self.interpolating
+    }
+
+    /// The opener and closer of a hole, when the language has them.
+    pub fn get_hole(&self) -> Option<(&str, &str)> {
+        self.hole.as_ref().map(|(open, close)| (open.as_str(), close.as_str()))
     }
 }
 
@@ -659,9 +726,11 @@ impl std::str::FromStr for HeredocRules {
 /// regard to case, the way HTML reads them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NestedLanguage {
-    /// The tag that opens the section, `<script`.
+    /// The tag that opens the section, `<script`, read up to its `>` for its attributes. One
+    /// already ending in `>` is whole and carries none: PHP's `?>`.
     pub start : String,
-    /// The tag that closes it, `</script>`.
+    /// The tag that closes it, `</script>`, ending where a tag's name ends. One not ending in `>`
+    /// is matched as written: PHP's `<?`, which `<?php` and `<?=` begin with.
     pub end : String,
     /// What the section is written in when the tag says nothing. An extension and not a language
     /// name, so that both paths resolve the same way.

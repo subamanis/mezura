@@ -61,13 +61,18 @@ Three things to know before you start:
 | `String symbols` | Strings that end with the line | `" '` |
 | `Character literal symbols` *(opt)* | Wraps a single character, like Rust's `'a'` | `'` |
 | `Line string symbols` *(opt)* | Raw string that runs to the end of its line with no closing symbol, like Zig's `\\` | `\\` |
+| `Regular expression symbols` *(opt)* | Opens and closes a pattern on one line, JavaScript's `/re/`, only where the code expects an operand. See below | `/` |
+| `Regular expression after` *(opt)* | The words a pattern may directly follow | `return typeof` |
 | `Multi line string symbols` *(opt)* | Crosses lines, backslash escapes | `"""` |
 | `Multi line raw string symbols` *(opt)* | Crosses lines, nothing escapes | `` ` `` |
 | `Paired string openers` *(opt)* | Opens with one symbol, closes with another, a `*` marking a counted run | `R"( @" r#*"` |
 | `Paired string closers` | Their closers, in the same order | `)" " "#*` |
 | `Paired strings escaped by doubling` *(opt)* | The openers of the pairs whose closer written twice is one quote of the text | `@"` |
 | `Paired strings with a delimiter` *(opt)* | The openers of the pairs that may carry a delimiter of the writer's choosing, which the closer repeats | `R"(` |
+| `Interpolated string openers` *(opt)* | The openers above whose holes are code, C#'s `$"` and JavaScript's backtick. See below | `$" @$"` |
+| `Interpolation hole` | The hole's opener and its one-byte closer | `{ }` |
 | `Heredoc` *(opt)* | Whose heredoc the language has: `shell`, `perl`, `ruby` or `php` | `ruby` |
+| `Strings only between` *(opt)* | Two single characters; the string symbols count only between them, for a markup language whose quotes delimit attributes inside a tag | `< >` |
 | `Escape character` | Required by any language that declares a string. See below | `\` |
 | `Line continuation` *(opt)* | Joins a line to the next when it ends the line | `\` |
 | `Continues` | What the joining reaches: `strings`, `comments`, or both | `strings comments` |
@@ -113,11 +118,31 @@ a whole string ending in a backslash, because a backtick string escapes nothing.
 | Ends with the line | `String symbols` |
 | One character, `'a'` | `Character literal symbols` |
 | Runs to the end of its line, no closer | `Line string symbols` |
+| A pattern between two slashes, `/re/` | `Regular expression symbols` |
 | Crosses lines, backslash escapes | `Multi line string symbols` |
 | Crosses lines, nothing escapes | `Multi line raw string symbols` |
 | Different symbol at each end | `Paired string openers` + `closers` |
 
 **A symbol goes in exactly one of them.** Declaring it twice refuses the file.
+
+**A `String symbols` entry of several bytes is a prefix and a quote**, C#'s `$"`, and the quote
+alone closes the string, with the escape character obeyed inside it.
+
+**A regular expression literal is read as a string**, so a quote or a comment symbol inside the
+pattern is text. The same slash divides, and which of the two it is comes off what stands before
+it: a pattern opens after an operator, an opening bracket, a separator (`( , = : [ ! & | ? { } ;
++ - * % < > ~ ^`), at the start of the line, or after one of the words under `Regular expression
+after`; after a name, a number, `)` or `]` the slash divides. The pattern closes at the next slash
+outside a `[...]` class and behind no backslash, on the same line; a slash with no closer on its
+line opens nothing. JavaScript and TypeScript declare it; JSX and TSX do not, since a closing tag
+`</p>` would open a pattern after its `<`.
+
+**A hole of an interpolated string is code.** `Interpolated string openers` names which of the
+openers declared above open such a string, and `Interpolation hole` gives the hole's opener and
+closer: `{ }` for C#'s `$"Name: {name}"`, `${ }` for JavaScript's `` `Name: ${name}` ``. Inside the
+hole every rule of the language applies, so a quote there closes nothing, braces nest, and the
+string resumes at the brace that closes the hole, on the same line or a later one. The opener
+written twice inside the string, C#'s `{{`, is one brace of the text.
 
 Raw or not is a fact about the language, not about the symbol. The backtick escapes nothing in Go,
 Odin and D and does escape in a JavaScript template literal. `"""` is raw in Kotlin and Scala,
@@ -275,11 +300,23 @@ recognises falls to the region's default rather than losing the block.
 The opener reads `lang="..."` first and `type="..."` after it, and in a mime type only the part
 after the slash is the language. Quotes are optional and either kind works.
 
-**Every opener and closer has to begin with `<`**, because a section is looked for where a tag
-begins and nowhere else. A file declaring anything else is refused and mezura names the line, rather
-than accepting a declaration that could never match. The name of the tag also has to end where it is
-written, so `<script` opens a section in `<script>` and `<script lang="ts">` and not in
-`<scriptures>`.
+**The name of the tag has to end where it is written**, so `<script` opens a section in `<script>`
+and `<script lang="ts">`, while `<scriptures>` opens none. An opener already ending in `>` is whole and
+carries no attributes, and a closer not ending in `>` is matched as written: this is how PHP returns
+to its page, with the section's language taken from the default:
+
+```
+Nested language start
+?>
+Nested language end
+<?
+Nested language default
+html
+```
+
+The line holding either tag belongs to the language around the section, and the section begins on
+the line after its opener. A `.php` file is PHP from its first byte, so markup written before its
+first `<?php` counts as PHP.
 
 **A section that never closes is not a section.** Nothing marks an opener as a tag rather than the
 same word written out in the text of the page, so if no closer follows, the lines stay with the file's
@@ -313,7 +350,10 @@ js css
 
 Note what it does **not** declare: no string symbols, because the quotes of markup delimit
 attributes and its text is full of apostrophes, and no `//`, because the shell has no such comment.
-Everything that needs those lives inside the blocks and carries its own language's rules.
+Everything that needs those lives inside the blocks and carries its own language's rules. HTML
+itself declares `" '` under `String symbols` and `< >` under `Strings only between`, so a quote
+counts inside a tag, where it delimits an attribute, and is text everywhere else; a `<!--` written
+in an attribute value then opens no comment.
 
 ## Test code
 
