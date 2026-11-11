@@ -280,13 +280,6 @@ impl Language {
         (symbol as usize).checked_sub(first_leveled).and_then(|leveled| self.strings.get_leveled_pairs().get(leveled))
     }
 
-    pub(crate) fn calculate_string_opener_width(&self, symbol: u8, level: u32) -> usize {
-        match self.find_leveled_string(symbol) {
-            Some(pair) => pair.calculate_start_width(level),
-            None => self.get_string_pair_of(symbol).0.len()
-        }
-    }
-
     pub(crate) fn calculate_string_closer_width(&self, symbol: u8, level: u32) -> usize {
         match self.find_leveled_string(symbol) {
             Some(pair) => pair.calculate_end_width(level),
@@ -354,22 +347,6 @@ impl Language {
     pub(crate) fn line_bound_pairs(&self) -> impl Iterator<Item = LineBoundPair<'_>> {
         self.line_start_comments.iter().map(|(start, end)| LineBoundPair::LineStart { start, end })
                 .chain(self.whole_line_comments.iter().map(|(start, end)| LineBoundPair::WholeLine { start, end }))
-    }
-
-    // The whole width of one occurrence, which for a leveled pair depends on how many '=' it
-    // carried; a plain or nesting pair ignores the level
-    pub(crate) fn comment_start_len(&self, symbol: u8, level: u32) -> usize {
-        match self.get_comment_pair_of(symbol) {
-            CommentPair::Leveled(pair) => pair.calculate_start_width(level),
-            CommentPair::Plain { start, .. } | CommentPair::Nesting { start, .. } => start.len()
-        }
-    }
-
-    pub(crate) fn comment_end_len(&self, symbol: u8, level: u32) -> usize {
-        match self.get_comment_pair_of(symbol) {
-            CommentPair::Leveled(pair) => pair.calculate_end_width(level),
-            CommentPair::Plain { end, .. } | CommentPair::Nesting { end, .. } => end.len()
-        }
     }
 
     fn find_crossing_string(&self, symbol: u8) -> Option<&MultilineString> {
@@ -795,10 +772,6 @@ impl LeveledPair {
 
     pub(crate) fn has_the_end_of(&self, other: &LeveledPair) -> bool {
         self.end_prefix == other.end_prefix && self.end_suffix == other.end_suffix && self.filler == other.filler
-    }
-
-    pub(crate) fn calculate_start_width(&self, level: u32) -> usize {
-        self.start_prefix.len() + level as usize + 1
     }
 
     pub(crate) fn calculate_end_width(&self, level: u32) -> usize {

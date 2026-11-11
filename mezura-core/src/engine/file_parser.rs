@@ -1,10 +1,9 @@
 // Reading one file and deciding what each of its lines is: code, comment, or neither.
 //
 // The file is read once in blocks, and that pass says where every line ends and which bytes could
-// begin a symbol. A line then visits only the positions it found, and a line reached without it is
-// searched with memchr. What comes back are the positions of string delimiters, comment openers and
-// the two multiline markers. The rest of the file decides what those positions mean when they
-// overlap, which is where every language-specific trap lives.
+// begin a symbol. A line then visits only the positions it found, left to right, with what is open
+// carried along: the symbol read at each byte is decided by the state, so a quote inside a comment
+// is text and a closer is only ever the closer of what opened.
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read as IoRead;
@@ -300,7 +299,8 @@ fn read_file_into(file: &mut File, buf: &mut Vec<u8>, size: u64) -> std::io::Res
 // 'filler' is zero for every ordinary symbol. For a leveled one it is the counted byte: the slot's
 // bytes are the prefix, and a match must find a run of the filler after it, then 'suffix' unless
 // that is zero. One 'counted_backwards' holds its prefix and suffix as the bytes and is found by
-// the suffix, with the run and the prefix read behind it.
+// the suffix, with the run and the prefix read behind it. For a delimited opener 'suffix' is the
+// bracket its delimiter ends at.
 #[derive(Debug, Clone, Copy)]
 struct Slot {
     symbol: u8,
@@ -314,12 +314,6 @@ struct Slot {
     cancelled_by: u8,
     counted_backwards: bool,
     next: u16,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Chunk {
-    bytes: [u8; 3],
-    len: u8,
 }
 
 struct PlanEntry {
@@ -351,34 +345,22 @@ impl PlanEntry {
     }
 }
 
-// memchr searches up to three bytes in a single SIMD pass, so symbols are grouped by the byte that
-// finds them and the groups packed into as few passes as the language allows: one for most, two for
-// the handful with more than three distinct such bytes. A pass yields candidate positions, and only
-// there is the rest of a symbol compared.
+// The symbols of one language as the block pass and the lexer read them: the bytes the pass marks
+// as candidates, and at each candidate the chain of symbols that byte may begin.
 #[derive(Debug, Clone)]
 pub(crate) struct ScanPlan {
-    chunks: Vec<Chunk>,
     first: [u16; 256],
     slots: Vec<Slot>,
     symbols: Vec<Box<[u8]>>,
-    sorted_kinds: [bool; 4],
-    strings_split: bool,
-    // Whether a line opening with a line comment symbol is a comment and nothing else. False where a
-    // block opener begins with one, as Lua's '--[[' begins with '--', CMake's '#[[' and Julia's '#='
-    // with '#': there the same bytes open a block that runs on past this line.
-    line_comment_ends_the_line: bool,
-    // Every byte the chunks search, for the pass that splits the file into lines
     finder: MaskFinder,
-    // Searched once over the whole file, never by the chunks, and numbered after every crossing string
+    // Searched once over the whole file, never by the pass, and numbered after every crossing string
     heredoc: Option<(memmem::Finder<'static>, u8, HeredocRules)>,
     string_shapes: Vec<StringShape>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct StringShape {
-    opener: u8,
     closer: u8,
-    leveled: bool,
     doubling: bool,
     run_closes: bool,
 }
@@ -408,7 +390,9 @@ impl ScanPlan {
             // Only what stands in front of the delimiter is a symbol, and the closer is looked for
             // by the string it closes
             if crossing.delimited {
-                entries.push(PlanEntry::of(STRINGS, index, ROLE_DELIMITED, &open.as_bytes()[..open.len().saturating_sub(1)]));
+                let mut entry = PlanEntry::of(STRINGS, index, ROLE_DELIMITED, &open.as_bytes()[..open.len().saturating_sub(1)]);
+                entry.suffix = open.as_bytes().last().copied().unwrap_or(0);
+                entries.push(entry);
             } else if open != close {
                 entries.push(PlanEntry::of(STRINGS, index, ROLE_OPEN, open.as_bytes()));
                 entries.push(PlanEntry::of(STRINGS, index, ROLE_CLOSE, close.as_bytes()));
@@ -459,10 +443,9 @@ impl ScanPlan {
             }
         }
         entries.retain(|entry| !entry.bytes.is_empty());
-        let line_comment_ends_the_line = !entries.iter().filter(|entry| entry.kind == COM_STARTS)
-                .any(|start| entries.iter().filter(|entry| entry.kind == COMMENTS)
-                        .any(|comment| start.bytes.starts_with(&comment.bytes)));
-        entries.sort_by_key(|entry| std::cmp::Reverse(entry.bytes.len()));
+        // Of two symbols beginning together the longer is read, and of two as long the line
+        // comment: Vim's '"' opens a comment where it could open a string
+        entries.sort_by_key(|entry| (std::cmp::Reverse(entry.bytes.len()), entry.kind != COMMENTS));
 
         let anchors = anchors_of(&entries);
         let mut first = [NO_SLOT; 256];
@@ -494,33 +477,18 @@ impl ScanPlan {
             }
         }
 
-        let (chunks, mut sorted_kinds) = pack_into_chunks(&entries, &anchors);
-        let strings_split = sorted_kinds[STRINGS as usize];
-        // An anchored match begins behind the byte that found it, so a kind holding symbols
-        // anchored at two different depths reports them out of line order and is sorted afterwards.
-        for (kind, sorted) in sorted_kinds.iter_mut().enumerate() {
-            let mut depths = entries.iter().zip(&anchors)
-                    .filter(|(entry, _)| entry.kind as usize == kind).map(|(_, anchor)| *anchor);
-            let Some(first) = depths.next() else { continue };
-            if depths.any(|depth| depth != first) { *sorted = true }
-        }
-        let searched = chunks.iter().flat_map(|chunk| chunk.bytes[..chunk.len as usize].iter().copied())
-                .collect::<Vec<u8>>();
-        let finder = MaskFinder::of(&searched);
+        let finder = MaskFinder::of(&collect_searched_bytes(&entries, &anchors));
         let strings = &language.strings;
         let heredoc = language.heredoc.map(|rules| (memmem::Finder::new(rules.get_opener().as_bytes()).into_owned(),
                 (single_line + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()) as u8, rules));
         let string_count = single_line + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()
                 + usize::from(heredoc.is_some());
         let string_shapes = (0..string_count as u8).map(|symbol| StringShape {
-            opener: language.calculate_string_opener_width(symbol, 0) as u8,
             closer: language.calculate_string_closer_width(symbol, 0) as u8,
-            leveled: language.find_leveled_string(symbol).is_some(),
             doubling: language.string_escapes_by_doubling(symbol),
             run_closes: language.string_closes_at_the_end_of_a_run(symbol),
         }).collect();
-        ScanPlan { chunks, first, slots, symbols, sorted_kinds, strings_split, line_comment_ends_the_line, finder, heredoc,
-                string_shapes }
+        ScanPlan { first, slots, symbols, finder, heredoc, string_shapes }
     }
 }
 
@@ -573,57 +541,13 @@ fn find_the_byte_reaching_most_of(entries: &[PlanEntry], searched: &[u8]) -> Opt
     best.map(|(byte, _)| byte)
 }
 
-// Two kinds sharing a first byte must be searched in the same pass, or that byte gets visited twice.
-// Kinds are grouped by that overlap and the groups packed whole, which is what leaves every output
-// vector already in the order the positions appear on the line. A group of more than three distinct
-// bytes cannot be one pass, so it is split and its kinds are marked as needing a sort after all.
-fn pack_into_chunks(entries: &[PlanEntry], anchors: &[u8]) -> (Vec<Chunk>, [bool; 4]) {
-    let mut bytes_of_kind : [Vec<u8>; 4] = Default::default();
+fn collect_searched_bytes(entries: &[PlanEntry], anchors: &[u8]) -> Vec<u8> {
+    let mut searched : Vec<u8> = Vec::new();
     for (entry, anchor) in entries.iter().zip(anchors) {
-        let searched = entry.bytes[*anchor as usize];
-        let set = &mut bytes_of_kind[entry.kind as usize];
-        if !set.contains(&searched) { set.push(searched) }
+        let byte = entry.bytes[*anchor as usize];
+        if !searched.contains(&byte) { searched.push(byte) }
     }
-
-    let mut group_of = [0usize, 1, 2, 3];
-    for a in 0..4 {
-        for b in (a + 1)..4 {
-            if bytes_of_kind[a].iter().any(|x| bytes_of_kind[b].contains(x)) {
-                let (from, to) = (group_of[b], group_of[a]);
-                for slot in group_of.iter_mut() { if *slot == from { *slot = to } }
-            }
-        }
-    }
-
-    let (mut chunks, mut sorted_kinds) : (Vec<Vec<u8>>, [bool; 4]) = (Vec::new(), [false; 4]);
-    for group in 0..4 {
-        let mut group_bytes : Vec<u8> = Vec::new();
-        for kind in 0..4 {
-            if group_of[kind] != group { continue }
-            for byte in &bytes_of_kind[kind] {
-                if !group_bytes.contains(byte) { group_bytes.push(*byte) }
-            }
-        }
-        if group_bytes.is_empty() { continue }
-
-        if group_bytes.len() > 3 {
-            for kind in 0..4 { if group_of[kind] == group { sorted_kinds[kind] = true } }
-            for piece in group_bytes.chunks(3) { chunks.push(piece.to_vec()) }
-            continue;
-        }
-        match chunks.iter_mut().find(|chunk| chunk.len() + group_bytes.len() <= 3) {
-            Some(chunk) => chunk.extend_from_slice(&group_bytes),
-            None => chunks.push(group_bytes)
-        }
-    }
-
-    let chunks = chunks.into_iter().map(|bytes| {
-        let mut padded = [0u8; 3];
-        padded[..bytes.len()].copy_from_slice(&bytes);
-        Chunk { bytes: padded, len: bytes.len() as u8 }
-    }).collect();
-
-    (chunks, sorted_kinds)
+    searched
 }
 
 fn get_or_build_plan_of(language: &Language) -> &ScanPlan {
@@ -633,23 +557,6 @@ fn get_or_build_plan_of(language: &Language) -> &ScanPlan {
 // The per line working memory, owned by the consumer thread and cleared rather than reallocated.
 #[derive(Debug, Default)]
 pub(crate) struct ScanBuffers {
-    // Position, symbol, role, and the level as 'com_starts' carries it
-    raw_strings: Vec<(usize, u8, u8, u32)>,
-    strings: Vec<usize>,
-    string_symbols: Vec<u8>,
-    // A closer is read at the level of the string it closes, which a run of '#' may exceed
-    string_levels: Vec<u32>,
-    comments: Vec<usize>,
-    // Position, pair, and the level a leveled occurrence carried, zero for every other pair. The
-    // level is as wide as the line allows, since neither Lua nor CMake bounds the run that sets it
-    com_starts: Vec<(usize, u8, u32)>,
-    com_ends: Vec<(usize, u8, u32)>,
-    // Past each line scanned before, so what those lines left is below every position of this one
-    // and the slots carry over from line to line: 'consumed_from' is where this line begins,
-    // 'consumed_to' where the next one will
-    consumed: Vec<usize>,
-    consumed_from: usize,
-    consumed_to: usize,
     // Offsets into the line, where 'ParseBuffers::code_spans' holds offsets into the whole file
     code_ranges: Vec<(usize, usize)>,
     // How far into the raw line the trimmed line begins, written for every line that holds anything
@@ -658,23 +565,6 @@ pub(crate) struct ScanBuffers {
     delimiter: Delimiter,
     // Filled before the walk of a line and emptied after it, by the caller that holds the rest of the file
     heredoc_openings: Vec<HeredocOpening>,
-    pair_open: bool,
-}
-
-impl ScanBuffers {
-    fn reset(&mut self, slots: usize, line_len: usize) {
-        self.raw_strings.clear();
-        self.strings.clear();
-        self.string_symbols.clear();
-        self.string_levels.clear();
-        self.comments.clear();
-        self.com_starts.clear();
-        self.com_ends.clear();
-        self.consumed_from = self.consumed_to;
-        self.consumed_to += line_len + 1;
-        if self.consumed.len() < slots { self.consumed.resize(slots, 0) }
-        self.code_ranges.clear();
-    }
 }
 
 // The keyword scratch cannot live in ScanBuffers: while a LineInfo borrows the cleansed line out of
@@ -754,167 +644,150 @@ impl Candidates<'_> {
     }
 }
 
-fn scan_line(line: &str, candidates: Candidates, language: &Language, open_str_symbol: Option<(u8, u32)>,
-    buffers: &mut ScanBuffers)
-{
-    let plan = get_or_build_plan_of(language);
-    let line_bytes = line.as_bytes();
-    let escape = language.strings.get_escape();
-    buffers.reset(plan.slots.len(), line_bytes.len());
-    buffers.pair_open = open_str_symbol.is_some();
+// The candidate bytes of a line in order: the positions the block pass found, or, for a line the
+// pass never saw, the same bytes found by the same pass run over the line itself.
+enum Events<'a> {
+    Listed { offsets: std::slice::Iter<'a, u32>, lead: usize, len: usize },
+    Scanned { bytes: &'a [u8], finder: &'a MaskFinder, block_at: usize, bits: u64 },
+}
 
-    match candidates {
-        Candidates::At(offsets, lead) => for &offset in offsets {
-            let Some(at) = (offset as usize).checked_sub(lead) else { continue };
-            if at >= line_bytes.len() { break }
-            take_symbols_at(at, line_bytes, plan, buffers, escape)
-        },
-        Candidates::Unsearched => {
-            // Split over two passes, a string's closer can come out before its opener, so every closer is taken
-            buffers.pair_open |= plan.strings_split;
-            for chunk in &plan.chunks {
-                match chunk.len {
-                    1 => for at in memchr::memchr_iter(chunk.bytes[0], line_bytes) {
-                        take_symbols_at(at, line_bytes, plan, buffers, escape)
-                    },
-                    2 => for at in memchr::memchr2_iter(chunk.bytes[0], chunk.bytes[1], line_bytes) {
-                        take_symbols_at(at, line_bytes, plan, buffers, escape)
-                    },
-                    _ => for at in memchr::memchr3_iter(chunk.bytes[0], chunk.bytes[1], chunk.bytes[2], line_bytes) {
-                        take_symbols_at(at, line_bytes, plan, buffers, escape)
-                    }
-                }
-            }
+impl<'a> Events<'a> {
+    fn of(candidates: Candidates<'a>, bytes: &'a [u8], finder: &'a MaskFinder) -> Events<'a> {
+        match candidates {
+            Candidates::At(offsets, lead) => Events::Listed { offsets: offsets.iter(), lead, len: bytes.len() },
+            Candidates::Unsearched => Events::Scanned { bytes, finder, block_at: 0, bits: 0 }
         }
-    }
-
-    // Only a kind split across two passes reaches here: one pass yields its symbols in line order
-    if plan.sorted_kinds[STRINGS as usize] {
-        let length_of = |symbol: u8, role: u8, level: u32| match role {
-            ROLE_CLOSE => plan.string_shapes[symbol as usize].closer as usize + level as usize,
-            _ => plan.string_shapes[symbol as usize].opener as usize + level as usize
-        };
-        buffers.raw_strings.sort_unstable_by(|(a_at, a_symbol, a_role, a_level), (b_at, b_symbol, b_role, b_level)|
-                a_at.cmp(b_at).then_with(|| length_of(*b_symbol, *b_role, *b_level)
-                        .cmp(&length_of(*a_symbol, *a_role, *a_level))));
-    }
-    if plan.sorted_kinds[COMMENTS as usize] { buffers.comments.sort_unstable() }
-    if plan.sorted_kinds[COM_STARTS as usize] {
-        buffers.com_starts.sort_unstable_by(|(a_at, a_symbol, a_level), (b_at, b_symbol, b_level)|
-                a_at.cmp(b_at).then_with(|| language.comment_start_len(*b_symbol, *b_level)
-                        .cmp(&language.comment_start_len(*a_symbol, *a_level))));
-    }
-    if plan.sorted_kinds[COM_ENDS as usize] {
-        buffers.com_ends.sort_unstable_by(|(a_at, a_symbol, a_level), (b_at, b_symbol, b_level)|
-                a_at.cmp(b_at).then_with(|| language.comment_end_len(*b_symbol, *b_level)
-                        .cmp(&language.comment_end_len(*a_symbol, *a_level))));
     }
 }
 
-fn take_symbols_at(at: usize, line_bytes: &[u8], plan: &ScanPlan, buffers: &mut ScanBuffers,
-    escape: Option<u8>)
-{
-    let consumed_from = buffers.consumed_from;
-    let mut cursor = plan.first[line_bytes[at] as usize];
-    while cursor != NO_SLOT {
-        let index = cursor as usize;
-        let slot = plan.slots[index];
-        cursor = slot.next;
+impl Iterator for Events<'_> {
+    type Item = usize;
 
-        let (start, level_behind) = match slot.counted_backwards {
-            false => match at.checked_sub(slot.anchor as usize) { Some(start) => (start, 0), None => continue },
-            true => match find_counted_symbol_ending_at(at, line_bytes, &plan.symbols[index][..slot.anchor as usize],
-                    slot.filler) { Some(found) => found, None => continue }
-        };
-        // Each symbol is searched without overlapping itself, so "///" holds one "//" and not two.
-        // A counted slot is exempt: every level shares the one slot, so ']]' and ']=]' are two
-        // different symbols rather than one overlapping itself, and the shorter would hide the
-        // longer that begins inside it.
-        if slot.filler == 0 && consumed_from + start < buffers.consumed[index] { continue }
-        let matched = match (slot.anchor, slot.len) {
-            (0, 1) if slot.filler == 0 => true,
-            (0, 2) if slot.filler == 0 => line_bytes.get(at + 1) == Some(&slot.second),
-            _ => slot.counted_backwards || line_bytes[start..].starts_with(&plan.symbols[index])
-        };
-        if !matched { continue }
+    #[inline(always)]
+    fn next(&mut self) -> Option<usize> {
+        match self {
+            Events::Listed { offsets, lead, len } => loop {
+                let offset = *offsets.next()? as usize;
+                let Some(at) = offset.checked_sub(*lead) else { continue };
+                return (at < *len).then_some(at);
+            },
+            Events::Scanned { bytes, finder, block_at, bits } => {
+                while *bits == 0 {
+                    if *block_at >= bytes.len() { return None }
+                    *bits = finder.scan_block(&bytes[*block_at..bytes.len().min(*block_at + BLOCK_BYTES)]).candidates;
+                    *block_at += BLOCK_BYTES;
+                }
+                let at = *block_at - BLOCK_BYTES + bits.trailing_zeros() as usize;
+                *bits &= *bits - 1;
+                Some(at)
+            }
+        }
+    }
+}
+
+// One occurrence of a declared symbol, as the chain at a candidate byte matched it. 'width' is the
+// whole occurrence: a leveled symbol with its run, a character literal with its closer. 'level' is
+// the run of a leveled symbol, and the width of the delimiter for a delimited opener.
+#[derive(Debug, Clone, Copy)]
+struct Found {
+    kind: u8,
+    symbol: u8,
+    role: u8,
+    start: usize,
+    width: usize,
+    level: u32,
+}
+
+// The symbol the language's lexer reads at this byte, among the symbols the byte may begin: the one
+// beginning first, and of those beginning together the longest. 'applies' says which symbols what is
+// open allows, and a symbol that fails its own checks leaves the byte to the next, so an 'R"' with no
+// bracket after it is read as the plain quote it holds.
+#[inline(always)]
+fn read_symbol_at(at: usize, cursor: usize, bytes: &[u8], plan: &ScanPlan, escape: Option<u8>, in_code: bool,
+    applies: impl Fn(&Found) -> bool) -> Option<Found>
+{
+    let mut best : Option<Found> = None;
+    let mut index = plan.first[bytes[at] as usize];
+    while index != NO_SLOT {
+        if let Some(found) = match_slot(index as usize, at, bytes, plan, escape, in_code)
+                && found.start >= cursor && applies(&found)
+                && best.is_none_or(|best| found.start < best.start || (found.start == best.start && found.width > best.width)) {
+            best = Some(found);
+        }
+        index = plan.slots[index as usize].next;
+    }
+    best
+}
+
+fn match_slot(index: usize, at: usize, bytes: &[u8], plan: &ScanPlan, escape: Option<u8>, in_code: bool) -> Option<Found> {
+    let slot = plan.slots[index];
+    let symbol_bytes = &plan.symbols[index];
+    let (start, level_behind) = match slot.counted_backwards {
+        false => (at.checked_sub(slot.anchor as usize)?, 0),
+        true => find_counted_symbol_ending_at(at, bytes, &symbol_bytes[..slot.anchor as usize], slot.filler)?
+    };
+    let matched = match (slot.anchor, slot.len) {
+        (0, 1) if slot.filler == 0 => true,
+        (0, 2) if slot.filler == 0 => bytes.get(at + 1) == Some(&slot.second),
+        _ => slot.counted_backwards || bytes[start..].starts_with(symbol_bytes)
+    };
+    if !matched { return None }
+    // Where the language writes the symbol and the character before it as one longer form, the
+    // symbol is part of that form and not itself. C3's '<*' opens a documentation comment
+    // everywhere except in 'int[<*>]', which is a vector of unknown length.
+    if slot.cancelled_by != 0 && start > 0 && bytes[start - 1] == slot.cancelled_by { return None }
+    let mut level = level_behind;
+    let mut width = slot.len as usize;
+    if slot.counted_backwards {
+        width = at + 1 - start;
+    } else if slot.filler != 0 {
+        let mut cursor = start + slot.len as usize;
+        while bytes.get(cursor) == Some(&slot.filler) {
+            cursor += 1;
+            level += 1;
+        }
+        if slot.suffix != 0 {
+            if bytes.get(cursor) != Some(&slot.suffix) { return None }
+            cursor += 1;
+        }
+        width = cursor - start;
+    }
+    // 'xr"' is the name 'xr' and a plain quote, so a prefix spelled with letters stands alone
+    if slot.kind == STRINGS && slot.filler != 0 && !stands_as_its_own_word(bytes, start, width) { return None }
+    if slot.kind == COMMENTS && !stands_as_its_own_word(bytes, start, width) { return None }
+    // An escape cancels a string symbol and nothing else. An escaped raw symbol is kept and marked,
+    // since inside a raw string the escape is an ordinary byte and the symbol still closes it.
+    let mut role = slot.role;
+    if slot.kind == STRINGS && start != 0 && !is_not_escaped(start, bytes, escape) {
         match slot.role {
-            ROLE_CLOSE if !buffers.pair_open => continue,
-            ROLE_OPEN => buffers.pair_open = true,
+            ROLE_EITHER | ROLE_LITERAL => return None,
+            ROLE_RAW => role = ROLE_RAW_ESCAPED,
             _ => ()
         }
-        // Where the language writes the symbol and the character before it as one longer form, the
-        // symbol is part of that form and not itself. C3's '<*' opens a documentation comment
-        // everywhere except in 'int[<*>]', which is a vector of unknown length.
-        if slot.cancelled_by != 0 && start > 0 && line_bytes[start - 1] == slot.cancelled_by {
-            continue;
-        }
-        // The level is carried beside the position, and the pair decides which end answers it
-        let mut level = level_behind;
-        let mut width = slot.len as usize;
-        if slot.counted_backwards {
-            width = at + 1 - start;
-        } else if slot.filler != 0 {
-            let mut cursor = start + slot.len as usize;
-            while line_bytes.get(cursor) == Some(&slot.filler) {
-                cursor += 1;
-                level += 1;
-            }
-            if slot.suffix != 0 {
-                if line_bytes.get(cursor) != Some(&slot.suffix) { continue }
-                cursor += 1;
-            }
-            width = cursor - start;
-        }
-        // 'xr"' is the name 'xr' and a plain quote, so a prefix spelled with letters stands alone
-        if slot.kind == STRINGS && slot.filler != 0 && !stands_as_its_own_word(line_bytes, start, width) {
-            continue;
-        }
-        // An escape cancels a string symbol and nothing else. An escaped raw symbol is kept and
-        // marked instead of dropped, since whether it counts depends on something the scan cannot
-        // see: the resolution below knows whether it would open a string or close one.
-        let mut role = slot.role;
-        if slot.kind == STRINGS && start != 0 && !is_not_escaped(start, line_bytes, escape) {
-            match slot.role {
-                ROLE_EITHER | ROLE_LITERAL => continue,
-                ROLE_RAW => role = ROLE_RAW_ESCAPED,
-                _ => ()
-            }
-        }
+    }
+    if role == ROLE_LITERAL {
+        if !in_code { return None }
+        let closed_at = find_literal_closer(bytes, start + width, symbol_bytes, escape)?;
+        width = closed_at + symbol_bytes.len() - start;
+    }
+    if role == ROLE_DELIMITED {
+        if !in_code { return None }
+        level = find_delimiter_length(bytes, start + width, slot.suffix)? as u32;
+    }
+    Some(Found { kind: slot.kind, symbol: slot.symbol, role, start, width, level })
+}
 
-        // Whatever sits between the two halves is inside the taken pair, so the resolution below
-        // drops it on its own.
-        if slot.role == ROLE_LITERAL {
-            let symbol_bytes = &plan.symbols[index];
-            let mut cursor = start + width;
-            let closed_at = loop {
-                let Some(offset) = memchr::memchr(symbol_bytes[0], &line_bytes[cursor..]) else { break None };
-                let candidate = cursor + offset;
-                if line_bytes[candidate..].starts_with(symbol_bytes)
-                        && is_not_escaped(candidate, line_bytes, escape)
-                        && holds_one_character(&line_bytes[start + width..candidate]) {
-                    break Some(candidate);
-                }
-                cursor = candidate + 1;
-            };
-            let Some(closed_at) = closed_at else {
-                buffers.consumed[index] = consumed_from + start + width;
-                continue;
-            };
-            buffers.raw_strings.push((start, slot.symbol, ROLE_OPEN, 0));
-            buffers.raw_strings.push((closed_at, slot.symbol, ROLE_CLOSE, 0));
-            buffers.consumed[index] = consumed_from + closed_at + width;
-            continue;
+// A literal is its opener, one character and its closer on one line, so a lifetime's lone tick
+// opens nothing while '"' still shields its quote
+fn find_literal_closer(bytes: &[u8], text_from: usize, symbol: &[u8], escape: Option<u8>) -> Option<usize> {
+    let mut cursor = text_from;
+    loop {
+        let candidate = cursor + memchr::memchr(symbol[0], &bytes[cursor..])?;
+        if bytes[candidate..].starts_with(symbol) && is_not_escaped(candidate, bytes, escape)
+                && holds_one_character(&bytes[text_from..candidate]) {
+            return Some(candidate);
         }
-
-        buffers.consumed[index] = consumed_from + start + width;
-        match slot.kind {
-            STRINGS => buffers.raw_strings.push((start, slot.symbol, role, level)),
-            COMMENTS => if stands_as_its_own_word(line_bytes, start, width) {
-                buffers.comments.push(start);
-            },
-            COM_STARTS => buffers.com_starts.push((start, slot.symbol, level)),
-            _ => buffers.com_ends.push((start, slot.symbol, level))
-        }
+        cursor = candidate + 1;
     }
 }
 
@@ -2007,7 +1880,7 @@ fn walk_line_symbols<const EXPLAIN: bool, const FULL: bool>(line: &str, lead: us
         scan.delimiter = state.delimiter;
     }
     let mut line_spans: Vec<Span> = Vec::new();
-    let (mut line_info, mut opened_here) = get_bounds::<EXPLAIN>(line, language, state.open_comment,
+    let (mut line_info, mut opened_here) = lex_line::<EXPLAIN>(line, language, state.open_comment,
             state.open_str_symbol, candidates.behind(lead), scan, &mut line_spans);
 
     state.open_comment = line_info.open_comment_after;
@@ -2515,425 +2388,149 @@ fn note_span<const EXPLAIN: bool>(spans: &mut Vec<Span>, from: usize, to: usize,
     }
 }
 
-fn get_bounds<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
+// One pass over the candidate bytes of a line with what is open carried along. The code stretches
+// go to 'ScanBuffers::code_ranges', the spans to 'spans' when explaining.
+fn lex_line<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
     open_str_symbol: Option<(u8, u32)>, candidates: Candidates, buffers: &mut ScanBuffers, spans: &mut Vec<Span>)
 -> (LineInfo, OpenedHere)
 {
-    // A line holding none of the searched bytes cannot hold a symbol, so it stays inside whatever
-    // was open when it began. One with nothing open never arrives here: 'walk_line' answers it
-    // itself.
-    if !candidates.possible() {
-        debug_assert!(open_comment.is_some() || open_str_symbol.is_some(),
-                "a line with no candidate and nothing open belongs to walk_line");
-        if let Some((symbol, depth)) = open_comment {
-            note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::Comment);
-            return (LineInfo::with_open_comment(false, false, symbol, depth), OpenedHere::default());
-        }
-        note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::String);
-        return (LineInfo::with_open_string(false, open_str_symbol), OpenedHere::default());
-    }
-
-    // A line comment runs to the end of its line, so a line that opens with one is comment through
-    // and through and nothing the scan could find past it changes that. Only with nothing left open
-    // above, since inside a block or a crossing string the same bytes are text.
-    // The buffers are left as the line before them left them, which is safe only because nothing
-    // reads them when no code span comes back.
-    if open_comment.is_none() && open_str_symbol.is_none()
-            && get_or_build_plan_of(language).line_comment_ends_the_line
-            && language.comment_symbols.iter().any(|symbol| line.as_bytes().starts_with(symbol.as_bytes())
-                    && stands_as_its_own_word(line.as_bytes(), 0, symbol.len())) {
-        note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::Comment);
-        return (LineInfo::of(false, false),
-                OpenedHere { ended_in_line_comment: true, ..OpenedHere::default() });
-    }
-
-    // The strings are resolved before the comment boundaries are known, so an opener written inside
-    // a comment can take a string with it past the comment's end. When the walk meets one at the
-    // comment's close, the line is read again with that opener left alone.
-    let spans_at_entry = spans.len();
-    let mut cancelled : Vec<usize> = Vec::new();
-    loop {
-        let mut opener_inside_a_comment = None;
-        let answer = walk_bounds::<EXPLAIN>(line, candidates, language, open_comment, open_str_symbol, buffers,
-                spans, &cancelled, &mut opener_inside_a_comment);
-        let Some(at) = opener_inside_a_comment else { return answer };
-        cancelled.push(at);
-        spans.truncate(spans_at_entry);
-    }
-}
-
-// Reads one line that holds at least one searched byte. When 'opener_inside_a_comment' comes back
-// filled, the resolution the line was read with is known to be wrong. The answer is then the
-// caller's to drop, and it reads the line again.
-fn walk_bounds<const EXPLAIN: bool>(line: &str, candidates: Candidates, language: &Language,
-    open_comment: Option<(u8, u32)>, open_str_symbol: Option<(u8, u32)>, buffers: &mut ScanBuffers, spans: &mut Vec<Span>,
-    cancelled: &[usize], opener_inside_a_comment: &mut Option<usize>)
--> (LineInfo, OpenedHere)
-{
-    scan_line(line, candidates, language, open_str_symbol, buffers);
-    resolve_string_delimiters(language, line.as_bytes(), open_str_symbol, buffers, cancelled);
-    let ScanBuffers { strings: str_indices, string_symbols: str_symbols, string_levels: str_levels,
-            comments: comment_indices, com_starts: com_start_indices, com_ends: com_end_indices, code_ranges, .. } = buffers;
-    let shapes = &get_or_build_plan_of(language).string_shapes;
-
-    match open_comment {
-        None => if open_str_symbol.is_some() && str_indices.is_empty() {
-            note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::String);
-            return (LineInfo::with_open_string(false, open_str_symbol), OpenedHere::default());
-        },
-        // Only the end of the pair that opened the block closes it, so a line holding none of
-        // those is comment through and through, whatever other symbols sit on it. A start of the
-        // same pair counts as an event too when the pair nests, since it changes the depth, and
-        // when the pair closes with its opener, since it is the end.
-        Some((open_pair, carried)) => {
-            let leveled = language.comment_is_leveled(open_pair);
-            let has_end = com_end_indices.iter().any(|(_, symbol, level)|
-                    *symbol == open_pair && (!leveled || *level == carried));
-            let meets_its_start = com_start_indices.iter().any(|(_, symbol, _)| *symbol == open_pair)
-                    && (language.comment_nests(open_pair) || language.comment_closes_with_its_opener(open_pair));
-            if !has_end && !meets_its_start {
-                note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::Comment);
-                return (LineInfo::with_open_comment(false, false, open_pair, carried), OpenedHere::default());
-            }
-        }
-    }
-
-    let kinds_found = [comment_indices.is_empty(), com_start_indices.is_empty(), com_end_indices.is_empty()]
-            .into_iter().filter(|empty| !empty).count();
-    if kinds_found > 1 {
-        resolve_comment_symbols_sharing_bytes(line, language, open_comment, comment_indices, com_start_indices,
-                com_end_indices);
-    }
-
-    if str_indices.is_empty() && comment_indices.is_empty() && com_start_indices.is_empty() && com_end_indices.is_empty() {
-        push_code(code_ranges, line, 0, line.len());
-        note_span::<EXPLAIN>(spans, 0, line.len(), SpanKind::Code);
-        return (LineInfo::of(true, false), OpenedHere::default());
-    }
-
-    let (mut start_com_counter, mut end_com_counter, mut str_counter, mut comment_counter) = (0,0,0,0);
-    let (mut open_com_m, mut is_str_open_m) = (open_comment, open_str_symbol.is_some());
-    // Where the open comment began, zero for one carried in from an earlier line
-    let mut comment_from = 0;
-    let mut crossed = false;
-    let mut opened = OpenedHere::default();
-    // Where the span being recorded for '--explain' began. Zero serves whichever of the three kinds
-    // the line starts inside, and every transition below moves it past the span it just noted.
-    let mut region_from = 0;
-
-    let has_more_comments = |counter| counter < comment_indices.len(); 
-    let has_more_strs = |counter| counter < str_indices.len();
-    let has_more_ends = |counter| counter < com_end_indices.len();
-    let has_more_starts = |counter| counter < com_start_indices.len();
-    let next_symbol_is_comment = |comment_counter: usize, str_counter: usize,
-        start_counter: usize| {
-        if !has_more_comments(comment_counter) {return false; }
-        if has_more_strs(str_counter) && comment_indices[comment_counter] > str_indices[str_counter] {
-            return false;
-        }
-        if has_more_starts(start_counter) && comment_indices[comment_counter] > com_start_indices[start_counter].0 {
-            return false;
-        }
-        true
-    };
-    let next_symbol_is_string = |comment_counter: usize, str_counter: usize,
-        start_counter: usize| {
-        if !has_more_strs(str_counter) {return false;}
-        if has_more_comments(comment_counter)  && str_indices[str_counter] > comment_indices[comment_counter] {
-            return false;
-        }
-        if has_more_starts(start_counter) && str_indices[str_counter] > com_start_indices[start_counter].0 {
-            return false;
-        }
-        true
-    };
-    let next_symbol_is_com_start = |comment_counter: usize, str_counter: usize,
-        start_counter: usize| {
-        if !has_more_starts(start_counter) {return false;}
-        if has_more_comments(comment_counter) && com_start_indices[start_counter].0 > comment_indices[comment_counter] {
-            return false;
-        }
-        if has_more_strs(str_counter) && com_start_indices[start_counter].0 > str_indices[str_counter] {
-            return false;
-        }
-        true
-    };
-    let progress_counters_after = |index, comment_counter: &mut usize, str_counter: &mut usize,
-        start_counter: &mut usize, end_counter: &mut usize| {
-        while *comment_counter < comment_indices.len() && comment_indices[*comment_counter] < index {
-            *comment_counter += 1;
-        }
-        while *str_counter < str_indices.len() && str_indices[*str_counter] < index {
-            *str_counter += 1;
-        }
-        while *start_counter < com_start_indices.len() && com_start_indices[*start_counter].0 < index {
-            *start_counter += 1;
-        }
-        while *end_counter < com_end_indices.len() && com_end_indices[*end_counter].0 < index {
-            *end_counter += 1;
-        }
-    };
-    let skipped_com_end_symbol = |last_symbol_index: usize, end_com_counter: usize, cur_index: usize| {
-        has_more_ends(end_com_counter) && com_end_indices[end_com_counter].0 < cur_index && com_end_indices[end_com_counter].0 >= last_symbol_index
-    };
-
-    let mut has_string_literal = false;
-    let mut slice_start_index = 0;
-    let mut last_symbol_index = 0;
-    loop {
-        if is_str_open_m {
-            last_symbol_index = str_indices[str_counter];
-            let index_after = last_symbol_index + shapes[str_symbols[str_counter] as usize].closer as usize
-                    + str_levels[str_counter] as usize;
-            if index_after >= line.len() {
-                note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::String);
-                return (LineInfo::of(!code_ranges.is_empty(), true), OpenedHere::default());
-            }
-            note_span::<EXPLAIN>(spans, region_from, index_after, SpanKind::String);
-            region_from = index_after;
-
-            progress_counters_after(last_symbol_index, &mut comment_counter, &mut str_counter,
-                    &mut start_com_counter, &mut end_com_counter);
-
-            is_str_open_m = false;
-            str_counter += 1;
-            has_string_literal = true;
-            slice_start_index = index_after;
-        } else if let Some((open_pair, carried)) = open_com_m {
-            // Ends of the other pairs inside this block are text. Walking the counters past them
-            // is safe: everything before the closing position is dead once the block closes there.
-            // For a pair that nests, each of its own starts before an end deepens the block, and
-            // the closer is the end at which the count comes back to zero. For a leveled pair,
-            // 'carried' is the level and only an end with the same count is looked at. A pair
-            // closing with its opener has no ends, and its next start is the closer.
-            let leveled = language.comment_is_leveled(open_pair);
-            let nests = language.comment_nests(open_pair);
-            let closes_with_its_opener = language.comment_closes_with_its_opener(open_pair);
-            let mut depth = if leveled { 1 } else { carried };
-            let closing = loop {
-                if closes_with_its_opener {
-                    while start_com_counter < com_start_indices.len() && com_start_indices[start_com_counter].1 != open_pair {
-                        start_com_counter += 1;
-                    }
-                    break com_start_indices.get(start_com_counter).map(|(at, _, _)| *at);
-                }
-                while end_com_counter < com_end_indices.len()
-                        && (com_end_indices[end_com_counter].1 != open_pair
-                            || (leveled && com_end_indices[end_com_counter].2 != carried)) {
-                    end_com_counter += 1;
-                }
-                if end_com_counter == com_end_indices.len() { break None; }
-                let end_at = com_end_indices[end_com_counter].0;
-
-                if nests {
-                    while start_com_counter < com_start_indices.len() && com_start_indices[start_com_counter].0 < end_at {
-                        if com_start_indices[start_com_counter].1 == open_pair { depth = depth.saturating_add(1); }
-                        start_com_counter += 1;
-                    }
-                }
-                depth -= 1;
-                if depth == 0 { break Some(end_at); }
-                end_com_counter += 1;
-            };
-            let Some(closed_at) = closing else {
-                let mut carry = carried;
-                if nests {
-                    while start_com_counter < com_start_indices.len() {
-                        if com_start_indices[start_com_counter].1 == open_pair { depth = depth.saturating_add(1); }
-                        start_com_counter += 1;
-                    }
-                    carry = depth;
-                }
-                note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::Comment);
-                return (LineInfo::with_open_comment(has_string_literal || !code_ranges.is_empty(),
-                        has_string_literal, open_pair, carry), opened);
-            };
-            last_symbol_index = closed_at;
-            let index_after = last_symbol_index + language.comment_end_len(open_pair, carried);
-            if index_after >= line.len() {
-                note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::Comment);
-                return (LineInfo::of(!code_ranges.is_empty(), has_string_literal), OpenedHere::default());
-            }
-            note_span::<EXPLAIN>(spans, region_from, index_after, SpanKind::Comment);
-            region_from = index_after;
-
-            // Every counter goes past the closer's own bytes and not merely past where it began, so
-            // that a symbol standing at the byte after it is reached by the ordinary dispatch below
-            // instead of being handled a second time here.
-            open_com_m = None;
-            progress_counters_after(index_after, &mut comment_counter, &mut str_counter,
-                    &mut start_com_counter, &mut end_com_counter);
-            // The strings alternate between openers and closers, so a closer here means a string
-            // opened inside this comment and ran past it, which only a paired opener can be cancelled for
-            if !crossed && str_counter > 0 && str_counter % 2 == usize::from(open_str_symbol.is_none()) {
-                crossed = true;
-                let opener = str_counter - 1;
-                let symbol = str_symbols[opener];
-                let is_a_pair = language.find_leveled_string(symbol).is_some()
-                        || { let (open, close) = language.get_string_pair_of(symbol); open != close };
-                if str_indices[opener] >= comment_from && is_a_pair {
-                    *opener_inside_a_comment = Some(str_indices[opener]);
-                }
-            }
-            slice_start_index = index_after;
-        } else {
-            if next_symbol_is_comment(comment_counter, str_counter, start_com_counter) {
-                let comment_at = comment_indices[comment_counter];
-                push_code(code_ranges, line, slice_start_index, comment_at);
-                note_span::<EXPLAIN>(spans, region_from, comment_at, SpanKind::Code);
-                note_span::<EXPLAIN>(spans, comment_at, line.len(), SpanKind::Comment);
-                let ends = OpenedHere { ended_in_line_comment: true, ..OpenedHere::default() };
-                return (LineInfo::of(!code_ranges.is_empty(), has_string_literal), ends);
-            } else if next_symbol_is_string(comment_counter, str_counter, start_com_counter) {
-                let this_index = str_indices[str_counter];
-                while skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
-                    end_com_counter += 1;
-                }
-                push_code(code_ranges, line, slice_start_index, this_index);
-                note_span::<EXPLAIN>(spans, region_from, this_index, SpanKind::Code);
-                region_from = this_index;
-                str_counter += 1;
-                if !has_more_strs(str_counter) {
-                    note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::String);
-                    let symbol = str_symbols[str_counter - 1];
-                    if shapes[symbol as usize].closer == 0 {
-                        return (LineInfo::of(!code_ranges.is_empty(), true), OpenedHere::default());
-                    }
-                    return (LineInfo::with_open_string(!code_ranges.is_empty(),
-                            Some((symbol, str_levels[str_counter-1]))),
-                            OpenedHere { string: true, ..OpenedHere::default() });
-                }
-
-                is_str_open_m = true;
-                has_string_literal = true;
-                last_symbol_index = this_index;
-            } else if next_symbol_is_com_start(comment_counter, str_counter, start_com_counter) {
-                let (this_index, this_symbol, this_level) = com_start_indices[start_com_counter];
-                while skipped_com_end_symbol(last_symbol_index, end_com_counter, this_index) {
-                    end_com_counter += 1;
-                }
-
-                push_code(code_ranges, line, slice_start_index, this_index);
-                note_span::<EXPLAIN>(spans, region_from, this_index, SpanKind::Code);
-                region_from = this_index;
-                // A nesting, leveled or self-closing pair falls through to the open branch even
-                // with no ends left. Further starts of a nesting one still deepen the carried
-                // state, the leveled one carries its level either way, and one closing with its
-                // opener finds its end among the starts
-                if !has_more_ends(end_com_counter) && !language.comment_nests(this_symbol)
-                        && !language.comment_is_leveled(this_symbol)
-                        && !language.comment_closes_with_its_opener(this_symbol) {
-                    note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::Comment);
-                    return (LineInfo::with_open_comment(has_string_literal || !code_ranges.is_empty(),
-                            has_string_literal, this_symbol, 1), OpenedHere { comment: true, ..OpenedHere::default() });
-                }
-
-                open_com_m = Some((this_symbol,
-                        if language.comment_is_leveled(this_symbol) { this_level } else { 1 }));
-                comment_from = this_index;
-                opened.comment = true;
-                start_com_counter += 1;
-                last_symbol_index = this_index;
-            } else {
-                push_code(code_ranges, line, slice_start_index, line.len());
-                note_span::<EXPLAIN>(spans, region_from, line.len(), SpanKind::Code);
-                return (LineInfo::of(true, has_string_literal), OpenedHere::default());
-            }
-        }
-    }
-}
-
-// Of a line comment, a block start and a block end sharing bytes, the one the language's lexer reads
-// depends on what is open when it meets them, so the symbols are taken left to right with the open
-// block and its depth. Strings are not known yet here, so a line comment does not end the pass and a
-// start inside a string counts as opening a block.
-fn resolve_comment_symbols_sharing_bytes(line: &str, language: &Language, open_comment: Option<(u8, u32)>,
-    comment_indices: &mut Vec<usize>, start_indices: &mut Vec<(usize, u8, u32)>, end_indices: &mut Vec<(usize, u8, u32)>)
-{
+    let plan = get_or_build_plan_of(language);
     let bytes = line.as_bytes();
-    let calculate_comment_width = |at: usize| language.comment_symbols.iter()
-            .filter(|symbol| bytes[at..].starts_with(symbol.as_bytes())).map(String::len).max().unwrap_or(0);
-    let starts_a_comment = |at: usize| language.comment_symbols.iter()
-            .any(|symbol| bytes[at..].starts_with(symbol.as_bytes()) && stands_as_its_own_word(bytes, at, symbol.len()));
-    let start_to = |(at, symbol, level): (usize, u8, u32)| at + language.comment_start_len(symbol, level);
-    let end_to = |(at, symbol, level): (usize, u8, u32)| at + language.comment_end_len(symbol, level);
-    // What is open after the symbol, or None when what is open makes the symbol text
-    let apply_start = |open: Option<(u8, u32)>, symbol: u8, level: u32| match open {
-        None => Some(Some((symbol, if language.comment_is_leveled(symbol) { level } else { 1 }))),
-        Some((pair, depth)) if pair == symbol && language.comment_nests(pair) => Some(Some((pair, depth.saturating_add(1)))),
-        Some((pair, _)) if pair == symbol && language.comment_closes_with_its_opener(pair) => Some(None),
-        Some(_) => None,
-    };
-    let apply_end = |open: Option<(u8, u32)>, symbol: u8, level: u32| match open {
-        Some((pair, depth)) if pair == symbol && language.comment_nests(pair) && depth > 1 => Some(Some((pair, depth - 1))),
-        Some((pair, carried)) if pair == symbol && (!language.comment_is_leveled(pair) || level == carried) => Some(None),
-        _ => None,
-    };
+    let escape = language.strings.get_escape();
+    let ScanBuffers { code_ranges, delimiter, .. } = buffers;
+    code_ranges.clear();
+    let (mut open_comment, mut open_string) = (open_comment, open_str_symbol);
+    let mut has_string_literal = open_string.is_some();
+    let mut opened = OpenedHere::default();
+    // Where the stretch being read began, and the first byte no symbol has taken yet
+    let (mut from, mut cursor) = (0, 0);
 
-    let mut open = open_comment;
-    let mut read_to = 0;
-    let (mut comment_counter, mut start_counter, mut end_counter) = (0, 0, 0);
-    loop {
-        let comment = comment_indices.get(comment_counter).copied();
-        let start = start_indices.get(start_counter).copied();
-        let end = end_indices.get(end_counter).copied();
-        let Some(at) = [comment, start.map(|(at, _, _)| at), end.map(|(at, _, _)| at)].into_iter().flatten().min()
-                else { break };
-        // Outside a block the longer of a line comment and a start beginning together is read, and
-        // the line comment when the two are as long
-        let start_is_next = start.is_some_and(|found| found.0 == at && (comment != Some(at) || open.is_some()
-                || calculate_comment_width(at) < start_to(found) - at));
+    // The closer of a delimited string is found by its delimiter, which no candidate byte marks
+    if let Some((symbol, _)) = open_string && language.string_is_delimited(symbol) {
+        let closer = language.get_string_pair_of(symbol).1.as_bytes();
+        let Some(closed_at) = find_delimited_closer(bytes, 0, closer, delimiter.as_bytes()) else {
+            note_span::<EXPLAIN>(spans, 0, bytes.len(), SpanKind::String);
+            return (LineInfo::with_open_string(false, open_string), opened);
+        };
+        cursor = closed_at + delimiter.as_bytes().len() + closer.len();
+        note_span::<EXPLAIN>(spans, 0, cursor, SpanKind::String);
+        from = cursor;
+        open_string = None;
+    }
 
-        if let Some(found) = end.filter(|(end_at, _, _)| *end_at == at) {
-            if at < read_to {
-                end_indices.remove(end_counter);
+    for at in Events::of(candidates, bytes, &plan.finder) {
+        if at < cursor { continue }
+        if let Some((symbol, level)) = open_string {
+            let Some(found) = read_symbol_at(at, cursor, bytes, plan, escape, false, |found|
+                    found.kind == STRINGS && !matches!(found.role, ROLE_OPEN | ROLE_DELIMITED | ROLE_LINE)
+                    && language.string_is_closed_by((symbol, level), (found.symbol, found.level))) else { continue };
+            let shape = plan.string_shapes[symbol as usize];
+            let length = shape.closer as usize + level as usize;
+            // The closer written twice inside the string is one quote of its text
+            if shape.doubling && bytes[found.start + length..].starts_with(&bytes[found.start..found.start + length]) {
+                cursor = found.start + 2 * length;
                 continue;
             }
-            end_counter += 1;
-            let Some(after) = apply_end(open, found.1, found.2) else { continue };
-            open = after;
-            read_to = end_to(found);
-            drop_text_running_past(start_indices, &mut start_counter, at, start_to);
-        } else if let Some(found) = start.filter(|_| start_is_next) {
-            if at < read_to {
-                start_indices.remove(start_counter);
-                continue;
+            // '""""' ends a '"""' string at its last quote, and the one before is text
+            let in_front = match shape.run_closes {
+                true => bytes[found.start + length..].iter().take_while(|byte| **byte == bytes[found.start]).count(),
+                false => 0
+            };
+            cursor = found.start + in_front + length;
+            note_span::<EXPLAIN>(spans, from, cursor, SpanKind::String);
+            from = cursor;
+            open_string = None;
+            has_string_literal = true;
+        } else if let Some((pair, carried)) = open_comment {
+            let leveled = language.comment_is_leveled(pair);
+            let nests = language.comment_nests(pair);
+            let Some(found) = read_symbol_at(at, cursor, bytes, plan, escape, false, |found| found.symbol == pair
+                    && match found.kind {
+                        COM_ENDS => !leveled || found.level == carried,
+                        COM_STARTS => nests || language.comment_closes_with_its_opener(pair),
+                        _ => false
+                    }) else { continue };
+            cursor = found.start + found.width;
+            if found.kind == COM_STARTS && nests {
+                open_comment = Some((pair, carried.saturating_add(1)));
+            } else if nests && carried > 1 {
+                open_comment = Some((pair, carried - 1));
+            } else {
+                note_span::<EXPLAIN>(spans, from, cursor, SpanKind::Comment);
+                from = cursor;
+                open_comment = None;
             }
-            start_counter += 1;
-            let Some(after) = apply_start(open, found.1, found.2) else { continue };
-            open = after;
-            read_to = start_to(found);
-            drop_text_running_past(end_indices, &mut end_counter, at, end_to);
         } else {
-            // The scan never reports a symbol overlapping itself, so in '*///' the real '//' is the
-            // one past the closer and only the one lying across it was found
-            if at < read_to {
-                while comment_indices.get(comment_counter).is_some_and(|&inside| inside < read_to) {
-                    comment_indices.remove(comment_counter);
+            let Some(found) = read_symbol_at(at, cursor, bytes, plan, escape, true, |found| match found.kind {
+                        STRINGS => !matches!(found.role, ROLE_CLOSE | ROLE_RAW_ESCAPED),
+                        COM_ENDS => false,
+                        _ => true
+                    }) else { continue };
+            push_code(code_ranges, line, from, found.start);
+            note_span::<EXPLAIN>(spans, from, found.start, SpanKind::Code);
+            from = found.start;
+            cursor = found.start + found.width;
+            match found.kind {
+                COMMENTS => {
+                    note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::Comment);
+                    opened.ended_in_line_comment = true;
+                    return (LineInfo::of(!code_ranges.is_empty(), has_string_literal), opened);
+                },
+                COM_STARTS => {
+                    let level = if language.comment_is_leveled(found.symbol) { found.level } else { 1 };
+                    open_comment = Some((found.symbol, level));
+                    opened.comment = true;
+                },
+                _ => {
+                    has_string_literal = true;
+                    match found.role {
+                        ROLE_LITERAL => {
+                            note_span::<EXPLAIN>(spans, from, cursor, SpanKind::String);
+                            from = cursor;
+                        },
+                        ROLE_LINE => {
+                            note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::String);
+                            return (LineInfo::of(!code_ranges.is_empty(), true), opened);
+                        },
+                        ROLE_DELIMITED => {
+                            let closer = language.get_string_pair_of(found.symbol).1.as_bytes();
+                            let width = found.level as usize;
+                            *delimiter = Delimiter::of(&bytes[cursor..cursor + width]);
+                            cursor += width + 1;
+                            match find_delimited_closer(bytes, cursor, closer, delimiter.as_bytes()) {
+                                Some(closed_at) => {
+                                    cursor = closed_at + width + closer.len();
+                                    note_span::<EXPLAIN>(spans, from, cursor, SpanKind::String);
+                                    from = cursor;
+                                },
+                                None => {
+                                    open_string = Some((found.symbol, 0));
+                                    opened.string = true;
+                                }
+                            }
+                        },
+                        _ => {
+                            open_string = Some((found.symbol, found.level));
+                            opened.string = true;
+                        }
+                    }
                 }
-                if read_to < bytes.len() && starts_a_comment(read_to) && comment_indices.get(comment_counter) != Some(&read_to) {
-                    comment_indices.insert(comment_counter, read_to);
-                }
-                continue;
             }
-            comment_counter += 1;
-            if open.is_some() { continue; }
-            read_to = at + calculate_comment_width(at);
-            drop_text_running_past(start_indices, &mut start_counter, at, start_to);
-            drop_text_running_past(end_indices, &mut end_counter, at, end_to);
-            continue;
         }
-        drop_text_running_past(comment_indices, &mut comment_counter, at, |comment_at| comment_at + calculate_comment_width(comment_at));
     }
-}
 
-// A symbol behind the counter whose bytes run past the one just read was passed over as text, and it
-// gives up the bytes the two share
-fn drop_text_running_past<T: Copy>(symbols: &mut Vec<T>, counter: &mut usize, at: usize, find_end: impl Fn(T) -> usize) {
-    while *counter > 0 && find_end(symbols[*counter - 1]) > at {
-        *counter -= 1;
-        symbols.remove(*counter);
+    if let Some(open) = open_string {
+        note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::String);
+        return (LineInfo::with_open_string(!code_ranges.is_empty(), Some(open)), opened);
     }
+    if let Some((pair, depth)) = open_comment {
+        note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::Comment);
+        return (LineInfo::with_open_comment(has_string_literal || !code_ranges.is_empty(), has_string_literal, pair, depth),
+                opened);
+    }
+    push_code(code_ranges, line, from, bytes.len());
+    note_span::<EXPLAIN>(spans, from, bytes.len(), SpanKind::Code);
+    (LineInfo::of(!code_ranges.is_empty(), has_string_literal), opened)
 }
 
 // Only the front of the first stretch and the back of the last are trimmed, and a stretch that
@@ -3030,110 +2627,6 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
     }
 }
 
-// Every string symbol the scan found, reduced to the ones that actually open or close a string.
-// Only the symbol that opened a string can close it, so anything of another kind in between is
-// text. A pair whose halves differ splits the rule in two: its opener cannot close and its closer
-// cannot open, so a stray '"#' sitting in code is text and not the start of anything.
-// An opener named in 'cancelled' opens nothing.
-fn resolve_string_delimiters(language: &Language, line_bytes: &[u8], open_str_symbol: Option<(u8, u32)>,
-    buffers: &mut ScanBuffers, cancelled: &[usize])
-{
-    let ScanBuffers { raw_strings, strings, string_symbols, string_levels, delimiter, .. } = buffers;
-    let shapes = &get_or_build_plan_of(language).string_shapes;
-
-    let mut open = open_str_symbol;
-    let mut consumed_up_to = 0;
-
-    // A line holding no closer of a carried delimited string is string from end to end. The walk measures
-    // a closer by its declared symbol, so a delimited one is recorded as far in as its delimiter is long
-    if let Some((symbol, _)) = open && language.string_is_delimited(symbol) {
-        let closer = language.get_string_pair_of(symbol).1.as_bytes();
-        let carried = delimiter.as_bytes();
-        let Some(closed_at) = find_delimited_closer(line_bytes, 0, closer, carried) else { return };
-        strings.push(closed_at + carried.len());
-        string_symbols.push(symbol);
-        string_levels.push(0);
-        consumed_up_to = closed_at + carried.len() + closer.len();
-        open = None;
-    }
-
-    for &(at, symbol, role, level) in raw_strings.iter() {
-        // What sits inside a symbol that was already taken is part of it, not a symbol of its own
-        if at < consumed_up_to {
-            continue;
-        }
-        let shape = shapes[symbol as usize];
-        // A cancelled opener stands inside a comment, so the bytes it spans are comment text too
-        if (role == ROLE_OPEN || role == ROLE_DELIMITED || role == ROLE_LINE) && cancelled.contains(&at) {
-            consumed_up_to = at + shape.opener as usize + level as usize;
-            continue;
-        }
-        let (at, length, level) = match open {
-            Some((open_symbol, open_level)) => {
-                if role == ROLE_OPEN || role == ROLE_DELIMITED || role == ROLE_LINE || match shape.leveled {
-                    false => open_symbol != symbol,
-                    true => !language.string_is_closed_by((open_symbol, open_level), (symbol, level))
-                } {
-                    continue;
-                }
-                let length = shape.closer as usize + open_level as usize;
-                let closer = &line_bytes[at..at + length];
-                if shape.doubling && line_bytes[at + length..].starts_with(closer) {
-                    consumed_up_to = at + 2 * length;
-                    continue;
-                }
-                let quotes_in_front = if shape.run_closes {
-                    line_bytes[at + length..].iter().take_while(|byte| **byte == closer[0]).count()
-                } else {
-                    0
-                };
-                open = None;
-                (at + quotes_in_front, length, open_level)
-            }
-            None => {
-                // A closer opens nothing, and neither does a raw symbol the language escaped.
-                // Outside a string there is nothing for the escape to be an ordinary byte of
-                if role == ROLE_CLOSE || role == ROLE_RAW_ESCAPED { continue; }
-                if role == ROLE_LINE {
-                    strings.push(at);
-                    string_symbols.push(symbol);
-                    string_levels.push(0);
-                    break;
-                }
-                if role == ROLE_DELIMITED {
-                    let (opener, closer) = language.get_string_pair_of(symbol);
-                    let (from, bracket) = (at + opener.len() - 1, opener.as_bytes()[opener.len() - 1]);
-                    let Some(width) = find_delimiter_length(line_bytes, from, bracket) else { continue };
-                    *delimiter = Delimiter::of(&line_bytes[from..from + width]);
-                    strings.push(at);
-                    string_symbols.push(symbol);
-                    string_levels.push(0);
-                    let text_from = from + width + 1;
-                    match find_delimited_closer(line_bytes, text_from, closer.as_bytes(), delimiter.as_bytes()) {
-                        Some(closed_at) => {
-                            strings.push(closed_at + width);
-                            string_symbols.push(symbol);
-                            string_levels.push(0);
-                            consumed_up_to = closed_at + width + closer.len();
-                        },
-                        None => {
-                            open = Some((symbol, 0));
-                            consumed_up_to = text_from;
-                        }
-                    }
-                    continue;
-                }
-                open = Some((symbol, level));
-                (at, shape.opener as usize + level as usize, level)
-            }
-        };
-        consumed_up_to = at + length;
-        strings.push(at);
-        string_symbols.push(symbol);
-        string_levels.push(level);
-    }
-}
-
 // A delimiter holds no bracket, backslash, whitespace or byte above ASCII. One of those before the
 // bracket, or no bracket within sixteen bytes, leaves the quote an ordinary string
 fn find_delimiter_length(line_bytes: &[u8], from: usize, bracket: u8) -> Option<usize> {
@@ -3216,36 +2709,44 @@ mod tests {
 
     fn bounds_multi_deep(line: &str, language: &Language, open_comment: Option<(u8, u32)>, open_str_symbol: Option<(u8, u32)>) -> TextInfo {
         let mut buffers = ScanBuffers::default();
-        let (info, _) = get_bounds::<false>(line, language, open_comment, open_str_symbol, Candidates::Unsearched,
+        let (info, _) = lex_line::<false>(line, language, open_comment, open_str_symbol, Candidates::Unsearched,
                 &mut buffers, &mut Vec::new());
         text_of(line, info, &buffers)
     }
 
+    // Where each string begins and the byte after its closer. A string carried in from the line
+    // before has no beginning here and one left open has no end.
+    fn string_edges(line: &str, language: &Language, open_str_symbol: Option<u8>) -> Vec<usize> {
+        let mut spans = Vec::new();
+        let (info, _) = lex_line::<true>(line, language, None, open_str_symbol.map(|symbol| (symbol, 0)),
+                Candidates::Unsearched, &mut ScanBuffers::default(), &mut spans);
+        let mut edges = spans.iter().filter(|span| span.kind == SpanKind::String)
+                .flat_map(|span| [span.from, span.to]).collect::<Vec<_>>();
+        if info.open_str_symbol_after.is_some() {
+            edges.pop();
+        }
+        if open_str_symbol.is_some() && !edges.is_empty() {
+            edges.remove(0);
+        }
+        edges
+    }
+
+    fn comment_edges(line: &str, language: &Language) -> Vec<usize> {
+        let mut spans = Vec::new();
+        lex_line::<true>(line, language, None, None, Candidates::Unsearched, &mut ScanBuffers::default(), &mut spans);
+        spans.iter().filter(|span| span.kind == SpanKind::Comment).map(|span| span.from).collect()
+    }
+
+    fn collect_searched_bytes_of(plan: &ScanPlan) -> Vec<u8> {
+        let mut bytes = plan.slots.iter().zip(&plan.symbols).map(|(slot, symbol)| symbol[slot.anchor as usize])
+                .collect::<Vec<u8>>();
+        bytes.sort_unstable();
+        bytes.dedup();
+        bytes
+    }
+
     fn keywords_of(line: &str, matcher: &KeywordMatcher, file_stats: &mut FileStats) {
         count_keywords(line, &[(0, line.len() as u32)], matcher, file_stats, &mut Vec::new(), None);
-    }
-
-    fn str_delimiters(line: &str, language: &Language, open_str_symbol: Option<u8>) -> (Vec<usize>, Vec<u8>) {
-        let mut buffers = ScanBuffers::default();
-        scan_line(line, Candidates::Unsearched, language, None, &mut buffers);
-        resolve_string_delimiters(language, line.as_bytes(), open_str_symbol.map(|symbol| (symbol, 0)), &mut buffers, &[]);
-        (buffers.strings, buffers.string_symbols)
-    }
-
-    fn comment_delimiters(line: &str, language: &Language) -> Vec<usize> {
-        let mut buffers = ScanBuffers::default();
-        scan_line(line, Candidates::Unsearched, language, None, &mut buffers);
-        buffers.comments
-    }
-
-    fn comment_delimiters_w_multiline(line: &str, language: &Language, com_end_indices: &[usize], open_comment: Option<u8>)
-    -> Vec<usize> {
-        let mut ends = com_end_indices.iter().map(|at| (*at, 0u8, 0u32)).collect::<Vec<_>>();
-        let mut buffers = ScanBuffers::default();
-        scan_line(line, Candidates::Unsearched, language, None, &mut buffers);
-        resolve_comment_symbols_sharing_bytes(line, language, open_comment.map(|symbol| (symbol, 1)), &mut buffers.comments,
-                &mut Vec::new(), &mut ends);
-        buffers.comments
     }
 
     static CLASS : LazyLock<Keyword> = LazyLock::new(|| Keyword::new("classes", ["class"]));
@@ -3403,10 +2904,13 @@ mod tests {
         }
     }
 
+    // Random files of the symbols C and Rust read, held byte for byte against a lexer of a few
+    // lines that knows '//', '/*', '*/', Rust's nesting and a '"' string
     #[test]
-    fn comment_symbols_sharing_bytes_read_byte_for_byte_as_a_reference_lexer() {
-        const ALPHABET: [char; 4] = ['/', '*', ' ', 'x'];
-        let languages = [(&LANGUAGE_MAP_REF["C"], false), (&LANGUAGE_MAP_REF["Rust"], true)];
+    fn comment_and_string_symbols_read_byte_for_byte_as_a_reference_lexer() {
+        const ALPHABET: [char; 5] = ['/', '*', '"', ' ', 'x'];
+        // Whether the block pair nests, and whether a string crosses lines
+        let languages = [(&LANGUAGE_MAP_REF["C"], false, false), (&LANGUAGE_MAP_REF["Rust"], true, true)];
         let mut seed = 0x517C_C1B7_2722_0A95u64;
         let mut next = move || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
 
@@ -3419,28 +2923,38 @@ mod tests {
                 contents.push('\n');
             }
 
-            for (language, nests) in languages {
+            for (language, nests, string_crosses_lines) in languages {
                 let (walked, log) = parse_lines_explained(&contents, language, &empty_lookup(),
                         &EngineConfig::default(), TestsByPath::Nothing);
-                let mut depth = 0u32;
+                let (mut depth, mut in_string) = (0u32, false);
                 let mut expected_classes = LineClasses::default();
 
                 for (raw_line, record) in contents.lines().zip(log.records()) {
                     let trimmed = raw_line.trim_ascii();
                     if trimmed.is_empty() {
                         assert!(record.spans.is_empty(), "{contents:?} in {}", language.name);
-                        let class = if depth == 0 { LineClass::Blank } else { LineClass::BlankInComment };
+                        let class = if in_string { LineClass::BlankInString }
+                                else if depth == 0 { LineClass::Blank } else { LineClass::BlankInComment };
                         assert_eq!(class, record.class, "{contents:?} in {}", language.name);
                         expected_classes.bump(class);
                         continue;
                     }
 
                     let bytes = trimmed.as_bytes();
+                    let began_in_string = in_string;
                     let mut expected_bytes = Vec::with_capacity(bytes.len());
                     let mut i = 0;
                     while i < bytes.len() {
-                        if depth == 0 {
-                            if bytes[i..].starts_with(b"//") {
+                        if in_string {
+                            in_string = bytes[i] != b'"';
+                            expected_bytes.push(SpanKind::String);
+                            i += 1;
+                        } else if depth == 0 {
+                            if bytes[i] == b'"' {
+                                in_string = true;
+                                expected_bytes.push(SpanKind::String);
+                                i += 1;
+                            } else if bytes[i..].starts_with(b"//") {
                                 expected_bytes.resize(bytes.len(), SpanKind::Comment);
                                 break;
                             } else if bytes[i..].starts_with(b"/*") {
@@ -3464,13 +2978,16 @@ mod tests {
                             i += 1;
                         }
                     }
+                    if !string_crosses_lines { in_string = false; }
 
                     let has_code = bytes.iter().zip(&expected_bytes)
                             .any(|(&ch, &kind)| kind == SpanKind::Code && !ch.is_ascii_whitespace());
                     let words_in_code = bytes.iter().zip(&expected_bytes)
                             .any(|(&ch, &kind)| kind == SpanKind::Code && ch.is_ascii_alphanumeric());
                     let has_words = bytes.iter().any(|&ch| ch.is_ascii_alphanumeric());
+                    let has_string = began_in_string || expected_bytes.contains(&SpanKind::String);
                     let expected_class = if words_in_code { LineClass::WordsInCode }
+                            else if has_string { LineClass::StringContent }
                             else if has_words {
                                 if has_code { LineClass::CommentWordsBesideCode } else { LineClass::WordsInComment }
                             } else if has_code { LineClass::PunctuationInCode }
@@ -3643,7 +3160,7 @@ mod tests {
         let read = |candidates: Candidates, open_comment, open_str_symbol| {
             let mut buffers = ScanBuffers::default();
             let mut spans = Vec::new();
-            let answer = get_bounds::<true>(line, &RUST, open_comment, open_str_symbol, candidates,
+            let answer = lex_line::<true>(line, &RUST, open_comment, open_str_symbol, candidates,
                     &mut buffers, &mut spans);
             (answer, spans)
         };
@@ -3712,7 +3229,7 @@ mod tests {
         let mut file_stats = FileStats::with_keywords(&[STRUCT.clone(),ENUM.clone(),TRAIT.clone()]);
         let matcher = KeywordMatcher::build(&RUST).unwrap();
         let mut buffers = ScanBuffers::default();
-        let (info, _) = get_bounds::<false>(line, &RUST, None, None, Candidates::Unsearched, &mut buffers, &mut Vec::new());
+        let (info, _) = lex_line::<false>(line, &RUST, None, None, Candidates::Unsearched, &mut buffers, &mut Vec::new());
         let mut spans = Vec::new();
         assert!(info.has_code);
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
@@ -3723,7 +3240,7 @@ mod tests {
         let line = "struct a;";
         let mut file_stats = FileStats::with_keywords(&[STRUCT.clone(),ENUM.clone(),TRAIT.clone()]);
         let mut buffers = ScanBuffers::default();
-        let (info, _) = get_bounds::<false>(line, &RUST, None, None, Candidates::Unsearched, &mut buffers, &mut Vec::new());
+        let (info, _) = lex_line::<false>(line, &RUST, None, None, Candidates::Unsearched, &mut buffers, &mut Vec::new());
         let mut spans = Vec::new();
         assert!(info.has_code);
         push_trimmed_spans(&mut spans, &buffers.code_ranges, line, 0);
@@ -3823,70 +3340,64 @@ mod tests {
         let single_str_opt = Some(1u8);
         let double_str_opt = Some(0u8);
         let line = String::from("Hello");
-        assert_eq!(Vec::<usize>::new(),str_delimiters(&line, &PYTHON, None).0);
+        assert_eq!(Vec::<usize>::new(),string_edges(&line, &PYTHON, None));
         let line = String::from("\"Hello\"");
-        assert_eq!((vec![0,6],vec![0u8,0u8]),str_delimiters(&line, &PYTHON, None));
+        assert_eq!(vec![0,7],string_edges(&line, &PYTHON, None));
         let line = String::from("\"'\"Hello");
-        assert_eq!((vec![0,2],vec![0u8,0u8]),str_delimiters(&line, &PYTHON, None));
-        assert_eq!((vec![1,2],vec![1u8,0u8]),str_delimiters(&line, &PYTHON, single_str_opt));
-        assert_eq!((vec![0,1],vec![0u8,1u8]),str_delimiters(&line, &PYTHON, double_str_opt));
+        assert_eq!(vec![0,3],string_edges(&line, &PYTHON, None));
+        assert_eq!(vec![2,2],string_edges(&line, &PYTHON, single_str_opt));
+        assert_eq!(vec![1,1],string_edges(&line, &PYTHON, double_str_opt));
         let line = String::from("''\"\"Hello");
-        assert_eq!(vec![0,1,2,3],str_delimiters(&line, &PYTHON, None).0);
-        assert_eq!(vec![0,1],str_delimiters(&line, &PYTHON, single_str_opt).0);
-        assert_eq!(vec![2,3],str_delimiters(&line, &PYTHON, double_str_opt).0);
+        assert_eq!(vec![0,2,2,4],string_edges(&line, &PYTHON, None));
+        assert_eq!(vec![1,1],string_edges(&line, &PYTHON, single_str_opt));
+        assert_eq!(vec![3,3],string_edges(&line, &PYTHON, double_str_opt));
         let line = String::from("'\"'\"''\"He'l\"lo");
-        assert_eq!(vec![0,2,3,6,9],str_delimiters(&line, &PYTHON, None).0);
-        assert_eq!(vec![0,1,3,4,5,6,11],str_delimiters(&line, &PYTHON, single_str_opt).0);
-        assert_eq!(vec![1,2,4,5,9,11],str_delimiters(&line, &PYTHON, double_str_opt).0);
-        assert_eq!(vec![1,3,6,11],str_delimiters(&line, &JAVA, double_str_opt).0);
+        assert_eq!(vec![0,3,3,7,9],string_edges(&line, &PYTHON, None));
+        assert_eq!(vec![1,1,4,4,6,6,12],string_edges(&line, &PYTHON, single_str_opt));
+        assert_eq!(vec![2,2,5,5,10,11],string_edges(&line, &PYTHON, double_str_opt));
+        assert_eq!(vec![2,3,7,11],string_edges(&line, &JAVA, double_str_opt));
         let line = String::from(r#"\'\\'\\'\\\''"#);
-        assert_eq!(vec![4,7,12], str_delimiters(&line, &PYTHON, None).0);
-        assert_eq!(vec![4,7,12], str_delimiters(&line, &PYTHON, single_str_opt).0);
+        assert_eq!(vec![4,8,12], string_edges(&line, &PYTHON, None));
+        assert_eq!(vec![5,7,13], string_edges(&line, &PYTHON, single_str_opt));
         let line = String::from(r#"["❌🔤","💭🔜","📗","📘",]"#);
-        assert!(str_delimiters(&line, &PYTHON, None).0.len() == 8);
-        assert!(str_delimiters(&line, &RUST, double_str_opt).0.len() == 8);
-        let line = String::from(r#"[\'⣾\', '⣷', '⣯', '⣟', '⡿']"#); 
-        assert!(str_delimiters(&line, &PYTHON, None).0.len() == 8);
-        assert!(str_delimiters(&line, &RUST, None).0.is_empty());
-        let line = String::from(r#"['⣾", '⣷", '⣯"]"#); 
-        assert_eq!(vec![1u8,1u8,0u8,0u8],
-                str_delimiters(&line, &PYTHON, None).1);
-        let line = String::from(r#"'\'\'\''"#); 
-        assert_eq!(vec![0,7], str_delimiters(&line, &PYTHON, None).0);
+        assert!(string_edges(&line, &PYTHON, None).len() == 8);
+        assert!(string_edges(&line, &RUST, double_str_opt).len() == 8);
+        let line = String::from(r#"[\'⣾\', '⣷', '⣯', '⣟', '⡿']"#);
+        assert!(string_edges(&line, &PYTHON, None).len() == 8);
+        assert!(string_edges(&line, &RUST, None).is_empty());
+        let line = String::from(r#"'\'\'\''"#);
+        assert_eq!(vec![0,8], string_edges(&line, &PYTHON, None));
         let line = String::from(r#""\"\\"""#); //  """\"""
-        assert_eq!(vec![0,5,6], str_delimiters(&line, &RUST, None).0);
-        assert_eq!(vec![0,5,6], str_delimiters(&line, &PYTHON, None).0);
+        assert_eq!(vec![0,6,6], string_edges(&line, &RUST, None));
+        assert_eq!(vec![0,6,6], string_edges(&line, &PYTHON, None));
         let line = String::from(r#"\\\"\"\\""#);
-        assert_eq!(vec![8], str_delimiters(&line, &RUST, None).0);
-        assert_eq!(vec![8], str_delimiters(&line, &PYTHON, None).0);
+        assert_eq!(vec![8], string_edges(&line, &RUST, None));
+        assert_eq!(vec![8], string_edges(&line, &PYTHON, None));
     }
 
     // More than two string symbols, and the two rules that make them work: only the symbol that
     // opened a string closes it, and where two of them start at the same place the longer wins.
     #[test]
     fn a_language_can_declare_more_than_two_string_symbols() {
-        let indices_of = |line: &str| str_delimiters(line, &PYTHON_FULL, None);
+        let indices_of = |line: &str| string_edges(line, &PYTHON_FULL, None);
 
         // the third and the fourth symbol are seen at all
-        assert_eq!(vec![0, 4], indices_of(r#""abc""#).0);
-        assert_eq!(vec![0, 4], indices_of(r#"'abc'"#).0);
+        assert_eq!(vec![0, 5], indices_of(r#""abc""#));
+        assert_eq!(vec![0, 5], indices_of(r#"'abc'"#));
 
-        // '"""' is one symbol and not three '"', so the docstring opens once and closes once. Its
-        // number is 2, since the crossing symbols are numbered after the plain ones.
-        let (indices, symbols) = indices_of(r#""""a docstring""""#);
-        assert_eq!(vec![0, 14], indices);
-        assert_eq!(vec![2u8, 2u8], symbols);
+        // '"""' is one symbol and not three '"', so the docstring opens once and closes once.
+        // The crossing symbols are numbered after the plain ones, which makes it symbol 2.
+        assert_eq!(vec![0, 17], indices_of(r#""""a docstring""""#));
 
         // Only the symbol that opened closes: the quote of an apostrophe inside a string is text,
         // and so is a '"""' that turns up inside a plain '"'
-        assert_eq!(vec![0, 10], indices_of(r#""it's fine""#).0);
-        assert_eq!(vec![0, 8], indices_of(r#"'a """ b'"#).0);
+        assert_eq!(vec![0, 11], indices_of(r#""it's fine""#));
+        assert_eq!(vec![0, 9], indices_of(r#"'a """ b'"#));
 
-        // A line that leaves one open reports its symbol, and the next line closes with that one
-        let (indices, symbols) = indices_of(r#"x = """ open"#);
-        assert_eq!((vec![4], vec![2u8]), (indices, symbols));
+        // A line that leaves one open, and the next line closes with that one
+        assert_eq!(vec![4], indices_of(r#"x = """ open"#));
         let open = Some(2u8);
-        assert_eq!(vec![5], str_delimiters("still\"\"\"", &PYTHON_FULL, open).0);
+        assert_eq!(vec![8], string_edges("still\"\"\"", &PYTHON_FULL, open));
     }
 
     // Inside an open string the other symbol is text, and it stays text even when every occurrence
@@ -3897,12 +3408,12 @@ mod tests {
         let open_double = Some(0u8);
 
         // A '"' while a '...' string is open, and the only ''' on the line is escaped
-        assert_eq!((vec![], vec![]), str_delimiters("\"\\'", &PYTHON, open_single));
-        assert_eq!((vec![], vec![]), str_delimiters("'\\\"", &PYTHON, open_double));
-        assert_eq!((vec![], vec![]), str_delimiters("a\"b\\'c", &PYTHON, open_single));
+        assert_eq!(Vec::<usize>::new(), string_edges("\"\\'", &PYTHON, open_single));
+        assert_eq!(Vec::<usize>::new(), string_edges("'\\\"", &PYTHON, open_double));
+        assert_eq!(Vec::<usize>::new(), string_edges("a\"b\\'c", &PYTHON, open_single));
 
         // And the same line closes the string as soon as one unescaped occurrence is there
-        assert_eq!(vec![3], str_delimiters("\"\\''", &PYTHON, open_single).0);
+        assert_eq!(vec![4], string_edges("\"\\''", &PYTHON, open_single));
     }
 
     #[test]
@@ -3937,27 +3448,23 @@ mod tests {
         // The question is asked of the symbol's own ends, so nothing changes for the languages
         // whose symbols carry no letter at all
         let c_like = Language::new("c-like", ["c"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], []);
-        assert_eq!(vec![4], comment_delimiters("code// a comment", &c_like));
-        assert_eq!(vec![0], comment_delimiters("//x", &c_like));
+        assert_eq!(vec![4], comment_edges("code// a comment", &c_like));
+        assert_eq!(vec![0], comment_edges("//x", &c_like));
     }
 
     #[test]
     fn a_language_can_declare_more_than_two_comment_symbols() {
-        let indices_of = |line: &str| comment_delimiters(line, &PYTHON_FULL);
+        let indices_of = |line: &str| comment_edges(line, &PYTHON_FULL);
 
         assert_eq!(vec![4], indices_of("code# a comment"));
         assert_eq!(vec![4], indices_of("code// a comment"));
         // the third one
         assert_eq!(vec![4], indices_of("code-- a comment"));
-        // All of them on one line, in the order they are written and not in the order they are declared
-        assert_eq!(vec![2, 6, 10], indices_of("a --b //c #d"));
-        // and with no byte between them, where the scan has to resume past the whole of the symbol
-        // it just took and not one byte into it
-        assert_eq!(vec![0, 2, 3], indices_of("--#//"));
-        // The same symbol twice over is the harder half of that, because the scan keeps its mark
-        // per symbol: the '//' at byte 1 overlaps the one already taken and is dropped, the one at
-        // byte 2 begins exactly where it ended and is kept
-        assert_eq!(vec![0, 2], indices_of("////"));
+        // The first one written ends the line, whichever was declared first, and the others are
+        // its text
+        assert_eq!(vec![2], indices_of("a --b //c #d"));
+        assert_eq!(vec![0], indices_of("--#//"));
+        assert_eq!(vec![0], indices_of("////"));
     }
 
     // A block comment whose opening starts with the line comment symbol, which is Lua's shape
@@ -4253,10 +3760,8 @@ mod tests {
     #[test]
     fn a_symbol_led_by_a_letter_is_searched_by_a_byte_the_scan_wanted_anyway() {
         let plan = ScanPlan::build(&RUST_RAW);
-        assert!(plan.chunks.iter().all(|c| !c.bytes[..c.len as usize].contains(&b'r')),
+        assert!(!collect_searched_bytes_of(&plan).contains(&b'r'),
                 "the scan searches for 'r', which floods on ordinary code");
-        // '"', '/' and '*' cover everything the language declares, in one pass
-        assert_eq!(1, plan.chunks.len());
 
         // The byte is chosen from the ones the language already looks for and not from the end of
         // the symbol: on its last punctuation, C++'s 'R"(' would be found by '('
@@ -4264,15 +3769,12 @@ mod tests {
                 build_backslashed_quotes().with_string_pairs(&[("R\"(", ")\"")]),
                 ["//"], &[("/*", "*/")], []);
         let plan = ScanPlan::build(&cpp_raw);
-        assert!(plan.chunks.iter().all(|c| !c.bytes[..c.len as usize].contains(&b'(')),
+        assert!(!collect_searched_bytes_of(&plan).contains(&b'('),
                 "the opener is searched by '(' in a language made of brackets");
 
         // the counted form is read backwards from its quote, so neither a prefix letter nor the '#'
         // of its run joins the bytes the language searched without it
-        let plan = ScanPlan::build(&RUST_LEVELED);
-        let mut searched = plan.chunks.iter().flat_map(|c| c.bytes[..c.len as usize].to_vec()).collect::<Vec<u8>>();
-        searched.sort_unstable();
-        assert_eq!((b"\"'/".to_vec(), 1), (searched, plan.chunks.len()));
+        assert_eq!(b"\"'/".to_vec(), collect_searched_bytes_of(&ScanPlan::build(&RUST_LEVELED)));
     }
 
     // C++'s ')"' would put the bracket that stands in front of every call into the scan, while the
@@ -4284,17 +3786,11 @@ mod tests {
                 build_backslashed_quotes().with_string_pairs(&[("R\"(", ")\"")]),
                 ["//"], &[("/*", "*/")], []);
 
-        let bytes_of = |language: &Language| {
-            let plan = ScanPlan::build(language);
-            let mut bytes = plan.chunks.iter()
-                    .flat_map(|c| c.bytes[..c.len as usize].to_vec()).collect::<Vec<u8>>();
-            bytes.sort_unstable();
-            (bytes, plan.chunks.len())
-        };
+        let bytes_of = |language: &Language| collect_searched_bytes_of(&ScanPlan::build(language));
         assert_eq!(bytes_of(&plain), bytes_of(&with_raw));
         // '*' is dropped rather than kept: '*/' holds the '/' that '//' forces into the scan, and
         // every pointer, product and comment continuation line stops being a candidate position
-        assert_eq!((vec![b'"', b'/'], 1), bytes_of(&with_raw));
+        assert_eq!(vec![b'"', b'/'], bytes_of(&with_raw));
     }
 
     // Whether a backslash cancels the symbol after it is a fact about the language and not about
@@ -4384,13 +3880,7 @@ mod tests {
                 classify_lines("auto s = R\"(open \" quote\n/* inside\n)x\" is text\n)\";\n// a comment\n", &CPP_DELIMITED));
 
         let plain = Language::new("cpp-like", ["cpp"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], []);
-        let collect_searched_bytes = |language: &Language| {
-            let plan = ScanPlan::build(language);
-            let mut bytes = plan.chunks.iter().flat_map(|c| c.bytes[..c.len as usize].to_vec()).collect::<Vec<u8>>();
-            bytes.sort_unstable();
-            (bytes, plan.chunks.len())
-        };
-        assert_eq!(collect_searched_bytes(&plain), collect_searched_bytes(&CPP_DELIMITED),
+        assert_eq!(collect_searched_bytes_of(&ScanPlan::build(&plain)), collect_searched_bytes_of(&ScanPlan::build(&CPP_DELIMITED)),
                 "declaring the delimited pair changed what the scan searches");
     }
 
@@ -5383,55 +4873,19 @@ mod tests {
         assert_eq!(1, braces("{x{{x{ {x{"));
     }
 
-    // Every symbol of a kind has to be searched in the same pass, otherwise its positions would not
-    // come out in the order they appear on the line and the merge below would read them out of turn.
-    #[test]
-    fn every_kind_is_searched_whole_in_a_single_pass() {
-        for language in [&*JAVA, &*RUST, &*PHP, &*PYTHON, &*PYTHON_FULL, &*PASCAL, &*D_LANG, &*LUA, &*POWERSHELL] {
-            let plan = ScanPlan::build(language);
-            let searched = |byte: u8| plan.chunks.iter().filter(|c| c.bytes[..c.len as usize].contains(&byte)).count();
-            // The byte a symbol is found by, which is its first only until it is anchored on another
-            let bytes_of = |kind: u8| plan.slots.iter().enumerate().filter(|(_, slot)| slot.kind == kind)
-                    .map(|(at, slot)| plan.symbols[at][slot.anchor as usize]).collect::<Vec<u8>>();
-
-            for kind in [STRINGS, COMMENTS, COM_STARTS, COM_ENDS] {
-                let bytes = bytes_of(kind);
-                if bytes.is_empty() { continue; }
-                let holding = plan.chunks.iter()
-                        .filter(|c| bytes.iter().any(|b| c.bytes[..c.len as usize].contains(b)))
-                        .count();
-                assert_eq!(1, holding, "{} splits a kind across passes", language.name);
-                // and no byte is looked for twice, which would report the same symbol from two passes
-                for byte in bytes {
-                    assert_eq!(1, searched(byte), "{} searches a byte twice", language.name);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn a_language_is_scanned_in_as_few_passes_as_its_first_bytes_allow() {
-        // '"', '/' and '*' cover the string, the comment and both multiline symbols
-        assert_eq!(1, ScanPlan::build(&JAVA).chunks.len());
-        // '"', '\'' and '#' cover everything python declares
-        assert_eq!(1, ScanPlan::build(&PYTHON).chunks.len());
-        // php needs '"', '\'', '#', '/' and '*', which is two passes and not five
-        assert_eq!(2, ScanPlan::build(&PHP).chunks.len());
-    }
-
     // A symbol may not overlap itself: the candidate positions of '/' in "///" are 0, 1 and 2, but
     // only 0 begins a comment.
     #[test]
     fn a_symbol_does_not_overlap_itself() {
-        assert_eq!(vec![0], comment_delimiters("///", &JAVA));
-        assert_eq!(vec![0], comment_delimiters("//", &JAVA));
-        assert_eq!(vec![0, 2], comment_delimiters("////", &JAVA));
-        assert_eq!(vec![1], comment_delimiters("a///", &JAVA));
+        assert_eq!(vec![0], comment_edges("///", &JAVA));
+        assert_eq!(vec![0], comment_edges("//", &JAVA));
+        assert_eq!(vec![0], comment_edges("////", &JAVA));
+        assert_eq!(vec![1], comment_edges("a///", &JAVA));
 
         // the same for a string symbol longer than one byte: six quotes are two '"""' and not four,
         // and five are one '"""' that never closes
-        assert_eq!(vec![0, 3], str_delimiters(&"\"".repeat(6), &PYTHON_FULL, None).0);
-        assert_eq!(vec![0], str_delimiters(&"\"".repeat(5), &PYTHON_FULL, None).0);
+        assert_eq!(vec![0, 6], string_edges(&"\"".repeat(6), &PYTHON_FULL, None));
+        assert_eq!(vec![0], string_edges(&"\"".repeat(5), &PYTHON_FULL, None));
     }
 
     // Nothing about the lines may differ from 'str::lines', so the standard library is the oracle
@@ -5528,64 +4982,16 @@ mod tests {
             let from_start = raw_line.trim_ascii_start();
             let line = from_start.trim_ascii_end();
             let lead = raw_line.len() - from_start.len();
-            let mut searched = ScanBuffers::default();
-            scan_line(line, Candidates::Unsearched, &RUST, None, &mut searched);
-            let mut masked = ScanBuffers::default();
-            scan_line(line, Candidates::At(lines.positions(), lead), &RUST, None, &mut masked);
-            assert_eq!((&searched.raw_strings, &searched.comments, &searched.com_starts, &searched.com_ends),
-                    (&masked.raw_strings, &masked.comments, &masked.com_starts, &masked.com_ends),
+            let lex = |candidates: Candidates| {
+                let (mut buffers, mut spans) = (ScanBuffers::default(), Vec::new());
+                let (info, _) = lex_line::<true>(line, &RUST, None, None, candidates, &mut buffers, &mut spans);
+                (info, buffers.code_ranges, spans)
+            };
+            assert_eq!(lex(Candidates::Unsearched), lex(Candidates::At(lines.positions(), lead)),
                     "disagreed on {raw_line:?}");
             seen += 1;
         }
         assert_eq!(12, seen);
-    }
-
-    // The resolution reads a symbol identity beside every position; the cases here are all the one
-    // '/*' '*/' pair, so the helper pins the identity to 0 and the assertions stay bare positions.
-    fn resolved_double_counting(start_indices: Vec<usize>, end_indices: Vec<usize>, is_comment_open: bool)
-    -> (Vec<usize>, Vec<usize>) {
-        let language = Language::new("one-pair", ["x"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], []);
-        let mut starts = start_indices.into_iter().map(|x| (x, 0u8, 0u32)).collect::<Vec<_>>();
-        let mut ends = end_indices.into_iter().map(|x| (x, 0u8, 0u32)).collect::<Vec<_>>();
-        resolve_comment_symbols_sharing_bytes("", &language, is_comment_open.then_some((0, 1)), &mut Vec::new(),
-                &mut starts, &mut ends);
-        (starts.into_iter().map(|(x, _, _)| x).collect(), ends.into_iter().map(|(x, _, _)| x).collect())
-    }
-
-    #[test]
-    fn a_block_opener_and_closer_sharing_bytes_are_counted_once() {
-        // /*Hello*//* world*//*
-        assert_eq!((vec![0,9,19],vec![7,17]), resolved_double_counting(vec![0,9,19], vec![7,17], false));
-        // /**//**/
-        assert_eq!((vec![0,4],vec![2,6]), resolved_double_counting(vec![0,4], vec![2,6], false));
-        // /*/**/*/
-        assert_eq!((vec![0,2],vec![4,6]), resolved_double_counting(vec![0,2], vec![4,6], false));
-
-        // /* */*
-        assert_eq!((vec![0],vec![3]), resolved_double_counting(vec![0,4], vec![3], false));
-        // /* x /*/
-        assert_eq!((vec![0],vec![6]), resolved_double_counting(vec![0,5], vec![6], false));
-
-        // */* /*/
-        assert_eq!((vec![1],vec![5]), resolved_double_counting(vec![1,4], vec![0,5], false));
-        assert_eq!((vec![4],vec![0]), resolved_double_counting(vec![1,4], vec![0,5], true));
-
-        // /*/*/ */*/ /* */
-        assert_eq!((vec![0,7,11],vec![3,14]), resolved_double_counting(vec![0,2,7,11], vec![1,3,6,8,14], false));
-        assert_eq!((vec![7,11],vec![1,3,14]), resolved_double_counting(vec![0,2,7,11], vec![1,3,6,8,14], true));
-
-        // /*/*/ */*/
-        assert_eq!((vec![0,7],vec![3]), resolved_double_counting(vec![0,2,7], vec![1,3,6,8], false));
-        assert_eq!((vec![7],vec![1,3]), resolved_double_counting(vec![0,2,7], vec![1,3,6,8], true));
-
-        // '*/ */*' with a comment open from the line before. The end at 0 closes it, so the '*/' at 3
-        // is a stray in code and the '/*' at 4 a real opener. Discarding the opener counts the rest of
-        // the file as code
-        assert_eq!((vec![4],vec![0]), resolved_double_counting(vec![4], vec![0,3], true));
-
-        // /* */*/*//*
-        assert_eq!((vec![0,6,9],vec![3]), resolved_double_counting(vec![0,4,6,9], vec![3,5,7], false));
-        assert_eq!((vec![0,6,9],vec![3]), resolved_double_counting(vec![0,4,6,9], vec![3,5,7], true));
     }
 
     #[test]
@@ -5665,20 +5071,9 @@ mod tests {
         assert_eq!((1, 2), (stats.classes.words_in_code, stats.classes.words_in_comment));
     }
 
-    // Lua's pair is 4 bytes on one side and 2 on the other, and one shared collision window sees a
-    // collision in ']]--[[' where the two symbols merely touch: the reopening start is discarded
-    // and the rest of the file counts as code. On a 7-line file whose honest counts are code=1
-    // comments=6, that reads as code=3 comments=2.
     #[test]
     fn a_close_that_touches_a_reopen_is_not_a_collision_when_the_lengths_differ() {
-        let lua_like = Language::new("lua-like", ["x"], build_backslashed_quotes(), ["--"], &[("--[[", "]]")], []);
-        // ]]--[[ with the block open from the line before: both symbols are real
-        let (mut starts, mut ends) = (vec![(2usize, 0u8, 0u32)], vec![(0usize, 0u8, 0u32)]);
-        resolve_comment_symbols_sharing_bytes("]]--[[", &lua_like, Some((0, 1)), &mut Vec::new(), &mut starts, &mut ends);
-        assert_eq!((vec![(2, 0, 0)], vec![(0, 0, 0)]), (starts, ends));
-
-        // and the whole shape read as a line: it closes and reopens, so it ends still open, and
-        // whitespace between the two symbols is not code
+        // A block that closes and reopens on one line ends still open
         assert_eq!(TextInfo::with_open_comment(0), bounds_multi("]]--[[", &LUA, Some(0), None));
         assert_eq!(TextInfo::with_open_comment(0),
                 bounds_multi("]]  --[[ reopened", &LUA, Some(0), None));
@@ -5693,16 +5088,16 @@ mod tests {
     #[test]
     fn a_block_comment_end_behind_a_line_comment_is_not_a_delimiter() {
         let line = "Hello world!";
-        assert_eq!(Vec::<usize>::new(), comment_delimiters_w_multiline(line, &PHP, &[], None));
+        assert_eq!(TextInfo::from_slice("Hello world!"), bounds_multi(line, &PHP, None, None));
         let line = "//Hello*/ world!";
-        assert_eq!(vec![0], comment_delimiters_w_multiline(line, &PHP, &[7], None));
+        assert_eq!(TextInfo::none_all(false), bounds_multi(line, &PHP, None, None));
         let line = "///*Hello world!";
-        assert_eq!(vec![0], comment_delimiters_w_multiline(line, &PHP, &[], None));
+        assert_eq!(TextInfo::none_all(false), bounds_multi(line, &PHP, None, None));
         let line = "//*//Hello world!";
-        assert_eq!(vec![0], comment_delimiters_w_multiline(line, &PHP, &[2], Some(0)));
+        assert_eq!(TextInfo::from_slice("/Hello world!"), bounds_multi(line, &PHP, Some(0), None));
         let line = "//*/#Hello world!";
-        assert_eq!(vec![0,4], comment_delimiters_w_multiline(line, &PHP, &[2], Some(0)));
-        assert_eq!(vec![0,4], comment_delimiters_w_multiline(line, &PHP, &[2], None));
+        assert_eq!(TextInfo::none_all(false), bounds_multi(line, &PHP, Some(0), None));
+        assert_eq!(TextInfo::none_all(false), bounds_multi(line, &PHP, None, None));
     }
     
     #[test]
