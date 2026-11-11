@@ -18,13 +18,21 @@ pub(crate) const BLOCK_BYTES : usize = 64;
 // one table lookup each: a digit is high nibble 3 with a low one up to 9, a letter is high nibble
 // 4 or 6 with a low one from 1, or 5 or 7 with a low one up to 10, a space is 0x20, a control
 // space is 0x09, 0x0A, 0x0C or 0x0D, and anything from 0x80 up is above ASCII
+#[cfg(target_arch = "x86_64")]
 const DIGIT : u8 = 0x01;
+#[cfg(target_arch = "x86_64")]
 const LETTER_FROM_ONE : u8 = 0x02;
+#[cfg(target_arch = "x86_64")]
 const LETTER_UP_TO_TEN : u8 = 0x04;
+#[cfg(target_arch = "x86_64")]
 const ABOVE_ASCII : u8 = 0x08;
+#[cfg(target_arch = "x86_64")]
 const SPACE : u8 = 0x10;
+#[cfg(target_arch = "x86_64")]
 const CONTROL_SPACE : u8 = 0x20;
+#[cfg(target_arch = "x86_64")]
 const WORD_CLASSES : u8 = DIGIT | LETTER_FROM_ONE | LETTER_UP_TO_TEN | ABOVE_ASCII;
+#[cfg(target_arch = "x86_64")]
 const SPACE_CLASSES : u8 = SPACE | CONTROL_SPACE;
 // Each table holds its sixteen entries once per 128-bit lane of the shuffle that reads it
 #[cfg(target_arch = "x86_64")]
