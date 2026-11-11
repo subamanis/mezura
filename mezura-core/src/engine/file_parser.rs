@@ -16,7 +16,7 @@ use memchr::memmem;
 
 use crate::{EngineConfig, HeredocRules, Language, LineClass, LineClasses, NestedLanguage, ScanSkip, Span, SpanKind, phase_timing};
 use crate::domain::{CommentPair, FileStats, LineContinuation};
-use crate::engine::masks::{Classes, MaskFinder, is_ascii};
+use crate::engine::masks::{Classes, MaskFinder, find_lines_holding_words_and_content, is_ascii};
 #[cfg(target_arch = "x86_64")]
 use crate::engine::masks::{has_avx2_tier, has_avx512_tier};
 use crate::engine::masks::BLOCK_BYTES;
@@ -1170,12 +1170,6 @@ fn is_generated(contents: &str) -> bool {
     GENERATED_FINDERS.iter().any(|finder| finder.find(&lowercased[..head.len()]).is_some())
 }
 
-fn add_with_carry(a: u64, b: u64, carry: bool) -> (u64, bool) {
-    let (sum, first) = a.overflowing_add(b);
-    let (sum, second) = sum.overflowing_add(carry as u64);
-    (sum, first || second)
-}
-
 // The same lines 'str::lines' hands out, trailing '\r' dropped the same way, and beside each one
 // whether it holds a byte the scan plan searches. Both are read off the masks of one 64-byte block
 // at a time, so nothing is searched per line: every symbol a language declares begins at one of the
@@ -1241,15 +1235,11 @@ impl<'a> MaskedLines<'a> {
         self.book_plain_lines_one_by_one(inside, up_to, collecting_spans, code_spans)
     }
 
-    // Every line ending in the block is answered at once: adding the word bits to the mask of
-    // every byte that is not a newline carries from each word byte up to its line's own newline
-    // and stops there, so a newline's bit comes out set when its line holds a word, and the same
-    // for the bytes that are not blank. What overflows is the line still open at the block's end,
-    // carried into the next one.
+    // Every line ending in the block is booked at once, off the class masks of the block
     #[inline(always)]
     fn book_plain_blocks(&mut self, inside: Inside, collecting_spans: bool, code_spans: &mut Vec<(u32, u32)>) {
         let bytes = self.contents.as_bytes();
-        let (mut carried_words, mut carried_content) = (false, false);
+        let mut carried = (false, false);
         loop {
             let before_candidate = match self.candidates { 0 => u64::MAX, bits => (1u64 << bits.trailing_zeros()) - 1 };
             let plain = self.newlines & before_candidate;
@@ -1259,11 +1249,10 @@ impl<'a> MaskedLines<'a> {
                 self.classified_at = self.block_at;
             }
             let from_start = u64::MAX << self.start.saturating_sub(self.block_at);
-            let not_newlines = !self.newlines;
-            let (words_sum, words_out) = add_with_carry(not_newlines, self.classes.words & from_start, carried_words);
-            let (content_sum, content_out) = add_with_carry(not_newlines, self.classes.content & from_start, carried_content);
+            let (lines_with_words, lines_with_content, carried_out) =
+                    find_lines_holding_words_and_content(self.newlines, self.classes, from_start, carried);
             if plain != 0 {
-                let (with_words, with_content) = (words_sum & plain, content_sum & plain);
+                let (with_words, with_content) = (lines_with_words & plain, lines_with_content & plain);
                 let booked = &mut self.booked[inside as usize];
                 booked[2] += with_words.count_ones() as usize;
                 booked[1] += (with_content & !with_words).count_ones() as usize;
@@ -1278,7 +1267,7 @@ impl<'a> MaskedLines<'a> {
                 self.newlines &= !(u64::MAX >> (63 - last));
             }
             if self.candidates != 0 || self.block_at + BLOCK_BYTES >= bytes.len() { return }
-            (carried_words, carried_content) = (words_out, content_out);
+            carried = carried_out;
             self.block_at += BLOCK_BYTES;
             self.read_block();
             let line_end = match self.newlines { 0 => u64::MAX, bits => u64::MAX >> (63 - bits.trailing_zeros()) };

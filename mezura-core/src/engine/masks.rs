@@ -148,6 +148,19 @@ pub(crate) fn has_avx512_tier() -> bool {
     has_avx2_tier() && std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512bw")
 }
 
+// The newlines of a block that close a line holding a word byte, and those that close a line
+// holding any byte that is not blank. Added to the mask of every byte that is not a newline, a
+// class bit carries up to its line's newline and stops there, which sets that newline's bit. The
+// line still open at the end of the block overflows, and that carry goes into the next block
+#[inline(always)]
+pub(crate) fn find_lines_holding_words_and_content(newlines: u64, classes: Classes, from_start: u64,
+        carried: (bool, bool)) -> (u64, u64, (bool, bool)) {
+    let not_newlines = !newlines;
+    let (words, words_out) = add_with_carry(not_newlines, classes.words & from_start, carried.0);
+    let (content, content_out) = add_with_carry(not_newlines, classes.content & from_start, carried.1);
+    (words & newlines, content & newlines, (words_out, content_out))
+}
+
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 fn is_ascii_avx2(bytes: &[u8]) -> bool {
@@ -175,6 +188,13 @@ fn classify_block_scalar(block: &[u8]) -> Classes {
         if !byte.is_ascii_whitespace() { content |= 1 << at; }
     }
     Classes { words, content }
+}
+
+#[inline(always)]
+fn add_with_carry(a: u64, b: u64, carry: bool) -> (u64, bool) {
+    let (sum, first) = a.overflowing_add(b);
+    let (sum, second) = sum.overflowing_add(carry as u64);
+    (sum, first || second)
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -472,5 +492,32 @@ mod tests {
         let block = [b'/'; BLOCK_BYTES];
         assert_eq!(finder.scan_block(&block).candidates, 0);
         assert_eq!(finder.scan_block(&block).newlines, 0);
+    }
+
+    // From several starts and with each carry in, against a walk over the bytes
+    #[test]
+    fn the_lines_holding_words_and_content_are_the_ones_a_byte_walk_finds() {
+        for block in every_block_shape() {
+            let newlines = scan_block_scalar(&block, &[false; 256]).newlines;
+            let classes = classify_block_scalar(&block);
+            for start in [0, 1, 7, 33, 63] {
+                for carried in [(false, false), (true, false), (false, true), (true, true)] {
+                    let (mut words, mut content, mut open) = (0u64, 0u64, carried);
+                    for (at, &byte) in block.iter().enumerate() {
+                        if byte == b'\n' {
+                            if open.0 { words |= 1 << at; }
+                            if open.1 { content |= 1 << at; }
+                            open = (false, false);
+                        } else if at >= start {
+                            open.0 |= classes.words >> at & 1 == 1;
+                            open.1 |= classes.content >> at & 1 == 1;
+                        }
+                    }
+                    assert_eq!((words, content, open),
+                            find_lines_holding_words_and_content(newlines, classes, u64::MAX << start, carried),
+                            "{block:?} from {start} with {carried:?} carried in");
+                }
+            }
+        }
     }
 }
