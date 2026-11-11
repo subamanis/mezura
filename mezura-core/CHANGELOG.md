@@ -1,5 +1,27 @@
 # Changelog
 
+## 3.0.0, unreleased
+
+Breaking:
+
+- `Language` gains the public field `strings_only_between` and `Keyword` the public field
+  `followed_by`, so a literal of either type names them.
+- `Carried` gains the variant `Hole`, for a line that begins inside a hole of an interpolated string.
+
+New:
+
+- `StringRules::with_regexes` and `StringRules::with_regex_after` for regular expression literals,
+  parsed from the `Regular expression symbols` and `Regular expression after` blocks of a language
+  file.
+- `StringRules::with_holes` for the holes of an interpolated string, which count as code, parsed from
+  the `Interpolated string openers` and `Interpolation hole` blocks.
+- `Language::with_strings_only_between` for strings that count only between a pair of symbols, parsed
+  from the `Strings only between` block.
+- `Keyword::with_followed_by` for a keyword that counts only where a definition follows it, parsed
+  from the `FOLLOWED BY` line of a keyword block.
+- Counting runs a copy of the parser compiled for AVX2 or AVX-512 when the processor has them. The
+  crate needs Rust 1.89.
+
 ## 2.1.0, 2026-11-05
 
 25,501 Total lines  -  16,711 Code lines
