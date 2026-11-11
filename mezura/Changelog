@@ -7,9 +7,9 @@ Main changes:
       longer opens a comment; outside a tag an apostrophe in the text is text as before. A
       language file may confine its strings to a pair of symbols with the new 'Strings only
       between' block.
-  -> The markup of a PHP file between '?>' and the next '<?' is counted as HTML, with its scripts
-      and styles as JavaScript and CSS. A 'Nested language' opener ending in '>' matches whole,
-      and an end without '>' matches as written.
+  -> The markup of a PHP file after a '?>', up to the next '<?' or the end of the file, is counted
+      as HTML, with its scripts and styles as JavaScript and CSS. A 'Nested language' opener ending
+      in '>' matches whole, and an end without '>' matches as written.
   -> A regular expression literal of JavaScript or TypeScript is read as a string, so a quote or a
       '//' inside '/.../' opens nothing. A language file declares them with the new 'Regular
       expression symbols' and 'Regular expression after' blocks.

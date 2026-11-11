@@ -1865,12 +1865,17 @@ fn read_lines<'a, const EXPLAIN: bool, const FULL: bool>(contents: &'a str, lang
 // section, and the bytes the section spans, its own sections included. None, with nothing read,
 // when the region never closes before 'bound': the opener may be the same text written inside a
 // tag, and on the strength of one word that is not a tag the whole rest of the file would go to
-// another language.
+// another language. An opener that is a whole tag, PHP's '?>', was read in code and is no such
+// word, so its section runs to 'bound' where it has text left to run over.
 fn read_section<'a, const EXPLAIN: bool>(lines: &mut MaskedLines<'a>, contents: &'a str, region: &NestedLanguage,
     language: &'a Language, section_from: usize, bound: usize, lookup: &'a NestedLanguageLookup, matchers: &mut KeywordMatchers,
     config: &EngineConfig, scan: &mut ScanBuffers, buckets: &mut Vec<SectionBucket<'a>>, log: &mut ExplainLog) -> Option<usize>
 {
-    let closer_at = section_from + find_tag_ignoring_case(&contents.as_bytes()[section_from..bound], region.end.as_bytes())?;
+    let closer_at = match find_tag_ignoring_case(&contents.as_bytes()[section_from..bound], region.end.as_bytes()) {
+        Some(found) => section_from + found,
+        None if region.start.ends_with('>') && !contents.as_bytes()[section_from..bound].trim_ascii().is_empty() => bound,
+        None => return None
+    };
     let bucket_at = match buckets.iter().position(|bucket| bucket.language.name == language.name) {
         Some(at) => at,
         None => {
@@ -5204,6 +5209,25 @@ mod tests {
         let report = parse_lines_report(contents, php, &shipped_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
         assert_eq!(1, report.sections.len(), "an unclosed script took the rest of the page");
         assert_eq!(("HTML", (2, 2, 0)), (report.sections[0].language.as_str(), content_counts(&report.sections[0].stats)));
+        assert_eq!(4, report.shell.lines);
+    }
+
+    // The page after the file's last '?>' runs to the end of the file, its scripts with it; a
+    // '?>' with nothing after it opens no section
+    #[test]
+    fn the_page_after_a_php_files_last_block_runs_to_the_end_of_the_file() {
+        let php = LANGUAGE_MAP_REF.get("PHP").unwrap();
+        let contents = "<?php\necho 1;\n?>\n<html>\n<!-- a comment of the page -->\n<p>text</p>\n<script>\nvar x = 1;\n</script>\n</html>\n";
+        let report = parse_lines_report(contents, php, &shipped_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
+        assert_eq!((3, 2, 0), content_counts(&report.shell));
+        let [html, js] = report.sections.as_slice() else { panic!("{} sections", report.sections.len()) };
+        assert_eq!(("HTML", (6, 5, 1)), (html.language.as_str(), content_counts(&html.stats)));
+        assert_eq!(("JavaScript", (1, 1, 0)), (js.language.as_str(), content_counts(&js.stats)));
+        assert_eq!("<html>\n<!-- a comment of the page -->\n<p>text</p>\n<script>\n</script>\n</html>\n".len(), html.bytes);
+        assert_eq!(contents.lines().count(), report.total_lines());
+
+        let report = parse_lines_report("<?php\necho 1;\n?>\n\n", php, &shipped_lookup(), &EngineConfig::default(), TestsByPath::Nothing);
+        assert_eq!(0, report.sections.len(), "blank lines after the last '?>' open no page");
         assert_eq!(4, report.shell.lines);
     }
 

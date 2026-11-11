@@ -69,8 +69,8 @@ Things it does that most counters do not:
 - **Keyword counting.** Occurrences of words you pick per language, classes, structs, traits,
   anything, counted only where they appear as code.
 - **Nested languages.** The `<script>` and `<style>` blocks of HTML, Vue, Svelte and Astro files are
-  counted as the distinct languages they hold, and so is the page a PHP file returns to between a
-  `?>` and the next `<?php`, with the scripts that page holds.
+  counted as the distinct languages they hold, and so is the page a PHP file returns to after a
+  `?>`, up to the next `<?php` or the end of the file, with the scripts that page holds.
 - **Modules.** Give a name to parts of a project and the report is grouped by these parts as well as by
   language. This way you can split your project into e.g. Frontend and Backend and see distinct reports for each module in the same table in the same run. See [Modules](#modules).
 - **Track the history of your codebase.** Log runs and compare against earlier ones, or diff against a git revision.   See [Tracking growth](#tracking-growth).
@@ -753,7 +753,7 @@ All of this is measured against the [LineJudge](https://loc-conformance.github.i
 
 With that said, it is important to mention the following limitations:
 
-- Another language inside a file is only found where a tag opens it, the way ```<script>``` and ```<style>``` do, the tag running over as many lines as it needs, and where PHP's ```?>``` returns to its page until the next ```<?```. The section begins on the line after the tag and the line holding either tag belongs to the language around the section, so a ```?>``` followed by markup on its own line leaves that markup to PHP. A ```.php``` file is PHP from its first byte, so markup written before its first ```<?php``` counts as PHP. Languages that interleave mid-line are outside that: the ERB, JSP and Blade family are read as one language from beginning to end. A section fenced by something that is not a tag is outside it too: the ```---``` frontmatter at the top of an Astro file holds TypeScript, and its ```//``` lines are counted as code. The ```<script>``` and ```<style>``` blocks of the same file are read as the languages they hold, as they are in Vue and Svelte.
+- Another language inside a file is only found where a tag opens it, the way ```<script>``` and ```<style>``` do, the tag running over as many lines as it needs, and where PHP's ```?>``` returns to its page until the next ```<?``` or the end of the file. The section begins on the line after the tag and the line holding either tag belongs to the language around the section, so a ```?>``` followed by markup on its own line leaves that markup to PHP. A ```.php``` file is PHP from its first byte, so markup written before its first ```<?php``` counts as PHP. Languages that interleave mid-line are outside that: the ERB, JSP and Blade family are read as one language from beginning to end. A section fenced by something that is not a tag is outside it too: the ```---``` frontmatter at the top of an Astro file holds TypeScript, and its ```//``` lines are counted as code. The ```<script>``` and ```<style>``` blocks of the same file are read as the languages they hold, as they are in Vue and Svelte.
 
 - Keywords are counted as words. Every ```class``` in code is counted, whatever it means there.
 
