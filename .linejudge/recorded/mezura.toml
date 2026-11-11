@@ -1,5 +1,5 @@
 counter = "mezura"
-version = "v3.4.0 (2026-11-05)"
+version = "v3.5.0 (unreleased)"
 measured-with = "linejudge 0.3.0"
 
 [answer.1010-code_then_comment_on_one_line.content]
@@ -213,18 +213,10 @@ counted = { lines = 6, code = 5, comments = 1, extra = 0 }
 counted = { lines = 6, code = 5, comments = 1, blanks = 0 }
 
 [answer.2077-interpolation_hole_holding_the_strings_own_quote.content]
-is-known-failure = true
-counted = { lines = 6, code = 3, comments = 3, extra = 0 }
-note = """
-the string is read as text from end to end, holes included, so the quote of the character in the
-hole ends it and the two lines below are comments"""
+counted = { lines = 6, code = 5, comments = 1, extra = 0 }
 
 [answer.2077-interpolation_hole_holding_the_strings_own_quote.region]
-is-known-failure = true
-counted = { lines = 6, code = 3, comments = 3, blanks = 0 }
-note = """
-the string is read as text from end to end, holes included, so the quote of the character in the
-hole ends it and the two lines below are comments"""
+counted = { lines = 6, code = 5, comments = 1, blanks = 0 }
 
 [answer.2080-odd_triple_quote_count.content]
 counted = { lines = 6, code = 5, comments = 1, extra = 0 }
@@ -467,18 +459,10 @@ counted = { lines = 3, code = 2, comments = 1, extra = 0 }
 counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
 
 [answer.6020-comment_opener_inside_an_attribute.content]
-is-known-failure = true
-counted = { lines = 4, code = 1, comments = 3, extra = 0 }
-note = """
-HTML declares no string symbols, on purpose, because its quotes hold attributes and its text is
-full of apostrophes. The price is this one: a quoted opener cannot be seen"""
+counted = { lines = 4, code = 3, comments = 1, extra = 0 }
 
 [answer.6020-comment_opener_inside_an_attribute.region]
-is-known-failure = true
-counted = { lines = 4, code = 1, comments = 3, blanks = 0 }
-note = """
-HTML declares no string symbols, on purpose, because its quotes hold attributes and its text is
-full of apostrophes. The price is this one: a quoted opener cannot be seen"""
+counted = { lines = 4, code = 3, comments = 1, blanks = 0 }
 
 [answer.6030-opening_tag_split_over_two_lines.content]
 counted = { lines = 5, code = 4, comments = 1, extra = 0 }
@@ -581,65 +565,42 @@ counted-regions = [
 ]
 
 [answer.6110-php_block_holding_html_around_it.content]
-is-known-failure = true
-counted = { lines = 7, code = 5, comments = 0, extra = 2 }
-counted-regions = []
-note = """
-the file is read as php from beginning to end, so the html comment is counted with php's symbols,
-which do not include it"""
+counted = { lines = 7, code = 4, comments = 1, extra = 2 }
+counted-regions = [
+    { language = "HTML", lines = 2, code = 1, comments = 1, extra = 0 },
+]
 
 [answer.6110-php_block_holding_html_around_it.region]
-is-known-failure = true
-counted = { lines = 7, code = 7, comments = 0, blanks = 0 }
-counted-regions = []
-note = """
-the file is read as php from beginning to end, so the html comment is counted with php's symbols,
-which do not include it"""
+counted = { lines = 7, code = 6, comments = 1, blanks = 0 }
+counted-regions = [
+    { language = "HTML", lines = 2, code = 1, comments = 1, blanks = 0 },
+]
 
 [answer.6120-script_inside_html_inside_php.content]
-is-known-failure = true
 counted = { lines = 11, code = 8, comments = 1, extra = 2 }
-counted-regions = []
-note = """
-the file is read as php from beginning to end, so neither block is found; the totals survive
-because php happens to bucket every line the same way the three languages do"""
+counted-regions = [
+    { language = "HTML", lines = 4, code = 4, comments = 0, extra = 0 },
+    { language = "JavaScript", lines = 2, code = 1, comments = 1, extra = 0 },
+]
 
 [answer.6120-script_inside_html_inside_php.region]
-is-known-failure = true
 counted = { lines = 11, code = 10, comments = 1, blanks = 0 }
-counted-regions = []
-note = """
-the file is read as php from beginning to end, so neither block is found"""
+counted-regions = [
+    { language = "HTML", lines = 4, code = 4, comments = 0, blanks = 0 },
+    { language = "JavaScript", lines = 2, code = 1, comments = 1, blanks = 0 },
+]
 
 [answer.7010-regex_literal_holding_a_quote.content]
-is-known-failure = true
-counted = { lines = 3, code = 3, comments = 0, extra = 0 }
-note = """
-it reads no regular expressions, so the quote in the pattern opens a string that ends with the
-line and hides the block comment opened after the pattern, whose second line counts as code. The
-same line with /x/ in place of the pattern is read right"""
+counted = { lines = 3, code = 2, comments = 1, extra = 0 }
 
 [answer.7010-regex_literal_holding_a_quote.region]
-is-known-failure = true
-counted = { lines = 3, code = 3, comments = 0, blanks = 0 }
-note = """
-it reads no regular expressions, so the quote in the pattern opens a string that ends with the
-line and hides the block comment opened after the pattern, whose second line counts as code. The
-same line with /x/ in place of the pattern is read right"""
+counted = { lines = 3, code = 2, comments = 1, blanks = 0 }
 
 [answer.7020-regex_holding_a_comment_opener.content]
-is-known-failure = true
-counted = { lines = 4, code = 1, comments = 3, extra = 0 }
-note = """
-the /* opens a comment that swallows the two lines under it, and the comment ending the file
-closes it"""
+counted = { lines = 4, code = 3, comments = 1, extra = 0 }
 
 [answer.7020-regex_holding_a_comment_opener.region]
-is-known-failure = true
-counted = { lines = 4, code = 1, comments = 3, blanks = 0 }
-note = """
-the /* opens a comment that swallows the two lines under it, and the comment ending the file
-closes it"""
+counted = { lines = 4, code = 3, comments = 1, blanks = 0 }
 
 [answer.8010-punctuation_only_line.content]
 counted = { lines = 3, code = 2, comments = 0, extra = 1 }
