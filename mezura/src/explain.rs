@@ -344,6 +344,10 @@ fn describe_carried(carried: &Carried) -> Option<String> {
                 "in a string opened by {opener} on line {since_line}")),
         Carried::CommentContinuation { since_line } => Some(format!(
                 "a continuation of the comment on line {since_line}")),
+        Carried::Hole { opener, since_line, ends_on_this_line: true } => Some(format!(
+                "the hole opened by {opener} on line {since_line} closes on this line")),
+        Carried::Hole { opener, since_line, .. } => Some(format!(
+                "in a hole opened by {opener} on line {since_line}")),
     }
 }
 

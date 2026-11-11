@@ -176,6 +176,16 @@ pub enum Carried {
         /// The line that comment opened on.
         since_line: usize
     },
+    /// A hole of an interpolated string, read as code, such as the `${ }` of a JavaScript
+    /// template literal.
+    Hole {
+        /// The opening symbol of the hole.
+        opener: String,
+        /// The line the hole opened on, counted from 1.
+        since_line: usize,
+        /// Whether the hole closes on this line.
+        ends_on_this_line: bool
+    },
 }
 
 /// Why a file could not be explained.
@@ -391,6 +401,10 @@ fn spell_out_carried(carried: CarriedRecord, language: Option<&Language>) -> Car
         CarriedRecord::LineBoundComment { pair, depth, since_line, ends } => Carried::Comment {
             opener: language.map(|x| x.get_line_bound_pair_of(pair).get_start().to_owned()).unwrap_or_default(),
             depth, since_line, ends_on_this_line: ends
+        },
+        CarriedRecord::Hole { since_line, ends, .. } => Carried::Hole {
+            opener: language.and_then(|x| x.strings.get_hole()).map(|(opener, _)| opener.to_owned()).unwrap_or_default(),
+            since_line, ends_on_this_line: ends
         }
     }
 }
@@ -462,6 +476,20 @@ mod tests {
         assert_eq!(LineClass::BlankInComment, explained.lines[2].class);
         assert_eq!(LineClass::StringContent, explained.lines[5].class);
         assert!(explained.lines.iter().all(|line| line.read_as.is_none()));
+    }
+
+    #[test]
+    fn a_line_inside_a_hole_of_an_interpolated_string_carries_the_hole() {
+        let explained = explain_in_own_dir("mezura-explain-hole", "a.js",
+                "let a = `x ${\n  f(1) +\n  2\n} y`;\nlet b = 3;\n");
+
+        assert_eq!("JavaScript", explained.language);
+        let carried = explained.lines.iter().map(|line| &line.carried).collect::<Vec<_>>();
+        assert_eq!(&Carried::Nothing, carried[0]);
+        assert_eq!(&Carried::Hole { opener: "${".to_owned(), since_line: 1, ends_on_this_line: false }, carried[1]);
+        assert_eq!(&Carried::Hole { opener: "${".to_owned(), since_line: 1, ends_on_this_line: false }, carried[2]);
+        assert_eq!(&Carried::Hole { opener: "${".to_owned(), since_line: 1, ends_on_this_line: true }, carried[3]);
+        assert_eq!(&Carried::Nothing, carried[4]);
     }
 
     #[test]

@@ -1422,11 +1422,13 @@ enum Inside {
     CrossingString,
 }
 
-// A hole of an interpolated string, read as code down to the brace that brings its depth to zero
+// A hole of an interpolated string, read as code down to the brace that brings its depth to zero.
+// 'since_line' is written only while explaining, and is zero until the line that opened it is read
 #[derive(Debug, Clone, Copy)]
 struct Hole {
     string: (u8, u32),
     depth: u32,
+    since_line: usize,
 }
 
 // The closing line is the word behind the indent its opener allowed and alone on the line. Trailing
@@ -1498,6 +1500,7 @@ pub(crate) enum CarriedRecord {
     LineBoundComment { pair: u8, depth: u32, since_line: usize, ends: bool },
     Str { symbol: u8, level: u32, since_line: usize, ends: bool },
     Continuation { since_line: usize },
+    Hole { string: (u8, u32), since_line: usize, ends: bool },
 }
 
 impl CarriedRecord {
@@ -1510,6 +1513,8 @@ impl CarriedRecord {
             CarriedRecord::LineBoundComment { pair, depth, since_line: state.opened_line, ends: false }
         } else if state.continued_comment {
             CarriedRecord::Continuation { since_line: state.opened_line }
+        } else if let Some(hole) = state.holes.last() {
+            CarriedRecord::Hole { string: hole.string, since_line: hole.since_line, ends: false }
         } else {
             CarriedRecord::Nothing
         }
@@ -1527,6 +1532,9 @@ impl CarriedRecord {
             CarriedRecord::Str { symbol, level, since_line, .. } => CarriedRecord::Str {
                 symbol, level, since_line,
                 ends: state.open_str_symbol.is_none() || opened_here.string },
+            CarriedRecord::Hole { string, since_line, .. } => CarriedRecord::Hole {
+                string, since_line,
+                ends: !state.holes.iter().any(|hole| hole.string == string && hole.since_line == since_line) },
             other @ (CarriedRecord::Nothing | CarriedRecord::Continuation { .. }) => other,
         }
     }
@@ -2147,6 +2155,12 @@ fn walk_line_symbols<const EXPLAIN: bool, const FULL: bool>(line: &str, lead: us
     state.in_tag = line_info.in_tag_after;
     // A hole of a string that ends with its line ends with the line too
     state.holes.retain(|hole| language.string_crosses_lines(hole.string.0));
+    if EXPLAIN {
+        let line_number = log.get_current_line_number();
+        for hole in state.holes.iter_mut().filter(|hole| hole.since_line == 0) {
+            hole.since_line = line_number;
+        }
+    }
     // Only a symbol declared to cross lines carries its string to the next one, so the damage of
     // an unbalanced quote is this line and not the rest of the file. A line ending in the
     // continuation symbol is the exception: there the language says the line goes on.
@@ -2728,7 +2742,7 @@ fn lex_line<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: 
                     cursor = found.start + found.width;
                     note_span::<EXPLAIN>(spans, from, cursor, SpanKind::String);
                     from = cursor;
-                    holes.push(Hole { string: (symbol, level), depth: 1 });
+                    holes.push(Hole { string: (symbol, level), depth: 1, since_line: 0 });
                     open_string = None;
                     has_string_literal = true;
                     continue;
