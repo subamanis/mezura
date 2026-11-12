@@ -25,6 +25,8 @@ Main changes:
       declares the rule with the new 'FOLLOWED BY' and 'NOT AFTER' lines of a keyword block; a
       keyword without them counts every occurrence.
 
+-----------------------------------------------------------------------------------------------------------
+
 v3.4.0 - 2026-11-05
 
   55,476 Total lines  -  37,239 Code lines

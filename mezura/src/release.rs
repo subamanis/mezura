@@ -30,4 +30,16 @@ mod tests {
         assert!(first.starts_with(&format!("{VERSION_ID} - ")),
                 "the Changelog opens with '{first}', which does not start with '{VERSION_ID} - '");
     }
+
+    // release.yml publishes everything above the first line of dashes as the GitHub Release notes
+    #[test]
+    fn the_release_notes_cut_from_the_changelog_hold_one_version() {
+        let changelog = get_changelog();
+        let headers = changelog.lines()
+                .take_while(|line| !line.starts_with("---"))
+                .filter(|line| line.starts_with('v') && line[1..].starts_with(|c: char| c.is_ascii_digit()))
+                .collect::<Vec<_>>();
+        assert_eq!(1, headers.len(),
+                "the release notes would hold {headers:?}: the first section of the Changelog ends without its line of dashes");
+    }
 }
