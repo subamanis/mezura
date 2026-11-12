@@ -376,6 +376,10 @@ pub(crate) struct ScanPlan {
     // Per block pair, the slot of its closer and the slot of its opener where the opener is read
     // inside the block (a pair that nests or closes with its opener), 'NO_SLOT' otherwise
     comment_slots: Vec<(u16, u16)>,
+    // Per string, the slot of its closer and the slot of the hole's opener where it interpolates. A
+    // leveled string, whose closer other pairs may share, and one closed by no slot have 'NO_SLOT'
+    // first and are read through the byte's chain.
+    string_slots: Vec<(u16, u16)>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -522,7 +526,7 @@ impl ScanPlan {
                 (single_line + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()) as u8, rules));
         let string_count = single_line + strings.get_multiline_strings().len() + strings.get_leveled_pairs().len()
                 + usize::from(heredoc.is_some());
-        let string_shapes = (0..string_count as u8).map(|symbol| StringShape {
+        let string_shapes: Vec<StringShape> = (0..string_count as u8).map(|symbol| StringShape {
             closer: language.calculate_string_closer_width(symbol, 0) as u8,
             escapes: language.string_obeys_the_escape(symbol),
             doubling: language.string_escapes_by_doubling(symbol),
@@ -537,8 +541,17 @@ impl ScanPlan {
             let opener_read_inside = language.comment_nests(pair) || language.comment_closes_with_its_opener(pair);
             (slot_of(COM_ENDS), if opener_read_inside { slot_of(COM_STARTS) } else { NO_SLOT })
         }).collect();
+        let hole_slot = slots.iter().position(|slot| slot.role == ROLE_HOLE_OPEN).map_or(NO_SLOT, |index| index as u16);
+        let string_slots = string_shapes.iter().enumerate().map(|(symbol, shape)| {
+            let closer = match language.find_leveled_string(symbol as u8) {
+                Some(_) => NO_SLOT,
+                None => slots.iter().position(|slot| slot.kind == STRINGS && slot.symbol == symbol as u8
+                        && matches!(slot.role, ROLE_EITHER | ROLE_CLOSE | ROLE_RAW)).map_or(NO_SLOT, |index| index as u16)
+            };
+            (closer, if shape.interpolates { hole_slot } else { NO_SLOT })
+        }).collect();
         ScanPlan { first, slots, symbols, finder, hole_finder, string_bounds, regex_after, hole_braces, heredoc, string_shapes,
-                comment_slots }
+                comment_slots, string_slots }
     }
 }
 
@@ -771,20 +784,25 @@ fn read_symbol_at(at: usize, cursor: usize, bytes: &[u8], plan: &ScanPlan, escap
     let mut best : Option<Found> = None;
     let mut index = plan.first[bytes[at] as usize];
     while index != NO_SLOT {
-        if let Some(found) = match_slot(index as usize, at, bytes, plan, escape, in_code)
+        let slot = plan.slots[index as usize];
+        // In code a closer is never the symbol, and a quote's chain holds one for every string it closes
+        let closes = matches!(slot.role, ROLE_CLOSE | ROLE_HOLE_OPEN) || slot.kind == COM_ENDS;
+        if !(in_code && closes)
+                && let Some(found) = match_slot(index as usize, at, bytes, plan, escape, in_code)
                 && found.start >= cursor && applies(&found)
                 && best.is_none_or(|best| found.start < best.start || (found.start == best.start && found.width > best.width)) {
             best = Some(found);
         }
-        index = plan.slots[index as usize].next;
+        index = slot.next;
     }
     best
 }
 
 // Inside a block comment only the pair's closer, and its opener where that is read inside, can be
-// the symbol, so the byte's chain is not walked: the two slots are tried where the byte is theirs
+// the symbol, and inside a string its closer and the opener of a hole, so the byte's chain is not
+// walked: the two slots are tried where the byte is theirs
 #[inline(always)]
-fn read_comment_symbol_at(at: usize, cursor: usize, bytes: &[u8], plan: &ScanPlan, escape: Option<u8>, slots: (u16, u16),
+fn read_symbol_of_slots_at(at: usize, cursor: usize, bytes: &[u8], plan: &ScanPlan, escape: Option<u8>, slots: (u16, u16),
     applies: impl Fn(&Found) -> bool) -> Option<Found>
 {
     let mut best : Option<Found> = None;
@@ -812,7 +830,7 @@ fn match_slot(index: usize, at: usize, bytes: &[u8], plan: &ScanPlan, escape: Op
     let matched = match (slot.anchor, slot.len) {
         (0, 1) if slot.filler == 0 => true,
         (0, 2) if slot.filler == 0 => bytes.get(at + 1) == Some(&slot.second),
-        _ => slot.counted_backwards || bytes[start..].starts_with(symbol_bytes)
+        _ => slot.counted_backwards || starts_with_symbol(&bytes[start..], symbol_bytes)
     };
     if !matched { return None }
     // Where the language writes the symbol and the character before it as one longer form, the
@@ -863,6 +881,13 @@ fn match_slot(index: usize, at: usize, bytes: &[u8], plan: &ScanPlan, escape: Op
         level = find_delimiter_length(bytes, start + width, slot.suffix)? as u32;
     }
     Some(Found { kind: slot.kind, symbol: slot.symbol, role, start, width, level })
+}
+
+// A byte at a time, since a slice compare of a length known only at run time is a call to 'memcmp',
+// paid by every symbol in a byte's chain and most of them fail on their first byte
+#[inline(always)]
+fn starts_with_symbol(bytes: &[u8], symbol: &[u8]) -> bool {
+    symbol.len() <= bytes.len() && symbol.iter().zip(bytes).all(|(wanted, found)| wanted == found)
 }
 
 // A literal is its opener, one character and its closer on one line, so a lifetime's lone tick
@@ -2724,12 +2749,17 @@ fn lex_line<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: 
             if at < cursor { continue }
             if let Some((symbol, level)) = open_string {
                 let shape = plan.string_shapes[symbol as usize];
-                let Some(found) = read_symbol_at(at, cursor, bytes, plan, escape, false, |found|
-                        found.kind == STRINGS && match found.role {
-                            ROLE_HOLE_OPEN => shape.interpolates,
-                            ROLE_OPEN | ROLE_DELIMITED | ROLE_LINE | ROLE_REGEX => false,
-                            _ => language.string_is_closed_by((symbol, level), (found.symbol, found.level))
-                        }) else { continue };
+                let applies = |found: &Found| found.kind == STRINGS && match found.role {
+                    ROLE_HOLE_OPEN => shape.interpolates,
+                    ROLE_OPEN | ROLE_DELIMITED | ROLE_LINE | ROLE_REGEX => false,
+                    _ => language.string_is_closed_by((symbol, level), (found.symbol, found.level))
+                };
+                let slots = plan.string_slots[symbol as usize];
+                let found = match slots.0 {
+                    NO_SLOT => read_symbol_at(at, cursor, bytes, plan, escape, false, applies),
+                    _ => read_symbol_of_slots_at(at, cursor, bytes, plan, escape, slots, applies)
+                };
+                let Some(found) = found else { continue };
                 // The closer of a pair and the opener of a hole are text behind the escape, where
                 // the string obeys one
                 if shape.escapes && found.start != 0 && !is_not_escaped(found.start, bytes, escape) { continue }
@@ -2764,7 +2794,7 @@ fn lex_line<const EXPLAIN: bool>(line: &str, language: &Language, open_comment: 
             } else if let Some((pair, carried)) = open_comment {
                 let leveled = language.comment_is_leveled(pair);
                 let nests = language.comment_nests(pair);
-                let Some(found) = read_comment_symbol_at(at, cursor, bytes, plan, escape, plan.comment_slots[pair as usize],
+                let Some(found) = read_symbol_of_slots_at(at, cursor, bytes, plan, escape, plan.comment_slots[pair as usize],
                         |found| found.kind == COM_STARTS || !leveled || found.level == carried) else { continue };
                 cursor = found.start + found.width;
                 if found.kind == COM_STARTS && nests {
