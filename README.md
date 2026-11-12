@@ -761,8 +761,6 @@ With that said, it is important to mention the following limitations:
 
 - A heredoc is read in the shells, Perl, Ruby and PHP. A regular expression of Perl or Ruby and Ruby's ```%[...]``` and ```$'``` are read as code, so an apostrophe inside one opens a string, and a heredoc opener that string runs past is missed.
 
-- A comment opener inside a regex literal, like the ```/*``` in ```/a[/*]b/```, opens a comment. A regex inside a string is fine.
-
 - Case is ignored in extensions, so the Unix convention where ```.C``` is C++ and ```.c``` is C is lost.
 
 - A ```*``` after a character in a block comment symbol or a paired string symbol means "any number of that character", as in Lua's ```--[=*[``` and Rust's ```r#*"```, so a language whose symbol really contained such a run could not be declared. None is known.

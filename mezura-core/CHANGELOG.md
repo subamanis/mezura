@@ -7,20 +7,31 @@ Breaking:
 - `Language` gains the public field `strings_only_between` and `Keyword` the public field
   `followed_by`, so a literal of either type names them.
 - `Carried` gains the variant `Hole`, for a line that begins inside a hole of an interpolated string.
+- A symbol of several bytes given to `StringRules::with_symbols` is a prefix and its quote, and the
+  quote alone closes it: C#'s `$"` closes at `"`.
 
 New:
 
 - `StringRules::with_regexes` and `StringRules::with_regex_after` for regular expression literals,
-  parsed from the `Regular expression symbols` and `Regular expression after` blocks of a language
-  file.
-- `StringRules::with_holes` for the holes of an interpolated string, which count as code, parsed from
-  the `Interpolated string openers` and `Interpolation hole` blocks.
+  read back through `get_regexes` and `get_regex_after`, and parsed from the `Regular expression
+  symbols` and `Regular expression after` blocks of a language file.
+- `StringRules::with_holes` for the holes of an interpolated string, which count as code, read back
+  through `get_interpolating` and `get_hole`, and parsed from the `Interpolated string openers` and
+  `Interpolation hole` blocks.
 - `Language::with_strings_only_between` for strings that count only between a pair of symbols, parsed
   from the `Strings only between` block.
 - `Keyword::with_followed_by` for a keyword that counts only where a definition follows it, parsed
   from the `FOLLOWED BY` line of a keyword block.
 - Counting runs a copy of the parser compiled for AVX2 or AVX-512 when the processor has them. The
   crate needs Rust 1.89.
+- HTML reads its quotes as strings inside a tag only, so a `<!--` in an attribute value opens no
+  comment.
+- PHP counts the markup after a `?>`, up to the next `<?` or the end of the file, as HTML.
+- JavaScript and TypeScript read a regular expression literal as a string.
+- The holes of C#'s `$"..."` and `$"""..."""` and of the template literals of JavaScript,
+  TypeScript, JSX and TSX count as code.
+- C's `struct` and C++'s `class` and `struct` count where a definition follows them, in the headers
+  too.
 
 ## 2.1.0, 2026-11-05
 

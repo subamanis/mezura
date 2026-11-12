@@ -1,8 +1,8 @@
 v3.5.0 - unreleased
 
 Main changes:
-  -> Counting is faster, most of all on an x86-64 with AVX2 or AVX-512. Building mezura needs Rust
-      1.89 or newer.
+  -> The parser is rewritten. Counting is faster, most of all on an x86-64 with AVX2 or AVX-512.
+      Building mezura needs Rust 1.89 or newer.
   -> HTML's quotes are read as strings inside a tag, so a '<!--' written in an attribute value no
       longer opens a comment; outside a tag an apostrophe in the text is text as before. A
       language file may confine its strings to a pair of symbols with the new 'Strings only
