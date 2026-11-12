@@ -1,6 +1,8 @@
 # Changelog
 
-## 3.0.0, unreleased
+## 3.0.0, 2026-11-12
+
+25,997 Total lines  -  17,068 Code lines
 
 Breaking:
 

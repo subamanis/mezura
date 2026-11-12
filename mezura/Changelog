@@ -1,4 +1,6 @@
-v3.5.0 - unreleased
+v3.5.0 - 2026-11-12
+
+  55,975 Total lines  -  37,600 Code lines
 
 Main changes:
   -> The parser is rewritten. Counting is faster, most of all on an x86-64 with AVX2 or AVX-512.

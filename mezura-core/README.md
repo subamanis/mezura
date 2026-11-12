@@ -27,19 +27,19 @@ configuration file, and custom globs in `EngineConfig::test_patterns`. Setting `
 This is the library. For the command line program, the report it prints and the settings it takes,
 see the [main README](https://github.com/subamanis/mezura).
 
-Counted by itself, on 2026-11-05:
+Counted by itself, on 2026-11-12:
 
 ```
 Details.
 
 Language    Files %       ↓ Lines %         Code %       Comments %       Extra       Size
 ──────────────────────────────────────────────────────────────────────────────────────────
-Rust           31 100%     25,501 100%    16,711 65.5%      2,892 11.3%   5,898     1.3 MB
- └─ tests      26 83.9%    11,554 45.3%    8,467 73.3%        790 6.84%   2,297   680.1 KB
+Rust           31 100%     25,997 100%    17,068 65.7%      2,960 11.4%   5,969     1.4 MB
+ └─ tests      26 83.9%    11,787 45.3%    8,648 73.4%        805 6.83%   2,334   695.7 KB
 
 Keywords.
 
-Rust   enums: 47, structs: 124, traits: 2
+Rust   enums: 48, structs: 126, traits: 2
 ```
 
 ## Counting a directory
