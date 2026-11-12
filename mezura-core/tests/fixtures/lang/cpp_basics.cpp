@@ -1,4 +1,4 @@
-// mezura-expect lines=16 code=10 comments=3 extra=3 classes=1 structs=1
+// mezura-expect lines=17 code=11 comments=3 extra=3 classes=1 structs=1
 #include <string>
 
 /* a block
@@ -6,6 +6,7 @@
 class Widget {
     struct Inner { int a; };
 };
+enum class Color { Red, Green };
 
 int n = 1;  // trailing
 const char *s = "// not a comment";

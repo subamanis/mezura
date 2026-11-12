@@ -42,6 +42,8 @@ ALIASES
 class
 FOLLOWED BY
 { :
+NOT AFTER
+enum
 Keyword
 NAME
 structs
@@ -49,3 +51,5 @@ ALIASES
 struct
 FOLLOWED BY
 { :
+NOT AFTER
+enum

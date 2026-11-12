@@ -1,4 +1,4 @@
-// mezura-expect lines=15 code=7 comments=5 extra=3 classes=1 structs=1
+// mezura-expect lines=16 code=8 comments=5 extra=3 classes=1 structs=1
 #pragma once
 
 /* a block
@@ -6,6 +6,7 @@
 class Widget {
     struct Inner { int a; };
 };
+enum struct Mode : int { A, B };
 
 // a comment continued \
    onto the next line

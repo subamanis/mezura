@@ -463,6 +463,16 @@ by one of the listed symbols, with whitespace and line ends allowed between them
 `struct __attribute__((packed)) foo {`, is read as no definition. Leave the line out where the
 rules of the language are not known, and every occurrence counts as before.
 
+A `NOT AFTER` line under it names the words that keep an occurrence from counting when one of them
+stands right before it on its line:
+
+```
+NOT AFTER
+enum
+```
+
+C++ lists `enum` for `class` and `struct`, so `enum class Color {` is no class.
+
 ## Naming a language on the command line
 
 Wherever a language name is expected, `--languages`, `--exclude-languages`, and the same fields in

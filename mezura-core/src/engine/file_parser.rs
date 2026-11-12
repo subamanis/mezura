@@ -1101,6 +1101,7 @@ pub(crate) struct KeywordMatcher {
     aliases_with_indices: Vec<(memmem::Finder<'static>, usize, usize)>,
     // Per keyword, the symbols one of which follows a definition's name; empty, every occurrence counts
     followed_by: Vec<Vec<Box<[u8]>>>,
+    not_after: Vec<Vec<Box<[u8]>>>,
 }
 
 impl KeywordMatcher {
@@ -1116,7 +1117,9 @@ impl KeywordMatcher {
         } else {
             let followed_by = language.keywords.iter()
                     .map(|keyword| keyword.followed_by.iter().map(|symbol| symbol.as_bytes().into()).collect()).collect();
-            Some(KeywordMatcher { aliases_with_indices, followed_by })
+            let not_after = language.keywords.iter()
+                    .map(|keyword| keyword.not_after.iter().map(|word| word.as_bytes().into()).collect()).collect();
+            Some(KeywordMatcher { aliases_with_indices, followed_by, not_after })
         }
     }
 }
@@ -2985,6 +2988,7 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
         indices.extend(alias_finder.find_iter(bytes));
         if indices.is_empty() { continue; }
         let followed_by = &matcher.followed_by[*keyword_index];
+        let not_after = &matcher.not_after[*keyword_index];
 
         // both lists ascend, so the stretch that could hold the next hit is never behind us
         let mut span = 0;
@@ -3005,7 +3009,8 @@ fn count_keywords(contents: &str, spans: &[(u32, u32)], matcher: &KeywordMatcher
             let before = if *at > from { bytes.get(*at - 1) } else { None };
             let after = if at + alias_len < to { bytes.get(at + alias_len) } else { None };
             if is_acceptable_before(before) && is_acceptable_after(after)
-                    && (followed_by.is_empty() || is_followed_by_a_definition(&bytes[at + alias_len..], followed_by)) {
+                    && (followed_by.is_empty() || is_followed_by_a_definition(&bytes[at + alias_len..], followed_by))
+                    && (not_after.is_empty() || !is_after_one_of(&bytes[from..*at], not_after)) {
                 file_stats.keyword_occurrences[*keyword_index] += 1;
                 if let Some((ranges, test_stats)) = &mut tests {
                     while range < ranges.len() && (ranges[range].1 as usize) <= *at { range += 1; }
@@ -3024,6 +3029,12 @@ fn is_followed_by_a_definition(rest: &[u8], symbols: &[Box<[u8]>]) -> bool {
     let mut at = 0;
     while at < rest.len() && (rest[at].is_ascii_whitespace() || IS_NAME_BYTE[rest[at] as usize]) { at += 1 }
     symbols.iter().any(|symbol| rest[at..].starts_with(symbol))
+}
+
+fn is_after_one_of(before: &[u8], words: &[Box<[u8]>]) -> bool {
+    let end = before.iter().rposition(|byte| !byte.is_ascii_whitespace()).map_or(0, |last| last + 1);
+    let start = before[..end].iter().rposition(|byte| !IS_NAME_BYTE[*byte as usize]).map_or(0, |at| at + 1);
+    words.iter().any(|word| **word == before[start..end])
 }
 
 const fn build_name_bytes() -> [bool; 256] {
@@ -3665,6 +3676,24 @@ mod tests {
             assert_eq!(0, count(uses), "{uses:?} uses");
         }
         fn contents_matches(contents: &str) -> usize { contents.matches("struct").count() }
+    }
+
+    #[test]
+    fn a_class_right_after_enum_counts_nothing() {
+        let classes = Keyword::new("classes", ["class"]).with_followed_by(["{", ":"]).with_not_after(["enum"]);
+        let language = Language::new("c-like", ["c"], build_backslashed_quotes(), ["//"], &[("/*", "*/")], [classes.clone()]);
+        let matcher = KeywordMatcher::build(&language).unwrap();
+        let count = |contents: &str| {
+            let mut file_stats = FileStats::with_keywords(std::slice::from_ref(&classes));
+            keywords_of(contents, &matcher, &mut file_stats);
+            file_stats.keyword_occurrences[0]
+        };
+        for defines in ["class Color {", "Renum class Color {", "enum; class Color {", "enum Color {}; class Widget {"] {
+            assert_eq!(1, count(defines), "{defines:?} defines a class");
+        }
+        for enums in ["enum class Color {", "enum class Color : int {", "enum   class Color {", "enum\tclass Color\n{"] {
+            assert_eq!(0, count(enums), "{enums:?} defines an enum");
+        }
     }
 
     #[test]

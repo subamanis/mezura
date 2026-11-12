@@ -4,8 +4,8 @@
 
 Breaking:
 
-- `Language` gains the public field `strings_only_between` and `Keyword` the public field
-  `followed_by`, so a literal of either type names them.
+- `Language` gains the public field `strings_only_between` and `Keyword` the public fields
+  `followed_by` and `not_after`, so a literal of either type names them.
 - `Carried` gains the variant `Hole`, for a line that begins inside a hole of an interpolated string.
 - A symbol of several bytes given to `StringRules::with_symbols` is a prefix and its quote, and the
   quote alone closes it: C#'s `$"` closes at `"`.
@@ -22,6 +22,8 @@ New:
   from the `Strings only between` block.
 - `Keyword::with_followed_by` for a keyword that counts only where a definition follows it, parsed
   from the `FOLLOWED BY` line of a keyword block.
+- `Keyword::with_not_after` for the words that keep a keyword from counting when one stands right
+  before it, parsed from the `NOT AFTER` line of a keyword block.
 - Counting runs a copy of the parser compiled for AVX2 or AVX-512 when the processor has them. The
   crate needs Rust 1.89.
 - HTML reads its quotes as strings inside a tag only, so a `<!--` in an attribute value opens no
@@ -31,7 +33,7 @@ New:
 - The holes of C#'s `$"..."` and `$"""..."""` and of the template literals of JavaScript,
   TypeScript, JSX and TSX count as code.
 - C's `struct` and C++'s `class` and `struct` count where a definition follows them, in the headers
-  too.
+  too, and C++'s nowhere after `enum`.
 
 ## 2.1.0, 2026-11-05
 

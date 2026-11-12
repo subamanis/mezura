@@ -144,6 +144,7 @@ const KEYWORD                  : &str = "Keyword";
 const KEYWORD_NAME             : &str = "NAME";
 const KEYWORD_ALIASES          : &str = "ALIASES";
 const KEYWORD_FOLLOWED_BY      : &str = "FOLLOWED BY";
+const KEYWORD_NOT_AFTER        : &str = "NOT AFTER";
 
 // The markers that open the rule blocks of the language conflicts file
 const CONTESTED_EXTENSIONS     : &str = "contested-extensions";
@@ -713,7 +714,13 @@ fn read_language(lines: &mut LineReader) -> Option<Language> {
             if followed_by.is_empty() {return None;}
             header = read_next_header(lines);
         }
-        keywords.push(Keyword{descriptive_name: name, aliases, followed_by});
+        let mut not_after = Vec::new();
+        if header.as_deref() == Some(KEYWORD_NOT_AFTER) {
+            not_after = split_line_on_whitespace(&read_value_line(lines)?);
+            if not_after.is_empty() {return None;}
+            header = read_next_header(lines);
+        }
+        keywords.push(Keyword{descriptive_name: name, aliases, followed_by, not_after});
     }
 
     // Anything still standing here is a header this parser has no block for, and the lines under it

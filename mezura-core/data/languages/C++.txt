@@ -36,6 +36,8 @@ Keyword
     class
     FOLLOWED BY
     { :
+    NOT AFTER
+    enum
 Keyword
     NAME
     structs
@@ -43,3 +45,5 @@ Keyword
     struct
     FOLLOWED BY
     { :
+    NOT AFTER
+    enum

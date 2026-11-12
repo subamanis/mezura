@@ -871,7 +871,9 @@ pub struct Keyword {
     pub aliases : Vec<String>,
     /// The symbols one of which follows the name of a definition, `{` for C's `struct`, so that
     /// `struct a *x` and `sizeof(struct a)` add nothing. Empty, every occurrence counts.
-    pub followed_by : Vec<String>
+    pub followed_by : Vec<String>,
+    /// The words that keep a spelling from counting right before it on its line, `enum` for C++'s `class`.
+    pub not_after : Vec<String>
 }
 
 impl Keyword {
@@ -880,7 +882,8 @@ impl Keyword {
         Keyword {
             descriptive_name : descriptive_name.as_ref().to_owned(),
             aliases : owned_strings(aliases),
-            followed_by : Vec::new()
+            followed_by : Vec::new(),
+            not_after : Vec::new()
         }
     }
 
@@ -888,6 +891,12 @@ impl Keyword {
     /// symbols stand together, whitespace and line ends between them.
     pub fn with_followed_by(mut self, symbols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
         self.followed_by = owned_strings(symbols);
+        self
+    }
+
+    /// The same count, raised nowhere one of these words stands right before the spelling.
+    pub fn with_not_after(mut self, words: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.not_after = owned_strings(words);
         self
     }
 }
