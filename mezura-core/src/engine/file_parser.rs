@@ -2178,7 +2178,9 @@ fn walk_line_symbols<const EXPLAIN: bool, const FULL: bool>(line: &str, lead: us
     state.open_comment = line_info.open_comment_after;
     state.in_tag = line_info.in_tag_after;
     // A hole of a string that ends with its line ends with the line too
-    state.holes.retain(|hole| language.string_crosses_lines(hole.string.0));
+    if !state.holes.is_empty() {
+        state.holes.retain(|hole| language.string_crosses_lines(hole.string.0));
+    }
     if EXPLAIN {
         let line_number = log.get_current_line_number();
         for hole in state.holes.iter_mut().filter(|hole| hole.since_line == 0) {
@@ -2188,10 +2190,12 @@ fn walk_line_symbols<const EXPLAIN: bool, const FULL: bool>(line: &str, lead: us
     // Only a symbol declared to cross lines carries its string to the next one, so the damage of
     // an unbalanced quote is this line and not the rest of the file. A line ending in the
     // continuation symbol is the exception: there the language says the line goes on.
-    state.open_str_symbol = line_info.open_str_symbol_after.filter(|(symbol, _)|
-            language.string_crosses_lines(*symbol)
-            || (continues_in(language, |continuation| continuation.in_strings)
-                && ends_with_continuation(line, language)));
+    state.open_str_symbol = match line_info.open_str_symbol_after {
+        Some((symbol, level)) if language.string_crosses_lines(symbol)
+                || (continues_in(language, |continuation| continuation.in_strings)
+                    && ends_with_continuation(line, language)) => Some((symbol, level)),
+        _ => None
+    };
     if opened_here.string && state.open_str_symbol.is_some_and(|(symbol, _)| language.string_is_delimited(symbol)) {
         state.delimiter = scan.delimiter;
     }

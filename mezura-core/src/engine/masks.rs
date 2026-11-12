@@ -107,6 +107,7 @@ impl MaskFinder {
 
     // The word bytes and the bytes that are not blank, as 'has_word_byte' and 'trim_ascii' read them
     #[allow(unsafe_code)]
+    #[inline(always)]
     pub(crate) fn classify_block(&self, block: &[u8]) -> Classes {
         #[cfg(target_arch = "x86_64")]
         if block.len() == BLOCK_BYTES {
