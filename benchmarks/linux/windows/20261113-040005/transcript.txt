@@ -1,0 +1,138 @@
+cloc: the corpus definition leaves it out on windows
+
+== phase 0: machine state
+   background: 0.7% busy
+   arch: x86_64
+   corpus_device: Lexar SSD NQ790 2TB, SSD, NVMe
+   corpus_fs: NTFS
+   corpus_volume: \\?\Volume{9a5063c3-7a0b-48db-bb5a-162a19054826}\
+   cpu: AMD Ryzen 7 9700X 8-Core Processor
+   cpu_scaling: High performance
+   global_gitignore: none
+   hyperfine: hyperfine 2.0.0
+   kernel: 10.0.26200.0
+   linebench: 0.4.1
+   logical_cores: 16
+   os: Microsoft Windows 11 Pro
+   platform: windows
+   ram_bytes: 66203877376
+   codestats: codestats 1.1.0 (fetched, cs-x86_64-pc-windows-gnu.exe)
+   mezura: v3.5.0 (2026-11-12) (fetched, mezura-v3.5.0-windows-x86_64.zip)
+   scc: scc version 4.1.0 (fetched, scc_Windows_x86_64.zip)
+   tokei: tokei 15.0.0 compiled with serialization support: json (built with rustc 1.97.1 (8bab26f4f 2026-07-14))
+
+== JSON captures (also the settling runs)
+
+== opening control run
+>> control-start
+   Benchmark 1: mezura (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    204.1 ms  ±    12.4 ms     192.0 ms  …   226.7 ms
+
+== Same work
+>> t1-fwd
+   Benchmark 1: codestats (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    210.0 ms  ±    12.6 ms     200.2 ms  …   245.0 ms
+
+   Benchmark 1: mezura (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    174.9 ms  ±    10.5 ms     164.3 ms  …   195.3 ms
+
+   Benchmark 1: scc (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    533.1 ms  ±    30.6 ms     483.0 ms  …   587.4 ms
+
+   Benchmark 1: tokei (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    617.6 ms  ±    19.3 ms     590.3 ms  …   644.5 ms
+
+>> t1-rev
+   Benchmark 1: tokei (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    617.0 ms  ±    21.2 ms     593.1 ms  …   649.2 ms
+
+   Benchmark 1: scc (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    509.0 ms  ±    37.4 ms     475.2 ms  …   589.0 ms
+
+   Benchmark 1: mezura (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    175.6 ms  ±    17.8 ms     162.2 ms  …   218.5 ms
+
+   Benchmark 1: codestats (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    214.6 ms  ±    17.5 ms     199.5 ms  …   256.3 ms
+
+== Out of the box
+>> t2-fwd
+   Benchmark 1: codestats (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    233.0 ms  ±    13.9 ms     218.2 ms  …   266.1 ms
+
+   Benchmark 1: mezura (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    204.0 ms  ±    13.5 ms     189.9 ms  …   239.3 ms
+
+   Benchmark 1: scc (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    640.1 ms  ±    27.5 ms     595.0 ms  …   689.2 ms
+
+   Benchmark 1: tokei (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    661.9 ms  ±    31.6 ms     625.7 ms  …   726.3 ms
+
+>> t2-rev
+   Benchmark 1: tokei (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    664.5 ms  ±    28.4 ms     618.9 ms  …   709.7 ms
+
+   Benchmark 1: scc (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    624.3 ms  ±    20.6 ms     591.3 ms  …   668.5 ms
+
+   Benchmark 1: mezura (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    208.0 ms  ±    12.9 ms     193.4 ms  …   234.6 ms
+
+   Benchmark 1: codestats (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    232.7 ms  ±    13.5 ms     219.8 ms  …   262.9 ms
+
+== closing control run
+>> control-end
+   Benchmark 1: mezura (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    208.3 ms  ±    16.9 ms     192.6 ms  …   240.4 ms
+
+== summary
+   drift         1.0204
+
+   Same work
+   instance   wall         vs fastest    user cpu  system cpu  parallelism  files   lines
+   mezura     175 ms ± 15  1.00x         1.14 s    1.30 s      13.93        63,772  36,017,987
+   codestats  212 ms ± 15  1.21x ± 0.13  1.36 s    1.79 s      14.87        63,767  36,017,775
+   scc        521 ms ± 36  2.97x ± 0.32  3.65 s    3.83 s      14.36        63,767  36,017,775
+   tokei      617 ms ± 20  3.52x ± 0.32  6.09 s    2.65 s      14.15        63,822  36,026,522
+
+   Out of the box
+   instance   wall         vs fastest    user cpu  system cpu  parallelism  files   lines
+   mezura     206 ms ± 13  1.00x         1.37 s    1.51 s      13.95        63,471  35,731,180
+   codestats  233 ms ± 14  1.13x ± 0.10  1.62 s    1.81 s      14.75        63,287  35,671,656
+   scc        632 ms ± 26  3.07x ± 0.23  5.16 s    3.95 s      14.42        63,767  36,017,775
+   tokei      663 ms ± 30  3.22x ± 0.25  6.25 s    2.84 s      13.70        63,822  36,026,522
+
+   equal work    within 1.0% of the corpus
+
+   since 20260919-200315 (same machine, same corpus commit)
+     mezura    t1   the languages, the same-work flags or the instance's own arguments or environment changed, so the times do not compare   version v3.2.0 (2026-09-19) -> v3.5.0 (2026-11-12)
+     codestats t1   212 ms   never measured before on this machine
+     scc       t1   526 ms -> 521 ms   -0.9% ± 2.9%   within the noise
+     tokei     t1   617 ms -> 617 ms   +0.0% ± 0.9%   within the noise
+     control   mezura   timed under another build in 20260919-200315, so the machine's own shift is not known
+     differs   background 0.1% busy -> 0.7% busy
+               linebench  0.2.0 -> 0.4.1
+               hyperfine  hyperfine 1.20.0 -> hyperfine 2.0.0
+               drift      0.6% -> 2.0%
+
+done. everything is in D:\dev\Rusty\linebench\example-run\linux\windows\20261113-040005

@@ -792,9 +792,10 @@ On Windows 11, the same machine and the same tree:
 
 | tool | time | vs fastest | lines/s | files | lines |
 |---|---|---|---|---|---|
-| mezura 3.3.0 | 190 ms ± 15 | 1.00x | 189.8M | 63,770 | 36,017,862 |
-| scc 4.1.0 | 526 ms ± 29 | 2.77x | 68.5M | 63,767 | 36,017,775 |
-| tokei 15.0.0 | 617 ms ± 19 | 3.25x | 58.4M | 63,822 | 36,026,522 |
+| mezura 3.5.0 | 175 ms ± 15 | 1.00x | 205.6M | 63,772 | 36,017,987 |
+| codestats 1.1.0 | 212 ms ± 15 | 1.21x | 169.7M | 63,767 | 36,017,775 |
+| scc 4.1.0 | 521 ms ± 36 | 2.97x | 69.1M | 63,767 | 36,017,775 |
+| tokei 15.0.0 | 617 ms ± 20 | 3.52x | 58.4M | 63,822 | 36,026,522 |
 
 The comparison is doing equal work: the same languages over the same tree for all of them,
 mezura pinned to the same counting model the others use, the gitignore not taken into

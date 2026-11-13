@@ -1,0 +1,145 @@
+cloc: the corpus definition leaves it out on windows
+
+== phase 0: machine state
+   background: 0.2% busy
+   arch: x86_64
+   corpus_device: Lexar SSD NQ790 2TB, SSD, NVMe
+   corpus_fs: NTFS
+   corpus_volume: \\?\Volume{9a5063c3-7a0b-48db-bb5a-162a19054826}\
+   cpu: AMD Ryzen 7 9700X 8-Core Processor
+   cpu_scaling: High performance
+   global_gitignore: none
+   hyperfine: hyperfine 2.0.0
+   kernel: 10.0.26200.0
+   linebench: 0.4.1
+   logical_cores: 16
+   os: Microsoft Windows 11 Pro
+   platform: windows
+   ram_bytes: 66203877376
+   codestats: codestats 1.1.0 (fetched, cs-x86_64-pc-windows-gnu.exe)
+   mezura: v3.5.0 (2026-11-12) (fetched, mezura-v3.5.0-windows-x86_64.zip)
+   scc: scc version 4.1.0 (fetched, scc_Windows_x86_64.zip)
+   tokei: tokei 15.0.0 compiled with serialization support: json (built with rustc 1.97.1 (8bab26f4f 2026-07-14))
+
+== JSON captures (also the settling runs)
+
+== opening control run
+>> control-start
+   Benchmark 1: mezura (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    150.1 ms  ±    11.4 ms     143.9 ms  …   179.2 ms
+WARNING: hyperfine on control-start: The first benchmarking run for this command was significantly slower than the rest (179.2 ms). This could be caused by (filesystem) caches that were not filled until after the first run. You are already using the '--warmup' option which helps to fill these caches before the actual benchmark. You can either try to increase the warmup count further or re-run this benchmark on a quiet system in case it was a random outlier. Alternatively, consider using the '--prepare' option to clear the caches before each timing run.
+
+== Same work
+>> t1-fwd
+   Benchmark 1: codestats (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    147.2 ms  ±    11.4 ms     142.4 ms  …   188.1 ms
+
+   Benchmark 1: mezura (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    131.1 ms  ±    10.1 ms     126.8 ms  …   167.5 ms
+
+   Benchmark 1: scc (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    279.7 ms  ±    15.0 ms     270.9 ms  …   316.7 ms
+
+   Benchmark 1: tokei (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    443.5 ms  ±    19.2 ms     426.4 ms  …   474.8 ms
+
+>> t1-rev
+   Benchmark 1: tokei (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    447.3 ms  ±    19.8 ms     428.8 ms  …   480.8 ms
+
+   Benchmark 1: scc (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    280.8 ms  ±    17.7 ms     269.3 ms  …   318.5 ms
+
+   Benchmark 1: mezura (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    134.3 ms  ±    12.1 ms     127.9 ms  …   168.9 ms
+WARNING: hyperfine on t1-rev: The first benchmarking run for this command was significantly slower than the rest (154.1 ms). This could be caused by (filesystem) caches that were not filled until after the first run. You are already using the '--warmup' option which helps to fill these caches before the actual benchmark. You can either try to increase the warmup count further or re-run this benchmark on a quiet system in case it was a random outlier. Alternatively, consider using the '--prepare' option to clear the caches before each timing run.
+
+   Benchmark 1: codestats (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    150.3 ms  ±    12.3 ms     144.2 ms  …   184.3 ms
+WARNING: hyperfine on t1-rev: The first benchmarking run for this command was significantly slower than the rest (176.1 ms). This could be caused by (filesystem) caches that were not filled until after the first run. You are already using the '--warmup' option which helps to fill these caches before the actual benchmark. You can either try to increase the warmup count further or re-run this benchmark on a quiet system in case it was a random outlier. Alternatively, consider using the '--prepare' option to clear the caches before each timing run.
+
+== Out of the box
+>> t2-fwd
+   Benchmark 1: codestats (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    177.1 ms  ±    12.9 ms     169.1 ms  …   209.2 ms
+
+   Benchmark 1: mezura (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    151.4 ms  ±    13.5 ms     143.6 ms  …   188.2 ms
+
+   Benchmark 1: scc (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    346.4 ms  ±    20.1 ms     330.9 ms  …   380.7 ms
+
+   Benchmark 1: tokei (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    488.2 ms  ±    27.4 ms     450.3 ms  …   527.0 ms
+
+>> t2-rev
+   Benchmark 1: tokei (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    468.9 ms  ±    16.5 ms     451.5 ms  …   493.1 ms
+
+   Benchmark 1: scc (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    345.2 ms  ±    18.4 ms     331.8 ms  …   383.2 ms
+
+   Benchmark 1: mezura (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    151.4 ms  ±    10.8 ms     144.2 ms  …   177.2 ms
+
+   Benchmark 1: codestats (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    176.6 ms  ±    12.8 ms     169.2 ms  …   210.7 ms
+
+== closing control run
+>> control-end
+   Benchmark 1: mezura (15 runs)
+                   mean     ±       σ          min     …     max
+     Wall Time    148.0 ms  ±    10.6 ms     143.8 ms  …   186.3 ms
+
+== summary
+   drift         1.0139
+
+   Same work
+   instance   wall         vs fastest    user cpu  system cpu  parallelism  files   lines
+   mezura     133 ms ± 11  1.00x         0.82 s    1.06 s      14.19        61,550  13,271,450
+   codestats  149 ms ± 12  1.12x ± 0.13  0.72 s    1.48 s      14.80        61,420  13,226,395
+   scc        280 ms ± 16  2.11x ± 0.22  1.82 s    2.03 s      13.74        61,420  13,226,395
+   tokei      445 ms ± 20  3.36x ± 0.32  4.14 s    2.08 s      13.96        61,421  13,226,397
+
+   Out of the box
+   instance   wall         vs fastest    user cpu  system cpu  parallelism  files   lines
+   mezura     151 ms ± 12  1.00x         0.96 s    1.17 s      14.05        61,546  13,265,825
+   codestats  177 ms ± 13  1.17x ± 0.13  1.00 s    1.57 s      14.57        61,281  13,145,866
+   scc        346 ms ± 19  2.28x ± 0.22  2.66 s    2.08 s      13.70        61,420  13,226,395
+   tokei      479 ms ± 25  3.16x ± 0.30  4.32 s    2.19 s      13.60        61,417  13,226,116
+
+   equal work    within 1.0% of the corpus
+
+   since 20260919-200059 (same machine, same corpus commit)
+     mezura    t1   the languages, the same-work flags or the instance's own arguments or environment changed, so the times do not compare   version v3.2.0 (2026-09-19) -> v3.5.0 (2026-11-12)
+     codestats t1   149 ms   never measured before on this machine
+     scc       t1   280 ms -> 280 ms   +0.2% ± 1.5%   within the noise
+     tokei     t1   448 ms -> 445 ms   -0.6% ± 1.8%   within the noise
+     control   mezura   timed under another build in 20260919-200059, so the machine's own shift is not known
+     differs   background 0.4% busy -> 0.2% busy
+               linebench  0.2.0 -> 0.4.1
+               hyperfine  hyperfine 1.20.0 -> hyperfine 2.0.0
+               drift      0.6% -> 1.4%
+
+WARNING: The first benchmarking run for this command was significantly slower than the rest (179.2 ms), on control-start
+WARNING: The first benchmarking run for this command was significantly slower than the rest (154.1 ms), on t1-rev
+WARNING: The first benchmarking run for this command was significantly slower than the rest (176.1 ms), on t1-rev
+
+done. everything is in D:\dev\Rusty\linebench\example-run\jdk\windows\20261113-035730
