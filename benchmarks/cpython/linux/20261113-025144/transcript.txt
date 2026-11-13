@@ -1,0 +1,139 @@
+
+== machine preparation
+   cpu governor on 16 cpus: powersave -> performance
+   if this run dies without putting it back, by hand:
+   for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo powersave | sudo tee $f; done
+cloc: the corpus definition leaves it out on linux
+
+== phase 0: machine state
+   background: 0% busy
+   arch: x86_64
+   corpus_device: Lexar SSD NQ790 2TB, 16.0 GT/s PCIe x4
+   corpus_fs: ext4 /dev/nvme1n1p3
+   corpus_volume: 6a161305-1bb6-4ee3-9d7f-1ea0d2ab0af9
+   cpu: AMD Ryzen 7 9700X 8-Core Processor
+   cpu_scaling: performance
+   global_gitignore: none
+   hyperfine: hyperfine 1.19.0
+   kernel: 6.12.115+deb13.1-amd64
+   linebench: 0.4.0
+   logical_cores: 16
+   os: Debian GNU/Linux 13 (trixie)
+   platform: linux
+   ram_bytes: 64950509568
+   codestats: codestats 1.1.0 (fetched, cs-x86_64-unknown-linux-gnu)
+   mezura: v3.5.0 (2026-11-12) (fetched, mezura-v3.5.0-linux-x86_64.tar.gz)
+   scc: scc version 4.1.0 (fetched, scc_Linux_x86_64.tar.gz)
+   tokei: tokei 15.0.0 compiled with serialization support: json (built with rustc 1.97.1 (8bab26f4f 2026-07-14))
+
+== JSON captures (also the settling runs)
+
+== opening control run
+>> control-start
+   Benchmark 1: mezura
+     Time (mean ± σ):       9.4 ms ±   0.2 ms    [User: 70.5 ms, System: 20.5 ms]
+     Range (min … max):     9.3 ms …   9.8 ms    15 runs
+
+== Same work
+>> t1-fwd
+   Benchmark 1: codestats
+     Time (mean ± σ):       7.2 ms ±   0.3 ms    [User: 76.5 ms, System: 19.3 ms]
+     Range (min … max):     7.1 ms …   8.1 ms    15 runs
+WARNING: hyperfine on t1-fwd: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other programs. It might help to use the '--warmup' or '--prepare' options.
+
+   Benchmark 1: mezura
+     Time (mean ± σ):       7.7 ms ±   0.4 ms    [User: 58.6 ms, System: 19.5 ms]
+     Range (min … max):     7.1 ms …   8.5 ms    15 runs
+
+   Benchmark 1: scc
+     Time (mean ± σ):      20.0 ms ±   0.3 ms    [User: 216.6 ms, System: 27.6 ms]
+     Range (min … max):    19.7 ms …  20.8 ms    15 runs
+
+   Benchmark 1: tokei
+     Time (mean ± σ):      45.2 ms ±   0.7 ms    [User: 611.4 ms, System: 33.0 ms]
+     Range (min … max):    44.7 ms …  47.7 ms    15 runs
+
+>> t1-rev
+   Benchmark 1: tokei
+     Time (mean ± σ):      45.2 ms ±   0.6 ms    [User: 613.5 ms, System: 29.9 ms]
+     Range (min … max):    44.3 ms …  46.1 ms    15 runs
+
+   Benchmark 1: scc
+     Time (mean ± σ):      19.9 ms ±   0.3 ms    [User: 217.0 ms, System: 27.9 ms]
+     Range (min … max):    19.5 ms …  20.7 ms    15 runs
+
+   Benchmark 1: mezura
+     Time (mean ± σ):       7.6 ms ±   0.6 ms    [User: 60.2 ms, System: 17.5 ms]
+     Range (min … max):     7.1 ms …   9.3 ms    15 runs
+
+   Benchmark 1: codestats
+     Time (mean ± σ):       7.3 ms ±   0.2 ms    [User: 80.3 ms, System: 15.3 ms]
+     Range (min … max):     7.1 ms …   8.0 ms    15 runs
+
+== Out of the box
+>> t2-fwd
+   Benchmark 1: codestats
+     Time (mean ± σ):       8.1 ms ±   0.3 ms    [User: 76.4 ms, System: 20.7 ms]
+     Range (min … max):     7.9 ms …   9.0 ms    15 runs
+WARNING: hyperfine on t2-fwd: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other programs. It might help to use the '--warmup' or '--prepare' options.
+
+   Benchmark 1: mezura
+     Time (mean ± σ):       9.6 ms ±   0.2 ms    [User: 69.6 ms, System: 21.7 ms]
+     Range (min … max):     9.1 ms …   9.9 ms    15 runs
+
+   Benchmark 1: scc
+     Time (mean ± σ):      26.3 ms ±   0.4 ms    [User: 316.4 ms, System: 25.2 ms]
+     Range (min … max):    25.6 ms …  26.8 ms    15 runs
+
+   Benchmark 1: tokei
+     Time (mean ± σ):      46.6 ms ±   0.7 ms    [User: 622.8 ms, System: 27.0 ms]
+     Range (min … max):    45.4 ms …  48.4 ms    15 runs
+
+>> t2-rev
+   Benchmark 1: tokei
+     Time (mean ± σ):      47.0 ms ±   0.7 ms    [User: 621.3 ms, System: 28.6 ms]
+     Range (min … max):    46.0 ms …  48.1 ms    15 runs
+
+   Benchmark 1: scc
+     Time (mean ± σ):      26.2 ms ±   0.3 ms    [User: 313.6 ms, System: 25.0 ms]
+     Range (min … max):    25.7 ms …  26.6 ms    15 runs
+
+   Benchmark 1: mezura
+     Time (mean ± σ):       9.6 ms ±   0.2 ms    [User: 73.2 ms, System: 18.1 ms]
+     Range (min … max):     9.3 ms …  10.1 ms    15 runs
+
+   Benchmark 1: codestats
+     Time (mean ± σ):       8.0 ms ±   0.1 ms    [User: 75.9 ms, System: 20.6 ms]
+     Range (min … max):     7.8 ms …   8.2 ms    15 runs
+
+== closing control run
+>> control-end
+   Benchmark 1: mezura
+     Time (mean ± σ):       9.6 ms ±   0.2 ms    [User: 72.6 ms, System: 18.6 ms]
+     Range (min … max):     9.3 ms …  10.1 ms    15 runs
+
+== summary
+   drift         1.0176
+
+   Same work
+   instance   wall       vs fastest    user cpu  system cpu  parallelism  files  lines
+   codestats  7 ms ± 0   1.00x         0.08 s    0.02 s      13.15        3,554  2,229,543
+   mezura     8 ms ± 1   1.05x ± 0.08  0.06 s    0.02 s      10.16        3,557  2,230,162
+   scc        20 ms ± 0  2.74x ± 0.10  0.22 s    0.03 s      12.28        3,554  2,229,543
+   tokei      45 ms ± 1  6.22x ± 0.24  0.61 s    0.03 s      14.24        3,581  2,230,903
+
+   Out of the box
+   instance   wall       vs fastest    user cpu  system cpu  parallelism  files  lines
+   codestats  8 ms ± 0   1.00x         0.08 s    0.02 s      12.02        3,335  1,879,259
+   mezura     10 ms ± 0  1.19x ± 0.04  0.07 s    0.02 s      9.54         3,539  2,117,231
+   scc        26 ms ± 0  3.26x ± 0.10  0.32 s    0.03 s      12.96        3,554  2,229,543
+   tokei      47 ms ± 1  5.81x ± 0.19  0.62 s    0.03 s      13.89        3,579  2,230,868
+
+   equal work    within 1.0% of the corpus
+
+   since: no earlier run on this machine over this corpus shares an instance with this one
+
+WARNING: Statistical outliers were detected, on t1-fwd
+WARNING: Statistical outliers were detected, on t2-fwd
+
+done. everything is in /home/petros/Documents/dev/Rusty/linebench/example-run/cpython/linux/20261113-025144

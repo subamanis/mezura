@@ -1,0 +1,134 @@
+cloc: the corpus definition leaves it out on linux
+
+== phase 0: machine state
+   background: 0% busy
+   arch: x86_64
+   corpus_device: Lexar SSD NQ790 2TB, 16.0 GT/s PCIe x4
+   corpus_fs: ext4 /dev/nvme1n1p3
+   corpus_volume: 6a161305-1bb6-4ee3-9d7f-1ea0d2ab0af9
+   cpu: AMD Ryzen 7 9700X 8-Core Processor
+   cpu_scaling: performance
+   global_gitignore: none
+   hyperfine: hyperfine 1.19.0
+   kernel: 6.12.115+deb13.1-amd64
+   linebench: 0.4.0
+   logical_cores: 16
+   os: Debian GNU/Linux 13 (trixie)
+   platform: linux
+   ram_bytes: 64950509568
+   codestats: codestats 1.1.0 (fetched, cs-x86_64-unknown-linux-gnu)
+   mezura: v3.5.0 (2026-11-12) (fetched, mezura-v3.5.0-linux-x86_64.tar.gz)
+   scc: scc version 4.1.0 (fetched, scc_Linux_x86_64.tar.gz)
+   tokei: tokei 15.0.0 compiled with serialization support: json (built with rustc 1.97.1 (8bab26f4f 2026-07-14))
+
+== JSON captures (also the settling runs)
+
+== opening control run
+>> control-start
+   Benchmark 1: mezura
+     Time (mean ± σ):      51.7 ms ±   0.4 ms    [User: 479.8 ms, System: 260.4 ms]
+     Range (min … max):    51.0 ms …  52.6 ms    15 runs
+
+== Same work
+>> t1-fwd
+   Benchmark 1: codestats
+     Time (mean ± σ):      45.2 ms ±   0.3 ms    [User: 426.1 ms, System: 274.2 ms]
+     Range (min … max):    45.0 ms …  45.8 ms    15 runs
+
+   Benchmark 1: mezura
+     Time (mean ± σ):      42.7 ms ±   1.0 ms    [User: 341.0 ms, System: 251.1 ms]
+     Range (min … max):    41.4 ms …  44.8 ms    15 runs
+
+   Benchmark 1: scc
+     Time (mean ± σ):     111.4 ms ±   0.6 ms    [User: 1351.6 ms, System: 332.7 ms]
+     Range (min … max):   110.5 ms … 113.0 ms    15 runs
+
+   Benchmark 1: tokei
+     Time (mean ± σ):     301.4 ms ±   4.2 ms    [User: 4038.9 ms, System: 427.3 ms]
+     Range (min … max):   294.7 ms … 309.7 ms    15 runs
+
+>> t1-rev
+   Benchmark 1: tokei
+     Time (mean ± σ):     299.8 ms ±   3.7 ms    [User: 4040.8 ms, System: 417.9 ms]
+     Range (min … max):   295.1 ms … 307.6 ms    15 runs
+
+   Benchmark 1: scc
+     Time (mean ± σ):     112.8 ms ±   6.1 ms    [User: 1351.3 ms, System: 325.1 ms]
+     Range (min … max):   110.5 ms … 134.8 ms    15 runs
+WARNING: hyperfine on t1-rev: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other programs. It might help to use the '--warmup' or '--prepare' options.
+
+   Benchmark 1: mezura
+     Time (mean ± σ):      42.8 ms ±   0.9 ms    [User: 335.4 ms, System: 259.8 ms]
+     Range (min … max):    41.4 ms …  44.9 ms    15 runs
+
+   Benchmark 1: codestats
+     Time (mean ± σ):      45.8 ms ±   0.7 ms    [User: 425.0 ms, System: 276.5 ms]
+     Range (min … max):    45.0 ms …  47.2 ms    15 runs
+
+== Out of the box
+>> t2-fwd
+   Benchmark 1: codestats
+     Time (mean ± σ):      54.5 ms ±   0.5 ms    [User: 502.7 ms, System: 286.1 ms]
+     Range (min … max):    53.8 ms …  55.5 ms    15 runs
+
+   Benchmark 1: mezura
+     Time (mean ± σ):      52.1 ms ±   0.7 ms    [User: 480.6 ms, System: 257.5 ms]
+     Range (min … max):    51.3 ms …  53.2 ms    15 runs
+
+   Benchmark 1: scc
+     Time (mean ± σ):     161.2 ms ±   1.2 ms    [User: 2124.3 ms, System: 318.7 ms]
+     Range (min … max):   159.0 ms … 162.8 ms    15 runs
+
+   Benchmark 1: tokei
+     Time (mean ± σ):     309.3 ms ±   5.0 ms    [User: 4100.8 ms, System: 440.6 ms]
+     Range (min … max):   303.2 ms … 320.9 ms    15 runs
+
+>> t2-rev
+   Benchmark 1: tokei
+     Time (mean ± σ):     307.8 ms ±   2.9 ms    [User: 4117.5 ms, System: 421.4 ms]
+     Range (min … max):   304.0 ms … 313.1 ms    15 runs
+
+   Benchmark 1: scc
+     Time (mean ± σ):     165.2 ms ±   9.5 ms    [User: 2110.0 ms, System: 323.5 ms]
+     Range (min … max):   160.3 ms … 198.1 ms    15 runs
+WARNING: hyperfine on t2-rev: Statistical outliers were detected. Consider re-running this benchmark on a quiet system without any interferences from other programs. It might help to use the '--warmup' or '--prepare' options.
+
+   Benchmark 1: mezura
+     Time (mean ± σ):      52.3 ms ±   0.6 ms    [User: 487.3 ms, System: 251.0 ms]
+     Range (min … max):    51.5 ms …  53.4 ms    15 runs
+
+   Benchmark 1: codestats
+     Time (mean ± σ):      54.4 ms ±   0.3 ms    [User: 516.6 ms, System: 269.9 ms]
+     Range (min … max):    53.7 ms …  55.0 ms    15 runs
+
+== closing control run
+>> control-end
+   Benchmark 1: mezura
+     Time (mean ± σ):      52.3 ms ±   0.6 ms    [User: 483.0 ms, System: 256.7 ms]
+     Range (min … max):    51.7 ms …  53.7 ms    15 runs
+
+== summary
+   drift         1.0104
+
+   Same work
+   instance   wall        vs fastest    user cpu  system cpu  parallelism  files   lines
+   mezura     43 ms ± 1   1.00x         0.34 s    0.26 s      13.88        61,550  13,271,450
+   codestats  46 ms ± 1   1.06x ± 0.03  0.43 s    0.28 s      15.40        61,420  13,226,395
+   scc        112 ms ± 4  2.62x ± 0.12  1.35 s    0.33 s      14.99        61,420  13,226,395
+   tokei      301 ms ± 4  7.03x ± 0.18  4.04 s    0.42 s      14.85        61,421  13,226,397
+
+   Out of the box
+   instance   wall        vs fastest    user cpu  system cpu  parallelism  files   lines
+   mezura     52 ms ± 1   1.00x         0.48 s    0.25 s      14.15        61,546  13,265,825
+   codestats  54 ms ± 0   1.04x ± 0.01  0.51 s    0.28 s      14.47        61,281  13,145,866
+   scc        163 ms ± 7  3.13x ± 0.14  2.12 s    0.32 s      14.94        61,420  13,226,395
+   tokei      309 ms ± 4  5.91x ± 0.11  4.11 s    0.43 s      14.72        61,417  13,226,116
+
+   equal work    within 1.0% of the corpus
+
+   since: no earlier run on this machine over this corpus shares an instance with this one
+
+WARNING: Statistical outliers were detected, on t1-rev
+WARNING: Statistical outliers were detected, on t2-rev
+
+done. everything is in /home/petros/Documents/dev/Rusty/linebench/example-run/jdk/linux/20261113-025252

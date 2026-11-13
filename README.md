@@ -774,18 +774,19 @@ With that said, it is important to mention the following limitations:
 
 ## How it compares
 
-Against [scc](https://github.com/boyter/scc) and [tokei](https://github.com/XAMPPRocky/tokei), the
-two fastest counters around, on the Linux repository tree, measured with
-[linebench](https://github.com/loc-conformance/linebench) over 3 warmups and 30 timed runs per
+Against [codestats](https://github.com/trypsynth/codestats), [scc](https://github.com/boyter/scc)
+and [tokei](https://github.com/XAMPPRocky/tokei), on the Linux repository tree, measured with
+[linebench](https://github.com/loc-conformance/linebench) 0.4 over 3 warmups and 30 timed runs per
 command, in both command orders.
 
 On native Debian 13:
 
 | tool | time | vs fastest | lines/s | files | lines |
 |---|---|---|---|---|---|
-| mezura 3.3.0 | 78 ms ± 1 | 1.00x | 461.8M | 63,741 | 36,018,888 |
-| scc 4.1.0 | 208 ms ± 2 | 2.67x | 173.3M | 63,738 | 36,018,801 |
-| tokei 15.0.0 | 414 ms ± 2 | 5.31x | 87.1M | 63,793 | 36,027,518 |
+| mezura 3.5.0 | 67 ms ± 2 | 1.00x | 540.7M | 63,743 | 36,019,013 |
+| codestats 1.1.0 | 79 ms ± 1 | 1.19x | 454.4M | 63,738 | 36,018,801 |
+| scc 4.1.0 | 208 ms ± 3 | 3.12x | 173.1M | 63,738 | 36,018,801 |
+| tokei 15.0.0 | 411 ms ± 3 | 6.17x | 87.7M | 63,793 | 36,027,518 |
 
 On Windows 11, the same machine and the same tree:
 
@@ -795,16 +796,16 @@ On Windows 11, the same machine and the same tree:
 | scc 4.1.0 | 526 ms ± 29 | 2.77x | 68.5M | 63,767 | 36,017,775 |
 | tokei 15.0.0 | 617 ms ± 19 | 3.25x | 58.4M | 63,822 | 36,026,522 |
 
-The comparison is doing equal work: the same languages over the same tree for all three,
-mezura pinned to the same counting model the other two use, the gitignore not taken into
+The comparison is doing equal work: the same languages over the same tree for all of them,
+mezura pinned to the same counting model the others use, the gitignore not taken into
 consideration by anyone, and each tool's unique feature apart from counting turned off 
 (keyword counting for mezura, complexity and cost estimates for scc).  
 The files and lines columns are the proof of the equal work.  
 Measured on a Ryzen 7 9700X with 16 threads and a Lexar NQ790 PCIe gen4 NVMe disk.
 
 The exact flags, the trust checks every run carries, the full
-methodology and the recorded numbers of each run for equal work and program defaults are on
-[linebench's example run](https://github.com/loc-conformance/linebench/blob/HEAD/example-run/README.md).
+methodology and the recorded numbers of each run for equal work and program defaults, over the
+Linux, JDK and CPython trees, are in [benchmarks](benchmarks/README.md).
 
 
 ## Performance

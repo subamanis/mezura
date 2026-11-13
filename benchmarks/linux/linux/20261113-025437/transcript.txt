@@ -1,0 +1,129 @@
+cloc: the corpus definition leaves it out on linux
+
+== phase 0: machine state
+   background: 0% busy
+   arch: x86_64
+   corpus_device: Lexar SSD NQ790 2TB, 16.0 GT/s PCIe x4
+   corpus_fs: ext4 /dev/nvme1n1p3
+   corpus_volume: 6a161305-1bb6-4ee3-9d7f-1ea0d2ab0af9
+   cpu: AMD Ryzen 7 9700X 8-Core Processor
+   cpu_scaling: performance
+   global_gitignore: none
+   hyperfine: hyperfine 1.19.0
+   kernel: 6.12.115+deb13.1-amd64
+   linebench: 0.4.0
+   logical_cores: 16
+   os: Debian GNU/Linux 13 (trixie)
+   platform: linux
+   ram_bytes: 64950509568
+   codestats: codestats 1.1.0 (fetched, cs-x86_64-unknown-linux-gnu)
+   mezura: v3.5.0 (2026-11-12) (fetched, mezura-v3.5.0-linux-x86_64.tar.gz)
+   scc: scc version 4.1.0 (fetched, scc_Linux_x86_64.tar.gz)
+   tokei: tokei 15.0.0 compiled with serialization support: json (built with rustc 1.97.1 (8bab26f4f 2026-07-14))
+
+== JSON captures (also the settling runs)
+
+== opening control run
+>> control-start
+   Benchmark 1: mezura
+     Time (mean ± σ):      85.7 ms ±   1.7 ms    [User: 906.3 ms, System: 279.8 ms]
+     Range (min … max):    83.5 ms …  88.2 ms    15 runs
+
+== Same work
+>> t1-fwd
+   Benchmark 1: codestats
+     Time (mean ± σ):      79.2 ms ±   1.4 ms    [User: 938.9 ms, System: 276.3 ms]
+     Range (min … max):    77.6 ms …  82.0 ms    15 runs
+
+   Benchmark 1: mezura
+     Time (mean ± σ):      66.5 ms ±   1.7 ms    [User: 627.9 ms, System: 273.6 ms]
+     Range (min … max):    64.4 ms …  69.4 ms    15 runs
+
+   Benchmark 1: scc
+     Time (mean ± σ):     209.1 ms ±   3.2 ms    [User: 2720.5 ms, System: 376.0 ms]
+     Range (min … max):   205.3 ms … 216.6 ms    15 runs
+
+   Benchmark 1: tokei
+     Time (mean ± σ):     411.7 ms ±   3.1 ms    [User: 5543.3 ms, System: 619.0 ms]
+     Range (min … max):   405.8 ms … 417.8 ms    15 runs
+
+>> t1-rev
+   Benchmark 1: tokei
+     Time (mean ± σ):     410.2 ms ±   2.8 ms    [User: 5589.6 ms, System: 588.1 ms]
+     Range (min … max):   406.1 ms … 415.3 ms    15 runs
+
+   Benchmark 1: scc
+     Time (mean ± σ):     207.1 ms ±   2.6 ms    [User: 2727.2 ms, System: 370.8 ms]
+     Range (min … max):   204.2 ms … 214.7 ms    15 runs
+
+   Benchmark 1: mezura
+     Time (mean ± σ):      66.7 ms ±   1.4 ms    [User: 621.9 ms, System: 280.2 ms]
+     Range (min … max):    64.2 ms …  69.4 ms    15 runs
+
+   Benchmark 1: codestats
+     Time (mean ± σ):      79.3 ms ±   1.3 ms    [User: 931.7 ms, System: 281.5 ms]
+     Range (min … max):    77.6 ms …  81.8 ms    15 runs
+
+== Out of the box
+>> t2-fwd
+   Benchmark 1: codestats
+     Time (mean ± σ):      86.1 ms ±   2.0 ms    [User: 1002.3 ms, System: 299.5 ms]
+     Range (min … max):    83.1 ms …  89.6 ms    15 runs
+
+   Benchmark 1: mezura
+     Time (mean ± σ):      85.2 ms ±   2.2 ms    [User: 888.0 ms, System: 286.5 ms]
+     Range (min … max):    80.6 ms …  88.0 ms    15 runs
+
+   Benchmark 1: scc
+     Time (mean ± σ):     290.1 ms ±   3.3 ms    [User: 4018.9 ms, System: 365.6 ms]
+     Range (min … max):   286.4 ms … 298.9 ms    15 runs
+
+   Benchmark 1: tokei
+     Time (mean ± σ):     418.4 ms ±   1.7 ms    [User: 5637.3 ms, System: 622.4 ms]
+     Range (min … max):   415.6 ms … 421.2 ms    15 runs
+
+>> t2-rev
+   Benchmark 1: tokei
+     Time (mean ± σ):     416.9 ms ±   3.1 ms    [User: 5634.7 ms, System: 584.8 ms]
+     Range (min … max):   412.9 ms … 423.4 ms    15 runs
+
+   Benchmark 1: scc
+     Time (mean ± σ):     290.7 ms ±   2.6 ms    [User: 4047.1 ms, System: 370.4 ms]
+     Range (min … max):   285.8 ms … 295.2 ms    15 runs
+
+   Benchmark 1: mezura
+     Time (mean ± σ):      85.4 ms ±   2.0 ms    [User: 911.7 ms, System: 270.7 ms]
+     Range (min … max):    81.7 ms …  89.1 ms    15 runs
+
+   Benchmark 1: codestats
+     Time (mean ± σ):      86.6 ms ±   2.4 ms    [User: 1014.7 ms, System: 292.6 ms]
+     Range (min … max):    83.2 ms …  91.8 ms    15 runs
+
+== closing control run
+>> control-end
+   Benchmark 1: mezura
+     Time (mean ± σ):      85.4 ms ±   1.6 ms    [User: 889.8 ms, System: 286.0 ms]
+     Range (min … max):    83.0 ms …  88.5 ms    15 runs
+
+== summary
+   drift         1.003
+
+   Same work
+   instance   wall        vs fastest    user cpu  system cpu  parallelism  files   lines
+   mezura     67 ms ± 2   1.00x         0.62 s    0.28 s      13.54        63,743  36,019,013
+   codestats  79 ms ± 1   1.19x ± 0.03  0.94 s    0.28 s      15.32        63,738  36,018,801
+   scc        208 ms ± 3  3.12x ± 0.09  2.72 s    0.37 s      14.88        63,738  36,018,801
+   tokei      411 ms ± 3  6.17x ± 0.15  5.57 s    0.60 s      15.01        63,793  36,027,518
+
+   Out of the box
+   instance   wall        vs fastest    user cpu  system cpu  parallelism  files   lines
+   mezura     85 ms ± 2   1.00x         0.90 s    0.28 s      13.82        63,442  35,732,206
+   codestats  86 ms ± 2   1.01x ± 0.04  1.01 s    0.30 s      15.11        63,258  35,672,682
+   scc        290 ms ± 3  3.41x ± 0.09  4.03 s    0.37 s      15.15        63,738  36,018,801
+   tokei      418 ms ± 3  4.90x ± 0.13  5.64 s    0.60 s      14.94        63,793  36,027,518
+
+   equal work    within 1.0% of the corpus
+
+   since: no earlier run on this machine over this corpus shares an instance with this one
+
+done. everything is in /home/petros/Documents/dev/Rusty/linebench/example-run/linux/linux/20261113-025437
