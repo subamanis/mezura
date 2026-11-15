@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use mezura_core::{FilesPresent, LineClasses, ModuleResult, Performance, RunResult, Stats, Target, Threads};
 
@@ -87,4 +88,10 @@ pub fn install_local_ssh_helper() -> LocalSshGuard {
     };
     *crate::git::TEST_GIT_SSH.lock().unwrap_or_else(|e| e.into_inner()) = Some(path.to_string_lossy().into_owned());
     LocalSshGuard(path)
+}
+
+pub fn run_git(at: &Path, arguments: &[&str]) -> String {
+    let outcome = Command::new("git").arg("-C").arg(at).args(arguments).output().unwrap();
+    assert!(outcome.status.success(), "git {arguments:?}: {}", String::from_utf8_lossy(&outcome.stderr));
+    String::from_utf8_lossy(&outcome.stdout).trim().to_owned()
 }

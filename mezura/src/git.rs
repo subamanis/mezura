@@ -15,16 +15,19 @@ const CHECKOUT_PREFIX : &str = "mezura-diff-";
 const REMOTE_PREFIX : &str = "mezura-remote-";
 const DEFAULT_SSH_COMMAND : &str = "ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=2";
 const REMOTE_SCHEMES : [&str; 4] = ["https", "http", "ssh", "git"];
-// Untrusted repositories must never execute hooks, fsmonitor, or smudge filters, or write symlinks
-// that point outside the checkout
-const HARDENED_GIT_CONFIG : [&str; 18] = [
+// These stop the programs a repository's configuration names and a link written outside a checkout.
+// The 'true' of 'core.alternateRefsCommand' is the program of that name, which lists no refs.
+const HARDENED_GIT_CONFIG : [&str; 24] = [
     "-c", "core.longpaths=true",
     "-c", "core.hooksPath=/dev/null",
     "-c", "core.fsmonitor=false",
     "-c", "core.symlinks=false",
+    "-c", "core.alternateRefsCommand=true",
     "-c", "filter.lfs.smudge=",
     "-c", "filter.lfs.process=",
     "-c", "filter.lfs.required=false",
+    "-c", "log.showSignature=false",
+    "-c", "protocol.ext.allow=never",
     "-c", "protocol.file.allow=never",
     "-c", "advice.detachedHead=false",
 ];
@@ -355,12 +358,10 @@ pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
     let _ = remove_directory_tree(holder);
     std::fs::create_dir_all(holder).map_err(|error| GitError::Refused { doing: "making room for the revision",
             message: error.to_string() })?;
-    let mut command = Command::new("git");
-    configure_hardened_git(&mut command);
-    let setting = ask(&resolved.repository, &["config", "--bool", "core.symlinks"])?.unwrap_or_else(|| "true".to_owned());
-    command.arg("-c").arg(format!("core.symlinks={setting}"));
-    let outcome = command.args(["-C", &resolved.repository, "worktree", "add", "--detach", "--force", "--quiet", &path,
-            &resolved.commit]).output().map_err(GitError::NotInstalled)?;
+    let setting = read_git_config(&resolved.repository, &["--bool", "core.symlinks"]).unwrap_or_else(|| "true".to_owned());
+    let outcome = build_hardened_git(&resolved.repository).arg("-c").arg(format!("core.symlinks={setting}"))
+            .args(["worktree", "add", "--detach", "--force", "--quiet", &path, &resolved.commit])
+            .output().map_err(GitError::NotInstalled)?;
     if !outcome.status.success() {
         let _ = remove_directory_tree(holder);
         return Err(GitError::Refused { doing: "writing out the revision",
@@ -385,7 +386,7 @@ pub fn remove_leftover_checkouts(repository: &str) {
             .map(|spelling| fold_for_comparison(&spelling.to_string_lossy()).trim_start_matches("//?/").to_owned())
             .collect::<Vec<_>>();
     let is_a_leftover = |name: &str| is_a_holder_of_a_checkout(name) && !name.ends_with(&ours);
-    if let Ok(listed) = Command::new("git").args(["-C", repository, "worktree", "list", "--porcelain"]).output() {
+    if let Ok(listed) = build_hardened_git(repository).args(["worktree", "list", "--porcelain"]).output() {
         for line in String::from_utf8_lossy(&listed.stdout).lines() {
             let Some(path) = line.strip_prefix("worktree ") else { continue };
             let Some(holder) = Path::new(path).parent() else { continue };
@@ -396,13 +397,34 @@ pub fn remove_leftover_checkouts(repository: &str) {
             }
         }
     }
-    let _ = Command::new("git").args(["-C", repository, "worktree", "prune"]).output();
+    let _ = build_hardened_git(repository).args(["worktree", "prune"]).output();
     remove_leftover_holders(&temp, CHECKOUT_PREFIX, &ours);
 }
 
 pub(crate) fn remove_directory_tree(path: &Path) -> std::io::Result<()> {
     clear_readonly_recursively(path);
     std::fs::remove_dir_all(path)
+}
+
+// Git 2.44 and later fetch no object the repository lacks while this command runs
+pub(crate) fn build_git_read(repository: &str) -> Command {
+    let mut command = build_hardened_git(repository);
+    command.env("GIT_NO_LAZY_FETCH", "1");
+    command
+}
+
+pub(crate) fn build_hardened_git(repository: &str) -> Command {
+    let mut command = Command::new("git");
+    configure_hardened_git(&mut command);
+    command.arg("-C").arg(repository);
+    command
+}
+
+// Reading a setting runs no program. The hardened settings would replace 'core.symlinks' with their own.
+pub(crate) fn read_git_config(repository: &str, arguments: &[&str]) -> Option<String> {
+    let outcome = Command::new("git").env("GIT_TERMINAL_PROMPT", "0").arg("-C").arg(repository).arg("config")
+            .args(arguments).output().ok()?;
+    outcome.status.success().then(|| String::from_utf8_lossy(&outcome.stdout).trim().to_owned())
 }
 
 fn clear_readonly_recursively(path: &Path) {
@@ -474,7 +496,7 @@ fn ensure_remote_repository(url: &str, repo_name: &str) -> Result<String, GitErr
 fn fetch_revision_into_remote(repo_dir: &str, url: &str, revision: Option<&str>) -> Result<ResolvedRevision, GitError> {
     let asked = revision.unwrap_or("HEAD");
     let display_repo = strip_dot_git(&strip_url_credentials(url)).to_owned();
-    let primary = run_remote_git(repo_dir, &["fetch", "--depth", "1", "--quiet", "--no-tags", "origin", asked])?;
+    let primary = run_remote_git(repo_dir, &["fetch", "--depth", "1", "--quiet", "--no-tags", "--", "origin", asked])?;
     if primary.status.success()
             && let Some(resolved) = pin_fetched_commit(repo_dir, "FETCH_HEAD^{commit}", asked)? {
         if asked == "HEAD" {
@@ -513,8 +535,13 @@ fn fetch_revision_into_remote(repo_dir: &str, url: &str, revision: Option<&str>)
     Err(GitError::Refused { doing: "fetching the remote repository", message })
 }
 
+// 'git show' would read the commit's tree, which a clone made without trees lacks. A name that starts
+// with a dash is no revision, and git would take it for an option.
 fn resolve_commit_and_date(repository: &str, object: &str, revision: &str) -> Result<Option<ResolvedRevision>, GitError> {
-    let Some(answer) = ask(repository, &["show", "-s", "--format=%H%n%cI", object])? else {
+    if object.starts_with('-') {
+        return Ok(None);
+    }
+    let Some(answer) = ask(repository, &["log", "-1", "--format=%H%n%cI", object, "--"])? else {
         return Ok(None);
     };
     let (commit, taken_at) = answer.split_once('\n').unwrap_or((&answer, ""));
@@ -548,12 +575,10 @@ fn build_remote_spec(prefix: &str, separator: &str, path_part: &str, full_raw: &
 }
 
 fn run_remote_git(repo_dir: &str, arguments: &[&str]) -> Result<std::process::Output, GitError> {
-    let mut command = Command::new("git");
-    configure_hardened_git(&mut command);
-    command.arg("-C").arg(repo_dir).args(arguments).output().map_err(GitError::NotInstalled)
+    build_hardened_git(repo_dir).args(arguments).output().map_err(GitError::NotInstalled)
 }
 
-pub(crate) fn configure_hardened_git(command: &mut Command) {
+fn configure_hardened_git(command: &mut Command) {
     command.env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "never")
             .env("GIT_LFS_SKIP_SMUDGE", "1");
@@ -608,7 +633,7 @@ fn hash_to_twelve_hex(text: &str) -> String {
 }
 
 fn remove_worktree(repository: &str, path: &str) {
-    let _ = Command::new("git").args(["-C", repository, "worktree", "remove", "--force", "--force", path]).output();
+    let _ = build_hardened_git(repository).args(["worktree", "remove", "--force", "--force", path]).output();
     if let Some(holder) = Path::new(path).parent() {
         let _ = remove_directory_tree(holder);
     }
@@ -638,8 +663,7 @@ fn is_a_holder_with_prefix(name: &str, prefix: &str) -> bool {
 // None when git ran and answered no, which every caller turns into its own words; an error only
 // when git could not be run at all.
 fn ask(at: &str, arguments: &[&str]) -> Result<Option<String>, GitError> {
-    let outcome = Command::new("git").arg("-C").arg(at).args(arguments).output()
-            .map_err(GitError::NotInstalled)?;
+    let outcome = build_git_read(at).args(arguments).output().map_err(GitError::NotInstalled)?;
     if !outcome.status.success() {
         return Ok(None);
     }
@@ -650,6 +674,7 @@ fn ask(at: &str, arguments: &[&str]) -> Result<Option<String>, GitError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::run_git;
 
     // Anchored on the manifest and never on a bare relative path: cargo runs these from the package
     // root, which is one directory below the repository.
@@ -742,6 +767,41 @@ mod tests {
 
         assert!(matches!(resolve_revision(&root, "no-such-branch-anywhere"),
                 Err(GitError::NoSuchRevision { .. })));
+    }
+
+    // The ssh helper makes a fetch that starts run the repository's ssh command here, with no network
+    #[test]
+    fn resolving_a_revision_runs_no_program_of_the_repository_fetches_nothing_and_passes_git_no_option() {
+        let _guard = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let repo = create_test_repository("mezura-hostile-configuration-test");
+        let root = normalise_separators(&repo.to_string_lossy()).into_owned();
+        let _ssh_guard = crate::test_support::install_local_ssh_helper();
+        let (verified, fetched, written) = (format!("{root}/.git/verified"), format!("{root}/.git/fetched"), format!("{root}/.git/written"));
+        let tree = run_git(&repo, &["rev-parse", "HEAD^{tree}"]);
+        std::fs::write(repo.join(".git/signed.txt"), format!("tree {tree}\nauthor t <t@t> 0 +0000\ncommitter t <t@t> 0 +0000\n\
+                gpgsig -----BEGIN PGP SIGNATURE-----\n \n fake\n -----END PGP SIGNATURE-----\n\nsigned\n")).unwrap();
+        let signed = run_git(&repo, &["hash-object", "-t", "commit", "-w", &format!("{root}/.git/signed.txt")]);
+        let verifier = repo.join(".git/verify.sh");
+        std::fs::write(&verifier, format!("#!/bin/sh\necho ran > '{verified}'\n")).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&verifier, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let (program, ssh_command) = (format!("{root}/.git/verify.sh"), format!("echo ran > '{fetched}' #"));
+        for (key, value) in [("log.showSignature", "true"), ("gpg.program", program.as_str()),
+                ("remote.origin.url", "ssh://local/nowhere"), ("remote.origin.promisor", "true"),
+                ("core.sshCommand", ssh_command.as_str())] {
+            run_git(&repo, &["config", key, value]);
+        }
+
+        assert_eq!(signed, resolve_revision(&root, &signed).unwrap().commit);
+        assert!(matches!(resolve_revision(&root, &"1".repeat(40)), Err(GitError::NoSuchRevision { .. })));
+        assert!(matches!(resolve_revision(&root, &format!("--output={written}")), Err(GitError::NoSuchRevision { .. })));
+        assert!(!Path::new(&verified).exists(), "the program the repository names for checking a signature was run");
+        assert!(!git_supports_no_lazy_fetch() || !Path::new(&fetched).exists(), "a commit the repository lacks was fetched");
+        assert!(!Path::new(&format!("{written}^{{commit}}")).exists(), "a revision was read as an option of git");
+        remove_directory_tree(&repo).unwrap();
     }
 
     #[test]
@@ -861,8 +921,7 @@ mod tests {
         std::fs::write(root.join("mezura/src/main.rs"), "fn main() {}\n").unwrap();
         std::fs::write(root.join("mezura-core/src/lib.rs"), "pub fn run() {}\n").unwrap();
         let git = |arguments: &[&str]| {
-            let outcome = Command::new("git").arg("-C").arg(&root).args(arguments).output().unwrap();
-            assert!(outcome.status.success(), "git {arguments:?}: {}", String::from_utf8_lossy(&outcome.stderr));
+            run_git(&root, arguments);
         };
         git(&["init", "-q"]);
         git(&["config", "uploadpack.allowFilter", "true"]);
@@ -880,5 +939,12 @@ mod tests {
         git(&["add", "."]);
         git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--no-verify", "-q", "-m", "c2"]);
         root
+    }
+
+    fn git_supports_no_lazy_fetch() -> bool {
+        let version = run_git(Path::new("."), &["version"]);
+        let mut numbers = version.split_whitespace().nth(2).unwrap_or_default().split('.')
+                .map(|number| number.parse::<u32>().unwrap_or(0));
+        (numbers.next().unwrap_or(0), numbers.next().unwrap_or(0)) >= (2, 44)
     }
 }

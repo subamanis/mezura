@@ -8,7 +8,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use mezura_core::MountedTree;
 
-use super::git::{GitError, ResolvedRevision};
+use super::git::{GitError, ResolvedRevision, build_git_read, build_hardened_git, read_git_config};
 use super::paths::fold_ascii_case;
 
 const LINK_MODE : &str = "120000";
@@ -42,7 +42,7 @@ impl MountedRevision {
     pub fn read_file(&self, path: &str) -> Option<Vec<u8>> {
         let inside = super::sources::replace_root_prefix(path, &self.path, "")?;
         let object = format!("{}:{}", self.resolved.commit, inside.trim_start_matches('/'));
-        let outcome = start_git(&self.resolved.repository).args(["cat-file", "blob", &object]).output().ok()?;
+        let outcome = build_git_read(&self.resolved.repository).args(["cat-file", "blob", &object]).output().ok()?;
         outcome.status.success().then_some(outcome.stdout)
     }
 }
@@ -58,11 +58,12 @@ pub enum TargetInRevision {
 // The listing names every file of the revision, and a file's size is learned when it is read
 pub fn mount_revision(resolved: &ResolvedRevision) -> Result<MountedRevision, GitError> {
     let (repository, remote) = (resolved.repository.as_str(), super::git::is_remote_temp_repository(&resolved.repository));
-    let listing = read_output_of(start_git(repository).args(["ls-tree", "-r", "-z", "--full-tree", &resolved.commit]),
+    fetch_missing_objects(resolved)?;
+    let listing = read_output_of(build_git_read(repository).args(["ls-tree", "-r", "-z", "--full-tree", &resolved.commit]),
             "listing the files of the revision")?;
     // A remote has no working tree for its links to agree with
-    let links_are_files = !remote && read_configuration(repository, &["--bool", "core.symlinks"])
-            .is_some_and(|setting| setting.trim() == "false");
+    let links_are_files = !remote && read_git_config(repository, &["--bool", "core.symlinks"])
+            .is_some_and(|setting| setting == "false");
 
     let mut files = Vec::new();
     let mut ids = Vec::new();
@@ -81,7 +82,6 @@ pub fn mount_revision(resolved: &ResolvedRevision) -> Result<MountedRevision, Gi
             }
         }
     }
-    fetch_missing_blobs(resolved)?;
 
     let path = super::git::find_place_for_revision(resolved);
     let blobs = Arc::new(BlobReader { repository: repository.to_owned(), ids, pool: Mutex::new(Pool::default()),
@@ -90,55 +90,41 @@ pub fn mount_revision(resolved: &ResolvedRevision) -> Result<MountedRevision, Gi
     Ok(MountedRevision { path, resolved: resolved.clone(), tree: Arc::new(tree), submodules })
 }
 
-// A blobless clone fetches each blob by itself the moment it is read, so the ones the revision
-// lacks are fetched together first. The fetch is the one git starts for a missing blob, with no
-// commit offered to the remote, or the remote takes the blobs for known and sends none. A clone
-// made by a git before 2.24 names its remote in 'extensions.partialclone' only.
-fn fetch_missing_blobs(resolved: &ResolvedRevision) -> Result<(), GitError> {
+// No read fetches an object, so what a partial clone lacks of the revision is fetched here first. A
+// clone without trees learns which blobs it lacks once the trees are in, hence the rounds. The fetch
+// offers the remote no commit, or the remote takes the objects for known and sends none. A clone made
+// by a git before 2.24 names its remote in 'extensions.partialclone' only.
+fn fetch_missing_objects(resolved: &ResolvedRevision) -> Result<(), GitError> {
     let repository = resolved.repository.as_str();
-    let promisors = read_configuration(repository, &["--get-regexp", r"^remote\..*\.promisor$"]).unwrap_or_default();
+    let promisors = read_git_config(repository, &["--get-regexp", r"^remote\..*\.promisor$"]).unwrap_or_default();
     let Some(promisor) = promisors.lines().filter_map(|line| line.split_once(' '))
             .find(|(_, value)| value.trim().eq_ignore_ascii_case("true"))
             .and_then(|(key, _)| Some(key.strip_prefix("remote.")?.strip_suffix(".promisor")?.to_owned()))
-            .or_else(|| read_configuration(repository, &["--get", "extensions.partialclone"])
-                    .map(|name| name.trim().to_owned()).filter(|name| !name.is_empty())) else {
+            .or_else(|| read_git_config(repository, &["--get", "extensions.partialclone"]).filter(|name| !name.is_empty())) else {
         return Ok(());
     };
-    let objects = read_output_of(start_git(repository).args(["rev-list", "--objects", "--no-walk", "--missing=print",
-            &resolved.commit]), "listing the objects the revision lacks")?;
-    let missing = String::from_utf8_lossy(&objects).lines().filter_map(|line| line.strip_prefix('?'))
-            .map(|id| format!("{id}\n")).collect::<String>();
-    if missing.is_empty() {
-        return Ok(());
+    let mut asked_for = String::new();
+    loop {
+        let objects = read_output_of(build_git_read(repository).args(["rev-list", "--objects", "--no-walk", "--missing=print",
+                &resolved.commit]), "listing the objects the revision lacks")?;
+        let missing = String::from_utf8_lossy(&objects).lines().filter_map(|line| line.strip_prefix('?'))
+                .map(|id| format!("{id}\n")).collect::<String>();
+        if missing.is_empty() || missing == asked_for {
+            return Ok(());
+        }
+        let mut fetch = build_hardened_git(repository).args(["-c", "fetch.negotiationAlgorithm=noop", "fetch", "--no-tags",
+                "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none", "--stdin", "--", &promisor])
+                .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(GitError::NotInstalled)?;
+        if let Some(mut input) = fetch.stdin.take() {
+            let _ = input.write_all(missing.as_bytes());
+        }
+        let outcome = fetch.wait_with_output().map_err(GitError::NotInstalled)?;
+        if !outcome.status.success() {
+            return Err(GitError::Refused { doing: "fetching the files of the revision",
+                    message: String::from_utf8_lossy(&outcome.stderr).trim().to_owned() });
+        }
+        asked_for = missing;
     }
-    let doing = "fetching the files of the revision";
-    let mut fetch = start_git(repository).args(["-c", "fetch.negotiationAlgorithm=noop", "fetch", "--no-tags",
-            "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none", "--stdin", "--", &promisor])
-            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(GitError::NotInstalled)?;
-    if let Some(mut input) = fetch.stdin.take() {
-        let _ = input.write_all(missing.as_bytes());
-    }
-    let outcome = fetch.wait_with_output().map_err(GitError::NotInstalled)?;
-    match outcome.status.success() {
-        true => Ok(()),
-        false => Err(GitError::Refused { doing, message: String::from_utf8_lossy(&outcome.stderr).trim().to_owned() })
-    }
-}
-
-// Every command here can fetch a missing blob, and a fetch runs what the repository's configuration
-// names, so each one runs under the settings a remote repository is fetched with
-fn start_git(repository: &str) -> Command {
-    let mut command = Command::new("git");
-    super::git::configure_hardened_git(&mut command);
-    command.arg("-C").arg(repository);
-    command
-}
-
-// Reading a setting runs no program. The hardened settings would replace 'core.symlinks' with their own.
-fn read_configuration(repository: &str, arguments: &[&str]) -> Option<String> {
-    let outcome = Command::new("git").env("GIT_TERMINAL_PROMPT", "0").arg("-C").arg(repository).arg("config")
-            .args(arguments).output().ok()?;
-    outcome.status.success().then(|| String::from_utf8_lossy(&outcome.stdout).into_owned())
 }
 
 fn read_output_of(command: &mut Command, doing: &'static str) -> Result<Vec<u8>, GitError> {
@@ -212,7 +198,7 @@ struct CatFile {
 
 impl CatFile {
     fn start(repository: &str) -> std::io::Result<CatFile> {
-        let mut child = start_git(repository).args(["cat-file", "--batch"])
+        let mut child = build_git_read(repository).args(["cat-file", "--batch"])
                 .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
         let (Some(input), Some(output)) = (child.stdin.take(), child.stdout.take()) else {
             let _ = child.kill();
@@ -258,9 +244,11 @@ mod tests {
     use mezura_core::{EngineConfig, RepositoryCheckout, RunResult, Stats, TestCode};
 
     use crate::config_manager::{ArgParsingError, Configuration};
-    use crate::git::{GIT_TEST_LOCK, checkout, remove_directory_tree, resolve_revision};
+    use crate::git::{GitError, checkout, remove_directory_tree, resolve_revision};
+    use crate::git::GIT_TEST_LOCK;
     use crate::paths::normalise_separators;
     use crate::paths::test_paths::CORE_LANGUAGES_DIR;
+    use crate::test_support::run_git;
 
     #[test]
     fn ignore_files_inside_and_a_test_tools_file_above_the_repository_count_as_in_a_worktree() {
@@ -366,37 +354,40 @@ mod tests {
         remove_directory_tree(&holder).unwrap();
     }
 
-    // Over the transport the tests of a remote use, since the settings every command of a revision
-    // runs under refuse a file transport
     #[test]
-    fn a_blobless_clone_fetches_the_blobs_it_lacks_at_once_and_counts_as_a_worktree() {
+    fn a_partial_clone_fetches_what_the_revision_lacks_before_the_first_read_and_counts_as_a_worktree() {
         let _guard = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let holder = create_fresh_folder("mezura-mounted-blobless");
-        let origin = holder.join("origin");
-        write(&origin, &[("src/a.rs", "fn a() {}\n"), ("src/b.rs", "fn b() {}\nfn c() {}\n")]);
-        create_repository(&origin);
-        run_git(&origin, &["config", "uploadpack.allowFilter", "true"]);
-        run_git(&origin, &["config", "uploadpack.allowAnySHA1InWant", "true"]);
-        commit_everything(&origin, "c1");
-        write(&origin, &[("src/a.rs", "fn a() {}\nfn d() {}\nfn e() {}\n")]);
-        commit_everything(&origin, "c2");
+        let holder = create_fresh_folder("mezura-mounted-partial-clone");
+        let origin = create_origin(&holder);
         let _ssh = crate::test_support::install_local_ssh_helper();
-        let helper = crate::git::TEST_GIT_SSH.lock().unwrap().clone().unwrap();
-        let url = format!("ssh://local/{}", normalise_separators(&origin.to_string_lossy()));
-        let cloned = Command::new("git").env("GIT_SSH", helper).arg("-C").arg(&holder)
-                .args(["clone", "-q", "--filter=blob:none", &url, "clone"]).output().unwrap();
-        assert!(cloned.status.success(), "{}", String::from_utf8_lossy(&cloned.stderr));
-        let clone = holder.join("clone");
-        run_git(&clone, &["config", "core.autocrlf", "false"]);
+        for filter in ["blob:none", "tree:0"] {
+            let clone = clone_partially(&origin, &holder, filter);
+            let resolved = resolve_revision(&normalise_separators(&clone.to_string_lossy()), "HEAD~1").unwrap();
+            let count_missing = || run_git(&clone, &["rev-list", "--objects", "--no-walk", "--missing=print", &resolved.commit])
+                    .lines().filter(|line| line.starts_with('?')).count();
+            assert_ne!(0, count_missing(), "the clone made with {filter} lacked nothing of the revision");
+            drop(super::mount_revision(&resolved).unwrap());
+            assert_eq!(0, count_missing(), "what the revision lacked with {filter} was not fetched before the first read");
+
+            assert_mounted_counts_as_a_worktree(&clone, "HEAD~1", &[""]);
+        }
+        remove_directory_tree(&holder).unwrap();
+    }
+
+    #[test]
+    fn the_fetch_of_what_a_revision_lacks_refuses_a_transport_that_runs_a_program() {
+        let _guard = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let holder = create_fresh_folder("mezura-mounted-hostile-transport");
+        let origin = create_origin(&holder);
+        let _ssh = crate::test_support::install_local_ssh_helper();
+        let clone = clone_partially(&origin, &holder, "blob:none");
+        let ran = normalise_separators(&holder.join("ran").to_string_lossy()).into_owned();
+        run_git(&clone, &["config", "remote.origin.url", &format!("ext::sh -c echo>'{}'", ran.replace('%', "%%").replace(' ', "% "))]);
+        run_git(&clone, &["config", "protocol.ext.allow", "always"]);
 
         let resolved = resolve_revision(&normalise_separators(&clone.to_string_lossy()), "HEAD~1").unwrap();
-        let count_missing = || run_git(&clone, &["rev-list", "--objects", "--no-walk", "--missing=print", &resolved.commit])
-                .lines().filter(|line| line.starts_with('?')).count();
-        assert_ne!(0, count_missing(), "the clone lacked no blob of the revision");
-        drop(super::mount_revision(&resolved).unwrap());
-        assert_eq!(0, count_missing(), "the blobs the revision lacked were not fetched before the first read");
-
-        assert_mounted_counts_as_a_worktree(&clone, "HEAD~1", &[""]);
+        assert!(matches!(super::mount_revision(&resolved), Err(GitError::Refused { .. })));
+        assert!(!Path::new(&ran).exists(), "the program the repository names as its transport was run");
         remove_directory_tree(&holder).unwrap();
     }
 
@@ -513,9 +504,29 @@ mod tests {
         run_git(folder, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--no-verify", "-q", "-m", message]);
     }
 
-    fn run_git(at: &Path, arguments: &[&str]) -> String {
-        let outcome = Command::new("git").arg("-C").arg(at).args(arguments).output().unwrap();
-        assert!(outcome.status.success(), "git {arguments:?}: {}", String::from_utf8_lossy(&outcome.stderr));
-        String::from_utf8_lossy(&outcome.stdout).trim().to_owned()
+    fn create_origin(holder: &Path) -> PathBuf {
+        let origin = holder.join("origin");
+        write(&origin, &[("src/a.rs", "fn a() {}\n"), ("src/b.rs", "fn b() {}\nfn c() {}\n")]);
+        create_repository(&origin);
+        run_git(&origin, &["config", "uploadpack.allowFilter", "true"]);
+        run_git(&origin, &["config", "uploadpack.allowAnySHA1InWant", "true"]);
+        commit_everything(&origin, "c1");
+        write(&origin, &[("src/a.rs", "fn a() {}\nfn d() {}\nfn e() {}\n")]);
+        commit_everything(&origin, "c2");
+        origin
+    }
+
+    // Over the transport the tests of a remote use, since the settings every command of a revision
+    // runs under refuse a file transport
+    fn clone_partially(origin: &Path, holder: &Path, filter: &str) -> PathBuf {
+        let helper = crate::git::TEST_GIT_SSH.lock().unwrap().clone().unwrap();
+        let url = format!("ssh://local/{}", normalise_separators(&origin.to_string_lossy()));
+        let name = filter.replace(':', "-");
+        let cloned = Command::new("git").env("GIT_SSH", helper).arg("-C").arg(holder)
+                .args(["clone", "-q", &format!("--filter={filter}"), &url, &name]).output().unwrap();
+        assert!(cloned.status.success(), "{}", String::from_utf8_lossy(&cloned.stderr));
+        let clone = holder.join(name);
+        run_git(&clone, &["config", "core.autocrlf", "false"]);
+        clone
     }
 }
