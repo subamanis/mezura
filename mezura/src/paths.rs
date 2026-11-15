@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use directories::ProjectDirs;
+use mezura_core::MountedTree;
 pub use mezura_core::normalise_separators;
 
 pub const APP_NAME : &str = "mezura";
@@ -108,8 +109,10 @@ impl LocalDir {
 // holding every target and climbs towards the root, so the nearest folder wins and a project inside
 // another one shadows it. An empty list is a run that named no targets and starts at the working
 // directory.
-pub fn find_local_dir_stopped_at(target_paths: &[String], stop_at: Option<&Path>) -> Option<LocalDir> {
-    search_upwards_from(&find_common_ancestor(target_paths)?, stop_at)
+pub fn find_local_dir_stopped_at(target_paths: &[String], stop_at: Option<&Path>, revision: Option<&MountedTree>)
+-> Option<LocalDir>
+{
+    search_upwards_from(&find_common_ancestor(target_paths, revision)?, stop_at, revision)
 }
 
 pub fn is_unquoted_glob_pattern(path: &str) -> bool {
@@ -118,7 +121,7 @@ pub fn is_unquoted_glob_pattern(path: &str) -> bool {
 
 // Where a folder is created when one was asked for and the search above found none
 pub fn choose_place_for_a_local_dir(target_paths: &[String]) -> Option<LocalDir> {
-    let directory = find_common_ancestor(target_paths)?;
+    let directory = find_common_ancestor(target_paths, None)?;
     may_be_searched(&directory).then(|| build_local_dir_at(&directory))
 }
 
@@ -176,7 +179,7 @@ fn build_data_dir_path(given: &str) -> Option<String> {
     Some(if named.ends_with('/') {named} else {named + "/"})
 }
 
-fn search_upwards_from(start: &Path, stop_at: Option<&Path>) -> Option<LocalDir> {
+fn search_upwards_from(start: &Path, stop_at: Option<&Path>, revision: Option<&MountedTree>) -> Option<LocalDir> {
     let stop = stop_at.map(|path| fold_for_comparison(
             normalise_separators(&path.to_string_lossy()).trim_end_matches('/')).into_owned());
     let mut directory = start;
@@ -188,21 +191,22 @@ fn search_upwards_from(start: &Path, stop_at: Option<&Path>) -> Option<LocalDir>
                 normalise_separators(&directory.to_string_lossy()).trim_end_matches('/')), stop) {
             return None;
         }
-        if directory.join(LOCAL_DIR_NAME).is_dir() {
+        let local_dir = directory.join(LOCAL_DIR_NAME);
+        if local_dir.is_dir() || revision.is_some_and(|tree| tree.holds(&local_dir)) {
             return Some(build_local_dir_at(directory));
         }
         directory = directory.parent()?;
     }
 }
 
-fn find_common_ancestor(target_paths: &[String]) -> Option<PathBuf> {
+fn find_common_ancestor(target_paths: &[String], revision: Option<&MountedTree>) -> Option<PathBuf> {
     let Some((first, rest)) = target_paths.split_first() else {
         return std::env::current_dir().ok();
     };
 
-    let mut ancestor = find_anchor_of(first)?;
+    let mut ancestor = find_anchor_of(first, revision)?;
     for path in rest {
-        ancestor = find_shared_prefix(&ancestor, &find_anchor_of(path)?)?;
+        ancestor = find_shared_prefix(&ancestor, &find_anchor_of(path, revision)?)?;
     }
 
     Some(ancestor)
@@ -210,10 +214,12 @@ fn find_common_ancestor(target_paths: &[String]) -> Option<PathBuf> {
 
 // The directory a target is searched from: itself when it names one, its folder when it names a
 // file, and for a pattern the last directory written before the first wildcard, since everything
-// 'D:/dev/*' can match sits inside 'D:/dev'.
-fn find_anchor_of(path: &str) -> Option<PathBuf> {
+// '/dev/*' can match sits inside '/dev'.
+// A tree is asked only whether it holds a path. A file of it searched from holds no '.mezura', so the
+// climb finds what it would from the folder.
+fn find_anchor_of(path: &str, revision: Option<&MountedTree>) -> Option<PathBuf> {
     let target = Path::new(path);
-    if target.is_dir() {
+    if target.is_dir() || revision.is_some_and(|tree| tree.holds(target)) {
         return Some(target.to_path_buf());
     }
     if target.is_file() {
@@ -273,7 +279,7 @@ mod tests {
     use super::*;
 
     fn find_local_dir(target_paths: &[String]) -> Option<LocalDir> {
-        find_local_dir_stopped_at(target_paths, None)
+        find_local_dir_stopped_at(target_paths, None, None)
     }
 
     // One tree per test, cleared on the way in: a run that died before its cleanup would otherwise

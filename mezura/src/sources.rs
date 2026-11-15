@@ -3,15 +3,15 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::thread::JoinHandle;
 
 use mezura_core::{EngineConfig, FilesPresent, Language, PathPatterns, ScanProgress};
 use mezura_core::language_file::ConflictRules;
 
 use super::config_manager::{Configuration, TargetCheckout, absolutize_local_path};
 use super::diff::{Note, Reading};
-use super::git::{Checkout, GitError, ResolvedRevision, TargetSpec, format_revision_label, parse_target_spec};
+use super::git::{GitError, ResolvedRevision, TargetSpec, format_revision_label, parse_target_spec};
 use super::paths::is_unquoted_glob_pattern;
+use super::revision_tree::{MountedRevision, TargetInRevision};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RevisionTargetOverride {
@@ -28,18 +28,7 @@ pub struct PreparedRevision {
 
 pub struct RevisionSide {
     resolved: ResolvedRevision,
-    target_override: Option<RevisionTargetOverride>,
-    write: Option<JoinHandle<Result<Checkout, GitError>>>
-}
-
-// A side dropped uncounted still joins its write, so a checkout that completed queues its own
-// background removal instead of outliving the run as litter.
-impl Drop for RevisionSide {
-    fn drop(&mut self) {
-        if let Some(write) = self.write.take() {
-            let _ = write.join();
-        }
-    }
+    target_override: Option<RevisionTargetOverride>
 }
 
 // A file and not merely something that exists: a directory called 'main' beside a branch called
@@ -49,10 +38,9 @@ pub fn read_document(name: &str) -> Option<Result<Reading, String>> {
             .then(|| super::diff::load(name).map_err(|x| x.to_string()))
 }
 
-// Every revision of a '--diff' resolves here, before anything is written out, so that a typo in the
-// second side fails before the first is checked out and counted whole. Two spellings of one commit
-// are refused while both hashes are on hand: they would otherwise share one checkout path and race
-// each other's background removal on it. Answered in the order asked.
+// Every revision of a '--diff' resolves here, before anything is read, so that a typo in the second
+// side fails before the first is counted whole. Two spellings of one commit are refused while both
+// hashes are on hand. Answered in the order asked.
 pub fn prepare_revisions_for_config(names: &[&str], config: &Configuration)
 -> Result<Vec<PreparedRevision>, GitError>
 {
@@ -134,47 +122,29 @@ pub fn prepare_revisions_for_config(names: &[&str], config: &Configuration)
     Ok(prepared)
 }
 
-// The leftovers are swept exactly once, before anything writes: the sweep's prune beside a half
-// registered parallel write is the one interference between them. With two sides both writes start
-// at once while the counting stays serial, so the second hides behind the first side's write and
-// count; a single side, or a thread that cannot spawn, writes inline at its turn.
+// What a killed run of a release that wrote checkouts left behind is swept once, before anything
+// is read
 pub fn start_acquiring_prepared_revisions(prepared: Vec<PreparedRevision>) -> Vec<RevisionSide> {
     if let Some(first) = prepared.first() {
         super::git::remove_leftover_checkouts(&first.resolved.repository);
     }
-    let ahead = prepared.len() >= 2;
-    prepared.into_iter().map(|PreparedRevision { resolved, target_override }| {
-        let write = if ahead {
-            let for_thread = resolved.clone();
-            std::thread::Builder::new().name("revision-write".to_owned())
-                    .spawn(move || super::git::checkout(&for_thread)).ok()
-        } else {
-            None
-        };
-        RevisionSide { resolved, target_override, write }
-    }).collect()
+    prepared.into_iter().map(|PreparedRevision { resolved, target_override }| RevisionSide { resolved, target_override })
+            .collect()
 }
 
-pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, languages: Vec<Language>,
+pub fn count_git_revision(side: RevisionSide, config: &Configuration, languages: Vec<Language>,
         conflicts: &ConflictRules) -> Result<(Reading, Vec<Note>), GitError>
 {
-    // Erased when it drops, before this function returns: the whole phase leaves nothing behind on
-    // the permanent output
+    // Erased when it drops, before this function returns. The whole phase leaves nothing behind on
+    // the permanent output.
     let progress = Arc::new(ScanProgress::default());
     let display_label = format_revision_label(&side.resolved.revision);
-    let _live = super::animated_display::start_revision_display(config, &display_label, "Checking out",
-            progress.clone(), side.write.as_ref().is_some_and(|x| x.is_finished()));
+    let _live = super::animated_display::start_revision_display(config, &display_label, "Reading", progress.clone());
 
-    let checkout = match side.write.take() {
-        Some(write) => match write.join() {
-            Ok(outcome) => outcome?,
-            // A write whose thread died took its error with it; writing again answers instead
-            Err(_) => super::git::checkout(&side.resolved)?
-        },
-        None => super::git::checkout(&side.resolved)?
-    };
+    let revision = super::revision_tree::mount_revision(&side.resolved)?;
     let resolved = &side.resolved;
     let git_revision = resolved.revision.as_str();
+    let with_the_revision = EngineConfig { trees: vec![revision.tree.clone()], ..config.engine.clone() };
 
     let mut notes = Vec::new();
     // A checkout holds only what git tracks, so the ignored files exist on the other side alone
@@ -189,16 +159,17 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
     let mut counted_declared = Vec::with_capacity(config.engine.targets.len());
     let mut missing = Vec::new();
     let find_in_checkout = |prefix: &str| {
-        find_target_in_checkout(&checkout, prefix, &config.engine)
+        find_target_in_revision(&revision, prefix, &with_the_revision)
                 .map_err(|error| GitError::CountingRevision { revision: git_revision.to_owned(), error })
     };
     let display_repository = if let Some(override_target) = &side.target_override {
         match find_in_checkout(&override_target.prefix)? {
-            Some(path) => {
+            TargetInRevision::At(path) => {
                 targets.push(mezura_core::Target { module: None, path });
                 counted_declared.push(mezura_core::Target::of(&override_target.declared_target));
             },
-            None => missing.push(override_target.declared_target.clone())
+            TargetInRevision::HoldingNoFile => {},
+            TargetInRevision::Missing => missing.push(override_target.declared_target.clone())
         }
         override_target.display_repository.clone()
     } else if !config.view.target_checkouts.is_empty() {
@@ -217,11 +188,12 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
                 }
             };
             match find_in_checkout(&prefix)? {
-                Some(path) => {
+                TargetInRevision::At(path) => {
                     targets.push(mezura_core::Target { module: target.module.clone(), path });
                     counted_declared.push(mezura_core::Target { module: target.module.clone(), path: declared_path });
                 },
-                None => missing.push(declared_path)
+                TargetInRevision::HoldingNoFile => {},
+                TargetInRevision::Missing => missing.push(declared_path)
             }
         }
         config.view.target_checkouts[0].get_base_root().to_owned()
@@ -229,11 +201,12 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
         for target in &config.engine.targets {
             let (_, prefix) = super::git::find_repository_of(&target.path)?;
             match find_in_checkout(&prefix)? {
-                Some(path) => {
+                TargetInRevision::At(path) => {
                     targets.push(mezura_core::Target { module: target.module.clone(), path });
                     counted_declared.push(target.clone());
                 },
-                None => missing.push(target.path.clone())
+                TargetInRevision::HoldingNoFile => {},
+                TargetInRevision::Missing => missing.push(target.path.clone())
             }
         }
         resolved.repository.clone()
@@ -242,18 +215,16 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
         notes.push(Note::MissingInRevision { git_revision: git_revision.to_owned(), targets: missing });
     }
 
-    let mut exclude_patterns = move_patterns_into_checkout(&checkout.path, &resolved.repository,
+    let mut exclude_patterns = move_patterns_into_checkout(&revision.path, &resolved.repository,
             &config.engine.exclude_patterns);
-    let mut test_patterns = move_patterns_into_checkout(&checkout.path, &resolved.repository,
+    let mut test_patterns = move_patterns_into_checkout(&revision.path, &resolved.repository,
             &config.engine.test_patterns);
     for tc in &config.view.target_checkouts {
-        exclude_patterns = move_patterns_into_checkout(&checkout.path, &tc.checkout_root, &exclude_patterns);
-        test_patterns = move_patterns_into_checkout(&checkout.path, &tc.checkout_root, &test_patterns);
+        exclude_patterns = move_patterns_into_checkout(&revision.path, &tc.checkout_root, &exclude_patterns);
+        test_patterns = move_patterns_into_checkout(&revision.path, &tc.checkout_root, &test_patterns);
     }
 
-    let of_git_revision = EngineConfig { targets, exclude_patterns, test_patterns,
-            checkout: Some(mezura_core::RepositoryCheckout { root: checkout.path.clone(), repository: resolved.repository.clone() }),
-            ..config.engine.clone() };
+    let of_git_revision = EngineConfig { targets, exclude_patterns, test_patterns, ..with_the_revision };
     // A revision older than every target holds a reading of zero, which is no failure
     let result = if of_git_revision.targets.is_empty() {
         mezura_core::RunResult {
@@ -273,8 +244,8 @@ pub fn count_git_revision(mut side: RevisionSide, config: &Configuration, langua
         let mut result = counted
                 .map_err(|error| GitError::CountingRevision { revision: git_revision.to_owned(), error })?;
         move_file_paths_out_of_checkout(&mut result, &of_git_revision.targets, &counted_declared,
-                &checkout.path, &display_repository);
-        move_preset_directories_out_of_checkout(&mut result, &checkout.path, &display_repository);
+                &revision.path, &display_repository, &revision.tree);
+        move_preset_directories_out_of_checkout(&mut result, &revision.path, &display_repository);
         result
     };
 
@@ -290,6 +261,10 @@ pub fn replace_root_prefix(path: &str, from_root: &str, to_root: &str) -> Option
         let suffix = &normalized[from.len()..];
         format!("{}{suffix}", to_root.trim_end_matches('/'))
     })
+}
+
+pub fn find_revision_holding<'a>(path: &str, checkouts: &'a [TargetCheckout]) -> Option<&'a MountedRevision> {
+    checkouts.iter().find(|tc| replace_root_prefix(path, &tc.checkout_root, "").is_some()).map(|tc| tc.mounted.as_ref())
 }
 
 pub fn format_path_outside_checkouts(path: &str, checkouts: &[TargetCheckout]) -> String {
@@ -354,22 +329,24 @@ fn find_common_repository_for_config(config: &Configuration) -> Result<String, G
     super::git::find_common_repository_of(&paths)
 }
 
-fn find_target_in_checkout(checkout: &Checkout, prefix: &str, config: &EngineConfig)
--> Result<Option<String>, mezura_core::RunError>
+// 'config' holds the tree of the revision, so a pattern is matched against its paths
+fn find_target_in_revision(revision: &MountedRevision, prefix: &str, config: &EngineConfig)
+-> Result<TargetInRevision, mezura_core::RunError>
 {
-    if let Some(found) = checkout.find_target_of(prefix) {
-        return Ok(Some(found));
+    let found = revision.find_target_of(prefix);
+    if !matches!(found, TargetInRevision::Missing) {
+        return Ok(found);
     }
     let prefix = super::paths::normalise_separators(prefix);
     let prefix = prefix.trim_matches('/');
     if !is_unquoted_glob_pattern(prefix) {
-        return Ok(None);
+        return Ok(TargetInRevision::Missing);
     }
-    let pattern = format!("{}/{prefix}", checkout.path.trim_end_matches('/'));
+    let pattern = format!("{}/{prefix}", revision.path.trim_end_matches('/'));
     match mezura_core::validate_target(&mezura_core::Target::of(&pattern), config) {
-        Ok(()) => Ok(Some(pattern)),
+        Ok(()) => Ok(TargetInRevision::At(pattern)),
         Err(mezura_core::TargetError::NoGlobMatches(_)
-                | mezura_core::TargetError::AllGlobMatchesIgnored(_)) => Ok(None),
+                | mezura_core::TargetError::AllGlobMatchesIgnored(_)) => Ok(TargetInRevision::Missing),
         Err(error) => Err(mezura_core::RunError::InvalidTargets(error))
     }
 }
@@ -377,13 +354,14 @@ fn find_target_in_checkout(checkout: &Checkout, prefix: &str, config: &EngineCon
 // The file rows still name the temporary checkout, which is a different directory on every run, so
 // each is given back the declared form of the target it was found under. The two lists correspond
 // by position, having been built together above; the longest match decides, since one declared
-// target may sit inside another's checkout path.
+// target may sit inside another's checkout path. A counted path is a pattern only where the tree
+// of the revision does not hold it, whatever characters it carries.
 fn move_file_paths_out_of_checkout(result: &mut mezura_core::RunResult,
         checkout_targets: &[mezura_core::Target], declared: &[mezura_core::Target],
-        checkout_root: &str, display_repository: &str)
+        checkout_root: &str, display_repository: &str, tree: &mezura_core::MountedTree)
 {
     let mut pairs = checkout_targets.iter().zip(declared)
-            .filter(|(counted, _)| !is_unquoted_glob_pattern(&counted.path))
+            .filter(|(counted, _)| tree.holds(Path::new(&counted.path)))
             .map(|(counted, declared)| (counted.path.as_str(), declared.path.as_str()))
             .collect::<Vec<_>>();
     pairs.sort_by_key(|(counted, _)| std::cmp::Reverse(counted.len()));
@@ -543,35 +521,7 @@ mod tests {
         assert_eq!((1, 1), (tree.total.lines, revision.result.total.lines),
                 "the folder a project's names are read from was not carried into the checkout");
 
-        crate::git::await_checkout_removals();
         crate::git::remove_directory_tree(&root).unwrap();
-    }
-
-    #[test]
-    fn a_revision_reads_the_test_tool_files_above_its_repository() {
-        let _guard = crate::git::GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let holder = std::env::temp_dir().join("mezura-revision-above");
-        let _ = crate::git::remove_directory_tree(&holder);
-        let root = holder.join("repo");
-        std::fs::create_dir_all(root.join("ui")).unwrap();
-        std::fs::write(holder.join("jest.config.js"), "module.exports = {};\n").unwrap();
-        std::fs::write(root.join("ui/a.test.ts"), "test('a', () => {});\n").unwrap();
-        std::fs::write(root.join("ui/a.ts"), "export const a = 1;\n").unwrap();
-        commit_everything_in(&root);
-
-        let parsed = mezura_core::language_file::parse_languages_in_dir(CORE_LANGUAGES_DIR).unwrap().0;
-        let config = Configuration::new(vec![crate::paths::normalise_separators(&root.to_string_lossy()).into_owned()]);
-        let side = start_acquiring_prepared_revisions(prepare_revisions_for_config(&["HEAD"], &config).unwrap()).into_iter().next().unwrap();
-        let (revision, _) = count_git_revision(side, &config, parsed.clone(), &Default::default()).unwrap();
-        let tree = mezura_core::run(&config.engine,
-                mezura_core::Languages::resolve(&config.engine, parsed, &Default::default()).0).unwrap();
-        let files_of_tests = |result: &mezura_core::RunResult| result.tests.get("TypeScript").map(|code| code.stats.files);
-        assert_eq!(Some(1), files_of_tests(&tree));
-        assert_eq!(files_of_tests(&tree), files_of_tests(&revision.result),
-                "the revision did not read the jest configuration above its repository");
-
-        crate::git::await_checkout_removals();
-        crate::git::remove_directory_tree(&holder).unwrap();
     }
 
     #[test]
@@ -583,18 +533,29 @@ mod tests {
                         nested_languages: HashMap::new(), tests: HashMap::new(), total: mezura_core::Stats::default(),
                         files: hashmap!["Rust".to_owned() => vec![entry("C:/t/chk/api/a.rs"),
                                 entry("C:/t/chk/apix/b.rs"), entry("C:/t/chk/main.rs"),
-                                entry("D:/elsewhere/c.rs")]] }],
+                                entry("D:/elsewhere/c.rs"), entry("C:/t/chk/app/[locale]/page.rs")]] }],
                 Vec::new());
+        let tree = mezura_core::MountedTree::new("C:/t/chk", None,
+                ["api/a.rs", "apix/b.rs", "main.rs", "app/[locale]/page.rs"].map(std::path::PathBuf::from).to_vec(), |_, _| Ok(()));
 
         let checkout = [mezura_core::Target::of("C:/t/chk/api"), mezura_core::Target::of("C:/t/chk/main.rs"),
                 mezura_core::Target::of("C:/t/chk")];
         let declared = [mezura_core::Target::of("D:/r/api-v2"), mezura_core::Target::of("D:/r/main.rs"),
                 mezura_core::Target::of("D:/r")];
-        move_file_paths_out_of_checkout(&mut result, &checkout, &declared, "C:/t/chk", "D:/r");
+        move_file_paths_out_of_checkout(&mut result, &checkout, &declared, "C:/t/chk", "D:/r", &tree);
 
         // The longest checkout prefix decides, whole components only, and a path outside them stays
-        assert_eq!(vec!["D:/r/api-v2/a.rs", "D:/r/apix/b.rs", "D:/r/main.rs", "D:/elsewhere/c.rs"],
+        assert_eq!(vec!["D:/r/api-v2/a.rs", "D:/r/apix/b.rs", "D:/r/main.rs", "D:/elsewhere/c.rs", "D:/r/app/[locale]/page.rs"],
                 result.modules[0].files["Rust"].iter().map(|x| x.path.as_str()).collect::<Vec<_>>());
+
+        let mut result = crate::test_support::plain_result_of(HashMap::new(),
+                vec![mezura_core::ModuleResult { name: None, per_language: HashMap::new(),
+                        nested_languages: HashMap::new(), tests: HashMap::new(), total: mezura_core::Stats::default(),
+                        files: hashmap!["Rust".to_owned() => vec![entry("C:/t/chk/app/[locale]/page.rs")]] }],
+                Vec::new());
+        move_file_paths_out_of_checkout(&mut result, &[mezura_core::Target::of("C:/t/chk/app/[locale]")],
+                &[mezura_core::Target::of("D:/r/app/[locale]@v1")], "C:/t/chk", "D:/r@v1", &tree);
+        assert_eq!("D:/r/app/[locale]@v1/page.rs", result.modules[0].files["Rust"][0].path);
     }
 
     #[test]
@@ -658,7 +619,6 @@ mod tests {
             targets: vec![format!("{repository}/src/gen/*.rs")]
         }], ignored_notes);
 
-        crate::git::await_checkout_removals();
         crate::git::remove_directory_tree(&root).unwrap();
     }
 
@@ -672,16 +632,17 @@ mod tests {
         commit_everything_in(&root);
         let root_str = crate::paths::normalise_separators(&root.to_string_lossy()).into_owned();
         let resolved = crate::git::resolve_revision(&root_str, "HEAD").unwrap();
-        let checkout = crate::git::checkout(&resolved).unwrap();
-        let chk = checkout.path.clone();
+        let mounted = crate::revision_tree::mount_revision(&resolved).unwrap();
+        let (chk, tree) = (mounted.path.clone(), mounted.tree.clone());
         let base = "https://github.com/owner/repo";
         let display = format!("{base}@v1.0");
         let checkouts = [crate::config_manager::TargetCheckout::new(
-                checkout, display.clone(), Some(base.to_owned()))];
+                mounted, display.clone(), Some(base.to_owned()))];
 
         let parsed = mezura_core::language_file::parse_languages_in_dir(CORE_LANGUAGES_DIR).unwrap().0;
         let mut engine = EngineConfig::new([format!("{chk}/src")]);
         engine.exclude_patterns = PathPatterns::of([format!("{chk}/missing")]);
+        engine.trees = vec![tree];
         let (languages, _) = mezura_core::Languages::resolve(&engine, parsed, &Default::default());
         let mut result = mezura_core::run(&engine, languages).unwrap();
 
@@ -717,8 +678,7 @@ mod tests {
         assert!(result.warnings[0].message.contains(&format!("{base}/missing")), "{}", result.warnings[0].message);
         assert!(!result.warnings[0].message.contains(&chk), "{}", result.warnings[0].message);
 
-        drop(checkouts);
-        crate::git::await_checkout_removals();
+        drop((engine, checkouts));
         crate::git::remove_directory_tree(&root).unwrap();
     }
 

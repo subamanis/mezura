@@ -3,7 +3,8 @@ use std::cell::OnceCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use mezura_core::{FileEntry, ForcedLanguages, Language, LanguageNames, Languages,
-        ModuleResult, PathPatterns, RunResult, Stats, UNNAMED_MODULE_NAME, is_a_path_pattern, is_on_disk, render};
+        ModuleResult, PathPatterns, RunResult, Stats, UNNAMED_MODULE_NAME, is_a_path_pattern, names_an_existing_place,
+        render};
 use mezura_core::language_file::ConflictRules;
 
 use super::config_manager::{ByFile, Configuration, Layout, SortCriterion};
@@ -743,7 +744,8 @@ fn adopt_settings_from(document: &Reading, config: &mut Configuration) -> Vec<No
         TESTS => config.engine.test_patterns.patterns.iter(),
         _ => [].iter()
     });
-    let naming_nothing = adopted_patterns.filter(|pattern| is_a_path_pattern(pattern) && !is_on_disk(pattern))
+    let naming_nothing = adopted_patterns.filter(|pattern| is_a_path_pattern(pattern)
+                    && !names_an_existing_place(pattern, &config.engine.trees))
             .map(|pattern| super::sources::format_pattern_outside_checkouts(pattern, &config.view.target_checkouts))
             .collect();
     let typed_patterns_unused = settings.contains(&HIDE_TESTS) && config.typed_explicitly.tests
@@ -931,8 +933,13 @@ fn holds_files_under(reading: &Reading, directory: &str,
         folders: &OnceCell<Option<HashSet<String>>>) -> bool
 {
     match &reading.source {
-        Source::Run => std::path::Path::new(
-                &super::sources::format_path_inside_checkouts(directory, checkouts)).exists(),
+        Source::Run => {
+            let inside = super::sources::format_path_inside_checkouts(directory, checkouts);
+            match super::sources::find_revision_holding(&inside, checkouts) {
+                Some(revision) => revision.tree.holds(std::path::Path::new(&inside)),
+                None => std::path::Path::new(&inside).exists()
+            }
+        },
         Source::GitRevision { commit, repository, display_repository, .. } =>
                 match find_path_below(directory, display_repository) {
             Some(inside) if !inside.is_empty() => folders.get_or_init(|| super::git::collect_folders_at(repository, commit))

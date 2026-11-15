@@ -83,7 +83,11 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     }
 
     let log_file_path = determine_log_file_path(config);
-    let existing_log_contents = log_file_path.as_ref().and_then(|path| super::log::extract_file_contents(path));
+    let existing_log_contents = log_file_path.as_ref().and_then(|path|
+            match super::sources::find_revision_holding(path, &config.view.target_checkouts) {
+        Some(revision) => revision.read_file(path).and_then(|bytes| String::from_utf8(bytes).ok()),
+        None => super::log::extract_file_contents(path)
+    });
     super::result_printer::format_and_print_results(result, &existing_log_contents, &datetime_now, config);
     print_test_preset_notes(result, &suggestions, config);
 

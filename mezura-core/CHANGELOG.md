@@ -9,6 +9,8 @@ Breaking:
   slice where there are none.
 - `EngineConfig` is no longer `UnwindSafe` or `RefUnwindSafe`, since a `MountedTree` holds a
   function of the caller's.
+- `is_on_disk` is `names_an_existing_place`, and it takes the mounted trees of the run, so a place
+  below the root of one is looked for in that tree.
 
 New:
 

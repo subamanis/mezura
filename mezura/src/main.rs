@@ -33,6 +33,7 @@ mod present;
 mod preset_hint;
 mod release;
 mod result_printer;
+mod revision_tree;
 mod sources;
 mod startup_timing;
 mod suggestions;
@@ -62,8 +63,7 @@ use crate::release::VERSION_ID;
 use crate::startup_timing::{Report, Step, measure, record, record_language_files, stamp};
 
 fn main() -> ExitCode {
-    // Dropped last of all: a '--diff' removes its temporary checkouts on background threads, and
-    // exiting before they finish would leave a half-deleted tree in the temp directory
+    // Dropped last of all, which removes the temporary repository a remote was fetched into
     let _removals = crate::animated_display::RemovalsGuard;
 
     // Dropped before the removals above, so the text is out before anything waits on a deletion.

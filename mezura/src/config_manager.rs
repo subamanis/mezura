@@ -4,17 +4,16 @@ use std::sync::Arc;
 use colored::{ColoredString, Colorize};
 #[cfg(test)]
 use colored::Color;
-use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, PathPatterns, RepositoryCheckout,
-        ScanSkip, Target, Threads, absolutize_path_pattern, is_a_path_pattern, split_negation,
-        validate_exclude_patterns, validate_test_patterns};
+use mezura_core::{CountingModel, EngineConfig, ForcedLanguages, LanguageNames, PathPatterns, ScanSkip, Target, Threads,
+        absolutize_path_pattern, is_a_path_pattern, split_negation, validate_exclude_patterns, validate_test_patterns};
 pub use mezura_core::SortCriterion;
 
 use super::badge::BadgeSpec;
 use super::config_files::{ConfigFileIssues, InvalidField};
-use super::git::Checkout;
 use super::message_printer::{self, Formatted, wrap_message};
 use super::paths::LocalDir;
 use super::release::VERSION_ID;
+use super::revision_tree::{MountedRevision, TargetInRevision};
 use super::suggestions;
 use super::test_presets::{ExpandedPatterns, can_name_a_preset, expand_presets, is_a_shipped_name, write_user_preset};
 use super::theme::Theme;
@@ -257,24 +256,24 @@ pub struct TargetCheckout {
     pub remote_url: Option<String>,
     pub commit: String,
     pub revision: String,
-    pub checkout: Arc<Checkout>
+    pub mounted: Arc<MountedRevision>
 }
 
 impl TargetCheckout {
-    pub fn new(checkout: Checkout, display_root: String, remote_url: Option<String>) -> Self {
+    pub fn new(mounted: MountedRevision, display_root: String, remote_url: Option<String>) -> Self {
         let base_root = match &remote_url {
             Some(url) => crate::git::strip_dot_git(&crate::git::strip_url_credentials(url)).to_owned(),
-            None => checkout.resolved.repository.clone()
+            None => mounted.resolved.repository.clone()
         };
         Self {
-            checkout_root: checkout.path.clone(),
+            checkout_root: mounted.path.clone(),
             display_root,
             base_root,
-            repository: checkout.resolved.repository.clone(),
+            repository: mounted.resolved.repository.clone(),
             remote_url,
-            commit: checkout.resolved.commit.clone(),
-            revision: checkout.resolved.revision.clone(),
-            checkout: Arc::new(checkout)
+            commit: mounted.resolved.commit.clone(),
+            revision: mounted.resolved.revision.clone(),
+            mounted: Arc::new(mounted)
         }
     }
 
@@ -1139,14 +1138,6 @@ impl ConfigurationBuilder {
         // behaviour cannot answer differently
         let engine_defaults = EngineConfig::default();
 
-        let checkout = match &self.target_checkouts[..] {
-            [single] => Some(RepositoryCheckout {
-                root: single.checkout_root.clone(),
-                repository: single.repository.clone()
-            }),
-            _ => None
-        };
-
         let mut config = Configuration {
             typed_explicitly: self.typed_explicitly,
             engine: EngineConfig {
@@ -1171,8 +1162,8 @@ impl ConfigurationBuilder {
                 detect_tests: !hidden.tests,
                 collect_files: self.by_file.is_some(),
                 test_patterns: self.test_patterns.clone().unwrap_or_default(),
-                trees: Vec::new(),
-                checkout
+                trees: self.target_checkouts.iter().map(|tc| tc.mounted.tree.clone()).collect(),
+                checkout: None
             },
             view: ViewConfig {
                 version: VERSION_ID,
@@ -1389,16 +1380,16 @@ fn create_config_builder_from_args_with_configs_in(args: &[String], config_dir: 
     // supplies: the folder belongs to the code this command names, and what its own settings then
     // say about targets is decided after it has been found.
     let typed_paths = config_builder.targets.iter().flatten().map(|target| target.path.clone()).collect::<Vec<_>>();
-    let stop_at = if config_builder.target_checkouts.len() == 1 {
-        Some(std::path::Path::new(&config_builder.target_checkouts[0].checkout_root))
-    } else {
-        None
+    let in_revision = match config_builder.target_checkouts.as_slice() {
+        [single] => Some(single),
+        _ => None
     };
     config_builder.local_dir = if no_local || config_builder.target_checkouts.len() > 1
             || (skip_working_dir_local && typed_paths.is_empty()) {
         None
     } else {
-        crate::paths::find_local_dir_stopped_at(&typed_paths, stop_at)
+        crate::paths::find_local_dir_stopped_at(&typed_paths,
+                in_revision.map(|tc| std::path::Path::new(&tc.checkout_root)), in_revision.map(|tc| tc.mounted.tree.as_ref()))
     };
     if let (Some(local), [tc]) = (&mut config_builder.local_dir, config_builder.target_checkouts.as_slice()) {
         local.in_checkout = true;
@@ -1851,7 +1842,16 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
 -> Result<bool, ArgParsingError>
 {
     let file_name = crate::paths::LOCAL_CONFIG_FILE_NAME.trim_end_matches(".txt");
-    let (mut local_config, issues) = match super::config_files::parse_config_file(Some(file_name), Some(local.get_dir_path())) {
+    let in_revision = config_builder.target_checkouts.first().filter(|_| local.in_checkout);
+    let tree_of_the_revision = in_revision.map(|tc| tc.mounted.tree.clone());
+    let parsed = match in_revision {
+        Some(tc) => match tc.mounted.read_file(&(local.get_dir_path() + crate::paths::LOCAL_CONFIG_FILE_NAME)) {
+            Some(bytes) => super::config_files::parse_config_from(Box::new(std::io::Cursor::new(bytes)), file_name),
+            None => return Ok(false)
+        },
+        None => super::config_files::parse_config_file(Some(file_name), Some(local.get_dir_path()))
+    };
+    let (mut local_config, issues) = match parsed {
         Ok(x) => x,
         Err(super::config_files::ConfigFileParseError::FileNotFound(_)) => return Ok(false),
         Err(super::config_files::ConfigFileParseError::UnreadableLine(_, line, cause)) =>
@@ -1871,7 +1871,7 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
     resolve_invalid_config_fields(config_builder, &changes_the_numbers, &label)?;
 
     local_config.targets = local_config.targets
-            .map(|declared| rebase_targets_on(&local.project_dir, &label, declared))
+            .map(|declared| rebase_targets_on(&local.project_dir, &label, declared, tree_of_the_revision.as_deref()))
             .filter(|targets| !targets.is_empty());
     local_config.exclude_patterns = local_config.exclude_patterns
             .map(|declared| rebase_patterns_on(&local.project_dir, &label, declared));
@@ -2051,9 +2051,11 @@ fn save_the_local_configuration(config_builder: &mut ConfigurationBuilder, typed
 // A relative target of a project's configuration names a place inside the project, wherever the
 // command happened to be typed from. Joined here, because the run resolves what is still relative
 // against the working directory.
-fn rebase_targets_on(project_dir: &str, config_name: &str, targets: Vec<Target>) -> Vec<Target> {
+fn rebase_targets_on(project_dir: &str, config_name: &str, targets: Vec<Target>, revision: Option<&mezura_core::MountedTree>)
+-> Vec<Target>
+{
     targets.into_iter().filter_map(|target| {
-        match rebase_contained_place(project_dir, &target.path, true) {
+        match rebase_contained_place(project_dir, &target.path, true, revision) {
             Some(path) => Some(Target { module: target.module, path }),
             None => {
                 super::warning_collector::emit(ProgramWarning::new(ProgramCode::ConfigValueIgnored,
@@ -2073,7 +2075,7 @@ fn rebase_patterns_on(project_dir: &str, config_name: &str, declared: PathPatter
                 && !place.split('/').next().unwrap_or(place).contains(':') {
             return Some(pattern);
         }
-        match rebase_contained_place(project_dir, place, false) {
+        match rebase_contained_place(project_dir, place, false, None) {
             Some(rebased) => Some(format!("{negation}{rebased}")),
             None => {
                 super::warning_collector::emit(ProgramWarning::new(ProgramCode::ConfigValueIgnored,
@@ -2087,7 +2089,9 @@ fn rebase_patterns_on(project_dir: &str, config_name: &str, declared: PathPatter
     PathPatterns { patterns, read_from: Some(project_dir.to_owned()), reports_unmatched_names: false }
 }
 
-fn rebase_contained_place(project_dir: &str, raw: &str, is_target: bool) -> Option<String> {
+fn rebase_contained_place(project_dir: &str, raw: &str, is_target: bool, revision: Option<&mezura_core::MountedTree>)
+-> Option<String>
+{
     let normalised = crate::paths::normalise_separators(raw);
     let trimmed = normalised.trim();
     if trimmed.is_empty() || trimmed.starts_with('/')
@@ -2120,7 +2124,11 @@ fn rebase_contained_place(project_dir: &str, raw: &str, is_target: bool) -> Opti
     } else {
         format!("{project_dir}/{inside}")
     };
-    if is_target && !std::path::Path::new(&joined).exists() && crate::git::is_checkout_target(trimmed) {
+    let exists = match revision {
+        Some(tree) => tree.holds(std::path::Path::new(&joined)),
+        None => std::path::Path::new(&joined).exists()
+    };
+    if is_target && !exists && crate::git::is_checkout_target(trimmed) {
         return None;
     }
 
@@ -2503,22 +2511,26 @@ fn materialize_checkout_targets(config_builder: &mut ConfigurationBuilder, hide_
                                 .map(|name| name.to_string_lossy().into_owned())
                                 .unwrap_or_else(|| repository.clone());
                         let label = format!("{repo_name}@{revision}");
-                        let live = crate::animated_display::start_checkout_display("Checking out", &label, hide_animation);
-                        let checkout = crate::git::checkout(&resolved);
+                        let live = crate::animated_display::start_checkout_display("Reading", &label, hide_animation);
+                        let mounted = crate::revision_tree::mount_revision(&resolved);
                         live.finish();
-                        let checkout = checkout.map_err(|error| ArgParsingError::GitTarget(error.to_string()))?;
-                        checkouts.push(TargetCheckout::new(checkout, format!("{repository}@{revision}"), None));
+                        let mounted = mounted.map_err(|error| ArgParsingError::GitTarget(error.to_string()))?;
+                        checkouts.push(TargetCheckout::new(mounted, format!("{repository}@{revision}"), None));
                         checkouts.len() - 1
                     }
                 };
-                let tc = &checkouts[tc_index];
-                let Some(checkout_target) = tc.checkout.find_target_of(subpath) else {
-                    return Err(ArgParsingError::GitTarget(crate::git::GitError::MissingTargetInRevision {
-                        target: path,
-                        revision
-                    }.to_string()));
-                };
-                rewritten.push(Target { module: target.module.clone(), path: checkout_target });
+                match checkouts[tc_index].mounted.find_target_of(subpath) {
+                    TargetInRevision::At(inside) => rewritten.push(Target { module: target.module.clone(), path: inside }),
+                    TargetInRevision::HoldingNoFile => {
+                        let empty = crate::git::GitError::SubmoduleTarget { target: path.clone(), revision }.to_string();
+                        if targets.len() == 1 {
+                            return Err(ArgParsingError::GitTarget(empty));
+                        }
+                        super::warning_collector::emit(ProgramWarning::new(ProgramCode::SubmoduleTarget, &path, empty));
+                    },
+                    TargetInRevision::Missing => return Err(ArgParsingError::GitTarget(
+                            crate::git::GitError::MissingTargetInRevision { target: path, revision }.to_string()))
+                }
             },
             crate::git::TargetSpec::Remote(remote) => {
                 if targets.len() == 1 && index == 0 && target.module.is_none() {
@@ -2532,10 +2544,10 @@ fn materialize_checkout_targets(config_builder: &mut ConfigurationBuilder, hide_
                         let label = remote.format_short_label();
                         let live = crate::animated_display::start_checkout_display("Fetching", &label, hide_animation);
                         let fetched = crate::git::fetch_remote_revision(&remote)
-                                .and_then(|resolved| crate::git::checkout(&resolved));
+                                .and_then(|resolved| crate::revision_tree::mount_revision(&resolved));
                         live.finish();
-                        let checkout = fetched.map_err(|error| ArgParsingError::GitTarget(error.to_string()))?;
-                        checkouts.push(TargetCheckout::new(checkout, remote.display.clone(), Some(remote.url.clone())));
+                        let mounted = fetched.map_err(|error| ArgParsingError::GitTarget(error.to_string()))?;
+                        checkouts.push(TargetCheckout::new(mounted, remote.display.clone(), Some(remote.url.clone())));
                         checkouts.len() - 1
                     }
                 };
@@ -2545,7 +2557,8 @@ fn materialize_checkout_targets(config_builder: &mut ConfigurationBuilder, hide_
         }
     }
 
-    let validated = mezura_core::validate_and_absolutize(&rewritten, &[])
+    let trees = checkouts.iter().map(|tc| tc.mounted.tree.clone()).collect::<Vec<_>>();
+    let validated = mezura_core::validate_and_absolutize(&rewritten, &trees)
             .map_err(|error| map_target_error_outside_checkouts(error, &checkouts))?;
     config_builder.targets = Some(validated);
     config_builder.target_checkouts = checkouts;
@@ -3411,7 +3424,7 @@ mod tests {
 
         assert_eq!(vec![Target::named("web", "/work/portal/src"), Target::of("/work/portal/api/tests"),
                 Target::of("/work/portal")],
-                rebase_targets_on("/work/portal", "/work/portal/.mezura/config.txt", declared));
+                rebase_targets_on("/work/portal", "/work/portal/.mezura/config.txt", declared, None));
 
         // When every target in a project's configuration escapes the project, the run falls back to
         // the project directory rather than stopping with zero targets
@@ -3422,7 +3435,7 @@ mod tests {
     }
 
     #[test]
-    fn a_revision_target_is_written_out_and_obeys_the_projects_settings_at_that_commit() {
+    fn a_revision_target_is_counted_from_git_and_obeys_the_projects_settings_at_that_commit() {
         let _guard = crate::git::GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // CI runners spell TEMP through 8.3 names or a symlink, where git answers with the real path
         let temp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
@@ -3431,11 +3444,14 @@ mod tests {
         let _ = crate::git::remove_directory_tree(&root);
         std::fs::create_dir_all(root.join("core")).unwrap();
         std::fs::create_dir_all(root.join("cli")).unwrap();
+        std::fs::create_dir_all(root.join("packages/@vue/cli")).unwrap();
         std::fs::create_dir_all(root.join(".mezura")).unwrap();
         std::fs::write(root.join("core/lib.rs"), "pub fn a() {}\n").unwrap();
         std::fs::write(root.join("cli/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(root.join("packages/@vue/cli/index.js"), "let a = 1;\n").unwrap();
+        // A target with '@' in its name is a revision target unless the revision holds that folder
         std::fs::write(root.join(".mezura/config.txt"),
-                "===> targets\ncore=./core\ncli=./cli\n\n===> exclude\ngen/\n").unwrap();
+                "===> targets\ncore=./core\ncli=./cli\nvue=./packages/@vue/cli\n\n===> exclude\ngen/\n").unwrap();
         let git = |arguments: &[&str]| {
             let outcome = std::process::Command::new("git").arg("-C").arg(&root).args(arguments).output().unwrap();
             assert!(outcome.status.success(), "git {arguments:?}: {}", String::from_utf8_lossy(&outcome.stderr));
@@ -3448,16 +3464,27 @@ mod tests {
         let target_arg = format!("{root_str}@HEAD");
         let config = create_config_from_args(&target_arg).unwrap();
         assert_eq!(1, config.view.target_checkouts.len());
-        let checkout_path = &config.view.target_checkouts[0].checkout.path;
+        let checkout_path = &config.view.target_checkouts[0].mounted.path;
         assert_eq!(vec![Target::named("core", format!("{checkout_path}/core")),
-                Target::named("cli", format!("{checkout_path}/cli"))], config.engine.targets);
+                Target::named("cli", format!("{checkout_path}/cli")),
+                Target::named("vue", format!("{checkout_path}/packages/@vue/cli"))], config.engine.targets);
         assert_eq!(Some(format!("{target_arg}/.mezura/config.txt")),
                 config.view.local_dir.as_ref().map(LocalDir::get_config_path));
         assert!(config.view.find_project_of_the_log().is_some());
+        let parsed = mezura_core::language_file::parse_languages_in_dir(crate::paths::test_paths::CORE_LANGUAGES_DIR)
+                .unwrap().0;
+        let counted = mezura_core::run(&config.engine,
+                mezura_core::Languages::resolve(&config.engine, parsed, &Default::default()).0).unwrap();
+        assert_eq!(vec![(Some("cli".to_owned()), 1), (Some("core".to_owned()), 1), (Some("vue".to_owned()), 1)], {
+            let mut files = counted.modules.iter().map(|module| (module.name.clone(), module.total.files)).collect::<Vec<_>>();
+            files.sort();
+            files
+        });
+        assert!(!std::path::Path::new(checkout_path).exists(), "the revision was written to disk");
 
         let save_local_run = create_config_from_args(&format!("{target_arg} --top 2 --{SAVE_LOCAL}")).unwrap();
-        let checkout_config = std::fs::read_to_string(format!("{checkout_path}/.mezura/config.txt")).unwrap();
-        assert!(!checkout_config.contains("top"), "a checked-out revision had its '.mezura/config.txt' overwritten:\n{checkout_config}");
+        assert!(!std::path::Path::new(&save_local_run.view.target_checkouts[0].mounted.path).exists(),
+                "'--{SAVE_LOCAL}' wrote into the place of a revision");
         assert!(crate::warning_collector::get_collected_warnings().iter()
                 .any(|w| w.subject == SAVE_LOCAL && w.message.contains("read-only")));
 
@@ -3466,7 +3493,7 @@ mod tests {
         let _ = std::fs::remove_file(&saved_path);
         let saved = create_config_from_args(
                 &format!("{target_arg} --{EXCLUDE} {root_str}/core/lib.rs --{SAVE} zz-rev-target")).unwrap();
-        let saved_checkout = &saved.view.target_checkouts[0].checkout.path;
+        let saved_checkout = &saved.view.target_checkouts[0].mounted.path;
         assert_eq!(vec![format!("{saved_checkout}/core/lib.rs")], saved.engine.exclude_patterns.patterns);
         let saved_contents = std::fs::read_to_string(&saved_path).unwrap();
         assert!(saved_contents.contains(&target_arg), "{saved_contents}");
@@ -3501,7 +3528,6 @@ mod tests {
         drop(loaded);
         drop(compare_with_local);
         drop(log_run);
-        crate::git::await_checkout_removals();
         crate::git::remove_directory_tree(&root).unwrap();
     }
 
@@ -3541,7 +3567,7 @@ mod tests {
         std::fs::remove_file(&saved_path).unwrap();
         drop(saved);
         drop(loaded);
-        crate::git::await_checkout_removals();
+        crate::git::remove_remote_repositories();
         crate::git::remove_directory_tree(&root).unwrap();
     }
 

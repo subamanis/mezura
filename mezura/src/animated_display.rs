@@ -153,15 +153,13 @@ pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -
 // while the checkout is scanned, then the parsing frame once the scan ends. It erases itself
 // completely, so the printed comparison carries no trace of it.
 pub fn start_revision_display(config: &Configuration, git_revision: &str, writing_verb: &str,
-        progress: Arc<ScanProgress>, already_written: bool) -> AnimatedDisplay {
+        progress: Arc<ScanProgress>) -> AnimatedDisplay {
     if !revision_line_moves() {
         return AnimatedDisplay::default();
     }
 
-    // A write that finished before this display opened gets no writing label at all.
     let shown_name = cap_revision_name(git_revision);
-    let writing = (!already_written).then(||
-            format!("{} '{shown_name}'", crate::theme::get_active().heading.paint(writing_verb)));
+    let writing = format!("{} '{shown_name}'", crate::theme::get_active().heading.paint(writing_verb));
     let counting = format!("{} '{shown_name}'", crate::theme::get_active().heading.paint("Counting"));
     let show_bar_and_rates = !config.view.hidden.progress_bar;
     let charset = config.view.progress_bar.get_charset();
@@ -170,7 +168,7 @@ pub fn start_revision_display(config: &Configuration, git_revision: &str, writin
     let animator = {
         let (progress, stop, opened) = (progress, stop.clone(), opened.clone());
         thread::Builder::new().name("animated-display".to_owned())
-                .spawn(move || animate_revision_line(&progress, &stop, &opened, writing.as_deref(),
+                .spawn(move || animate_revision_line(&progress, &stop, &opened, &writing,
                         &counting, show_bar_and_rates, charset)).ok()
     };
 
@@ -231,16 +229,13 @@ pub fn start_parsing_display(config: &Configuration, progress: Arc<ScanProgress>
     }
 }
 
-// Lives at the top of main, so its drop is the last thing before the process exits on every path:
-// the checkout removals a '--diff' left running in the background must not be outlived.
+// Lives at the top of main, so its drop is the last thing before the process exits on every path,
+// and the temporary repository a remote was fetched into goes with it
 pub struct RemovalsGuard;
 
 impl Drop for RemovalsGuard {
     fn drop(&mut self) {
-        if !animations_are_hidden() {
-            animate_removals_line();
-        }
-        crate::git::await_checkout_removals();
+        crate::git::remove_remote_repositories();
     }
 }
 
@@ -457,28 +452,6 @@ fn open_line_below() {
     let _ = stderr.flush();
 }
 
-// On the calling thread and not on an animator of its own: the caller has nothing left to do but
-// wait for the same event.
-fn animate_removals_line() {
-    let started = Instant::now();
-    let mut row = TransientRow::new();
-    while let Some(revision) = crate::git::find_running_removal() {
-        thread::sleep(TICK);
-        let elapsed = started.elapsed().as_millis();
-        if elapsed < MOTION_APPEARS_AFTER_MS {
-            continue;
-        }
-        let budget = read_budget();
-        let label = format!("{} '{}'", crate::theme::get_active().heading.paint("Cleaning up"),
-                cap_revision_name(&revision));
-        let frame = format_walk_frame(&label, elapsed, 0, budget);
-        row.draw(&frame, budget, open_line_below);
-    }
-    if row.drew_first_frame {
-        write_parting(&Parting::Retreat);
-    }
-}
-
 fn animate_checkout_line(stop: &AtomicBool, opened: &AtomicBool, label: &str) {
     let started = Instant::now();
     let mut row = TransientRow::new();
@@ -531,7 +504,7 @@ fn animate_walk_line(progress: &ScanProgress, stop: &AtomicBool, heading: &str) 
 // of the inner run is found, which is when git has finished materialising the revision, 'Counting'
 // after.
 fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &AtomicBool,
-        writing_label: Option<&str>, counting_label: &str, show_bar_and_rates: bool, charset: &str) {
+        writing_label: &str, counting_label: &str, show_bar_and_rates: bool, charset: &str) {
     let started = Instant::now();
     let counting_label_width = measure_columns(counting_label) + 1;
     let mut row = TransientRow::new();
@@ -571,9 +544,9 @@ fn animate_revision_line(progress: &ScanProgress, stop: &AtomicBool, opened: &At
                 if numbers_due {
                     shown_files = progress.get_files_found();
                 }
-                // 'files found' is the proxy for git having finished writing
+                // 'files found' is the proxy for the revision having been read
                 let label = if progress.get_files_found() == 0 {
-                    writing_label.unwrap_or(counting_label)
+                    writing_label
                 } else {
                     counting_label
                 };

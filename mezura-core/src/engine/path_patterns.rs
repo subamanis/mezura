@@ -2,13 +2,14 @@
 //! finds the root a name is read from, and lets the last written match win.
 
 use std::path::{Component, Path};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use globset::{Candidate, GlobBuilder, GlobSet, GlobSetBuilder};
 
 use crate::engine::targets::{WILDCARDS, absolutize_pattern, convert_to_absolute, is_inside_or_at, normalise_separators};
 use crate::engine::test_detection::PresetsTakenBack;
-use crate::engine::tree::TreeView;
+use crate::engine::tree::{MountedTree, TreeView};
 
 const NEGATION : char = '!';
 const PRESET_SIGIL : char = '@';
@@ -84,11 +85,13 @@ pub fn absolutize_path_pattern(pattern: &str) -> String {
     format!("{negation}{}{suffix}", join_place_and_rest(&absolutize_place(place), rest))
 }
 
-/// Whether the place a path pattern names, up to its first wildcard, is on disk.
-pub fn is_on_disk(pattern: &str) -> bool {
+/// Whether the place a path pattern names, up to its first wildcard, exists. A place below the root
+/// of one of `trees` is looked for in that tree, the way a run given those trees looks for it, and
+/// any other place on disk.
+pub fn names_an_existing_place(pattern: &str, trees: &[Arc<MountedTree>]) -> bool {
     let text = normalise_separators(split_negation(pattern).1);
     let (_, without_suffix) = strip_folder_suffix(&text);
-    split_place(without_suffix, &TreeView::of(&[])).2
+    split_place(without_suffix, &TreeView::of(trees)).2
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -601,11 +604,16 @@ mod tests {
         assert_eq!("!*.min.js", absolutize_path_pattern("!*.min.js"));
         assert_eq!("D:/x/gen", absolutize_path_pattern(if cfg!(windows) {"D:\\x\\gen"} else {"D:/x/gen"}));
 
-        assert!(is_on_disk("./src"));
-        assert!(is_on_disk("!./src/"));
-        assert!(is_on_disk("./*/nowhere"), "the place before the wildcard is the working directory");
-        assert!(!is_on_disk("./nowhere/at/all"));
-        assert!(!is_on_disk(&format!("{cwd}/nowhere/*/gen")));
+        assert!(names_an_existing_place("./src", &[]));
+        assert!(names_an_existing_place("!./src/", &[]));
+        assert!(names_an_existing_place("./*/nowhere", &[]), "the place before the wildcard is the working directory");
+        assert!(!names_an_existing_place("./nowhere/at/all", &[]));
+        assert!(!names_an_existing_place(&format!("{cwd}/nowhere/*/gen"), &[]));
+
+        let root = format!("{cwd}/a-tree-nothing-on-disk-has");
+        let trees = [Arc::new(MountedTree::new(&root, None, vec!["gen/a.rs".into()], |_, _| Ok(())))];
+        assert!(names_an_existing_place(&format!("!{root}/gen/*.rs"), &trees), "a place in a tree was looked for on disk");
+        assert!(!names_an_existing_place(&format!("{root}/src"), &trees));
     }
 
     #[test]

@@ -19,7 +19,8 @@ pub enum ProgramCode {
     PresetFileShadowed,
     // A project file names a test tool and no test of that language was found, so its tests may
     // be counted as production. Settings, since '--tests @<name>' is what fixes it.
-    TestPresetUnapplied
+    TestPresetUnapplied,
+    SubmoduleTarget
 }
 
 impl ProgramCode {
@@ -34,13 +35,14 @@ impl ProgramCode {
             Self::ConfigStyleInvalid => "config-style-invalid",
             Self::ThemeUnavailable => "theme-unavailable",
             Self::PresetFileShadowed => "preset-file-shadowed",
-            Self::TestPresetUnapplied => "test-preset-unapplied"
+            Self::TestPresetUnapplied => "test-preset-unapplied",
+            Self::SubmoduleTarget => "submodule-target"
         }
     }
 
     pub fn affects(self) -> Affects {
         match self {
-            Self::LanguageFileUnreadable => Affects::Counts,
+            Self::LanguageFileUnreadable | Self::SubmoduleTarget => Affects::Counts,
             Self::ConflictLineSkipped | Self::ConfigValueIgnored | Self::ConfigSectionUnknown
             | Self::ConfigSectionRepeated | Self::CommandIgnored | Self::ConfigStyleInvalid
             | Self::ThemeUnavailable | Self::PresetFileShadowed | Self::TestPresetUnapplied => Affects::Settings

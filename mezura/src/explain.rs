@@ -19,9 +19,15 @@ pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
     };
     let display_path = crate::sources::format_path_outside_checkouts(&target.path, &config.view.target_checkouts);
     let path = Path::new(&target.path);
-    if !path.is_file() {
-        return refuse(&format!("'--explain' answers for one file, and '{display_path}' is not one. Give the \
-                file itself: mezura src/main.rs --explain"));
+    let not_a_file = format!("'--explain' answers for one file, and '{display_path}' is not one. Give the \
+            file itself: mezura src/main.rs --explain");
+    // A folder of a revision passes here, and the engine refuses it below
+    let names_a_file = match crate::sources::find_revision_holding(&target.path, &config.view.target_checkouts) {
+        Some(revision) => revision.tree.holds(path),
+        None => path.is_file()
+    };
+    if !names_a_file {
+        return refuse(&not_a_file);
     }
 
     // Refused, so that asking for one format never quietly hands back another
@@ -65,6 +71,7 @@ pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
         },
         Err(ExplainError::UnreadableFile(reason)) => refuse(&format!("'{display_path}' could not be read: \
                 {reason}")),
+        Err(ExplainError::IsADirectory) => refuse(&not_a_file),
         Err(ExplainError::LanguagesFromAnotherConfig) => refuse("The languages of this run were \
                 resolved against different settings, so the answer would be for the wrong \
                 selection."),
@@ -474,19 +481,10 @@ mod tests {
 
         let root_str = crate::paths::normalise_separators(&root.to_string_lossy()).into_owned();
         let resolved = crate::git::resolve_revision(&root_str, "HEAD").unwrap();
-        let checkout = std::sync::Arc::new(crate::git::checkout(&resolved).unwrap());
-        let chk = checkout.path.clone();
+        let mounted = crate::revision_tree::mount_revision(&resolved).unwrap();
+        let chk = mounted.path.clone();
         let display = format!("{root_str}@HEAD");
-        let checkouts = [crate::config_manager::TargetCheckout {
-            checkout,
-            checkout_root: chk.clone(),
-            display_root: display.clone(),
-            base_root: root_str.clone(),
-            repository: root_str.clone(),
-            remote_url: None,
-            commit: resolved.commit,
-            revision: "HEAD".to_owned()
-        }];
+        let checkouts = [crate::config_manager::TargetCheckout::new(mounted, display.clone(), None)];
 
         let mut engine = EngineConfig::new([format!("{chk}/pkg/src/lib.rs")]);
         engine.test_patterns = PathPatterns::of(["pkg/"]);
@@ -531,7 +529,6 @@ mod tests {
         }));
 
         drop(checkouts);
-        crate::git::await_checkout_removals();
         crate::git::remove_directory_tree(&root).unwrap();
     }
 

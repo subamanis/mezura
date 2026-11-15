@@ -1,12 +1,10 @@
-// Everything a comparison against a git commit or a count of a revision or remote repository
-// needs: the repository a target belongs to, the worktree the commit is written out to, and the
-// removal of it afterwards.
+// The repository a target belongs to, the commit a revision names, and the temporary repository a
+// remote is fetched into, for a comparison against a commit or a count of a revision or a remote.
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread::JoinHandle;
 
 use super::paths::{GLOB_METACHARACTERS, fold_ascii_case, fold_for_comparison,
         is_unquoted_glob_pattern, normalise_separators};
@@ -37,7 +35,6 @@ const NETWORK_GIT_CONFIG : [&str; 8] = [
     "-c", "http.lowSpeedTime=20",
 ];
 
-static PENDING_REMOVALS : Mutex<Vec<(String, JoinHandle<()>)>> = Mutex::new(Vec::new());
 static REMOTE_HOLDERS : Mutex<Vec<String>> = Mutex::new(Vec::new());
 static NEXT_CHECKOUT_ID : AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
@@ -54,9 +51,10 @@ pub enum GitError {
     NoSuchRemoteRevision { revision: String, repository: String },
     EmptyRevision { target: String },
     MissingTargetInRevision { target: String, revision: String },
+    SubmoduleTarget { target: String, revision: String },
     SameCommit { first: String, second: String, commit: String },
     PatternTarget { pattern: String },
-    // The checkout succeeded and the counting of it did not, so git had no part in this one.
+    // The revision was read and the counting of it failed, so git had no part in this one.
     CountingRevision { revision: String, error: mezura_core::RunError },
     Refused { doing: &'static str, message: String }
 }
@@ -71,6 +69,7 @@ impl std::fmt::Display for GitError {
             Self::NoSuchRemoteRevision { revision, repository } => write!(f, "'{revision}' is not a branch, tag or commit of '{repository}'."),
             Self::EmptyRevision { target } => write!(f, "'{target}' ends in '@' with no branch, tag or commit after it."),
             Self::MissingTargetInRevision { target, revision } => write!(f, "'{target}' does not exist in '{revision}'."),
+            Self::SubmoduleTarget { target, revision } => write!(f, "'{target}' is a submodule, which holds no file at '{revision}'."),
             Self::SameCommit { first, second, commit } => write!(f, "'{first}' and '{second}' name the same commit, {}, so the comparison has nothing to say.", &commit[..commit.len().min(12)]),
             Self::PatternTarget { pattern } => write!(f, "'{pattern}' is a glob pattern, and what it matches in the working tree and what it would match at that commit are two different sets of files. Write out the paths it should mean."),
             Self::CountingRevision { revision, error } => write!(f, "'{revision}' was written out, but counting it failed. {error}"),
@@ -298,52 +297,22 @@ pub fn collect_folders_at(repository: &str, commit: &str) -> Option<HashSet<Stri
     Some(listed.split('\0').filter(|folder| !folder.is_empty()).map(|folder| fold_ascii_case(folder).into_owned()).collect())
 }
 
-// The tree of a commit, written out where mezura can count it. Removed when this goes out of scope,
-// whichever way the run ended, and a run that was killed before that is swept by the next one.
+// A commit written out with 'git worktree add', which the tests hold a mounted revision against
+#[cfg(test)]
 #[derive(Debug)]
 pub struct Checkout {
     pub path: String,
     pub resolved: ResolvedRevision
 }
 
-impl Checkout {
-    // Where a path of the working tree is to be found in here, from the prefix that
-    // 'find_repository_of' answered with. None when the revision predates it: a directory that did
-    // not exist then counts zero rather than stopping the run.
-    // Trimmed of any trailing separator: the repository root's prefix is empty, and a target
-    // ending in '/' matches no file path on a whole-component check
-    pub fn find_target_of(&self, prefix: &str) -> Option<String> {
-        let inside = (self.path.clone() + "/" + prefix.trim_end_matches('/'))
-                .trim_end_matches('/').to_owned();
-        Path::new(&inside).exists().then_some(inside)
-    }
-}
-
-// Removing a large tree takes seconds and nothing that prints depends on it, so it runs on its own
-// thread and the comparison does not wait. The join happens at the very end of main, or the process
-// could exit mid-delete and leave the temporary directory half there.
+#[cfg(test)]
 impl Drop for Checkout {
     fn drop(&mut self) {
-        let (repository, path) = (self.resolved.repository.clone(), self.path.clone());
-        match std::thread::Builder::new().name("checkout-removal".to_owned())
-                .spawn(move || remove_worktree(&repository, &path)) {
-            Ok(handle) => PENDING_REMOVALS.lock().unwrap().push((self.resolved.revision.clone(), handle)),
-            Err(_) => remove_worktree(&self.resolved.repository, &self.path)
-        }
+        remove_worktree(&self.resolved.repository, &self.path);
     }
 }
 
-pub fn find_running_removal() -> Option<String> {
-    PENDING_REMOVALS.lock().unwrap().iter()
-            .find(|(_, removal)| !removal.is_finished())
-            .map(|(revision, _)| revision.clone())
-}
-
-pub fn await_checkout_removals() {
-    let pending = std::mem::take(&mut *PENDING_REMOVALS.lock().unwrap());
-    for (_, removal) in pending {
-        let _ = removal.join();
-    }
+pub fn remove_remote_repositories() {
     let holders = std::mem::take(&mut *REMOTE_HOLDERS.lock().unwrap());
     for holder in holders {
         let _ = remove_directory_tree(Path::new(&holder));
@@ -360,10 +329,9 @@ pub fn is_remote_temp_repository(repository: &str) -> bool {
             .is_some_and(|common| check(&normalise_separators(&common)))
 }
 
-// The tree is written into a folder named like the repository's own, inside one of this run's, so
-// that a name pattern sees the same folders on both sides of the comparison
-pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
-    let repository = resolved.repository.as_str();
+// The root a revision is read under, which names nothing on disk. Its last folder is named like the
+// repository's own, so that a name pattern sees the same folders on both sides of a comparison.
+pub fn find_place_for_revision(resolved: &ResolvedRevision) -> String {
     let short_commit = &resolved.commit[..resolved.commit.len().min(12)];
     let seq = NEXT_CHECKOUT_ID.fetch_add(1, Ordering::Relaxed);
     let holder = normalise_separators(&std::env::temp_dir()
@@ -373,22 +341,28 @@ pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
                 format!("{CHECKOUT_PREFIX}{short_commit}-{seq}-{}", std::process::id())
             })
             .to_string_lossy()).into_owned();
-    let _ = remove_directory_tree(Path::new(&holder));
-    let name = Path::new(repository.trim_end_matches('/')).file_name()
+    let name = Path::new(resolved.repository.trim_end_matches('/')).file_name()
             .map_or_else(|| "repository".to_owned(), |x| x.to_string_lossy().into_owned());
-    let path = format!("{holder}/{name}");
-    std::fs::create_dir_all(&holder).map_err(|error| GitError::Refused { doing: "making room for the revision",
-            message: error.to_string() })?;
+    format!("{holder}/{name}")
+}
 
-    // git writes the tree out on one thread unless told otherwise, and a git too old to know the
-    // option ignores it, so no version check guards it
+// The hardened configuration writes every link as a file, and the repository's setting of
+// 'core.symlinks' replaces that, as a mounted revision follows it
+#[cfg(test)]
+pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
+    let path = find_place_for_revision(resolved);
+    let holder = Path::new(&path).parent().unwrap();
+    let _ = remove_directory_tree(holder);
+    std::fs::create_dir_all(holder).map_err(|error| GitError::Refused { doing: "making room for the revision",
+            message: error.to_string() })?;
     let mut command = Command::new("git");
     configure_hardened_git(&mut command);
-    let outcome = command.args(["-C", repository, "-c", "checkout.workers=0",
-            "worktree", "add", "--detach", "--force", "--quiet", &path, &resolved.commit])
-            .output().map_err(GitError::NotInstalled)?;
+    let setting = ask(&resolved.repository, &["config", "--bool", "core.symlinks"])?.unwrap_or_else(|| "true".to_owned());
+    command.arg("-c").arg(format!("core.symlinks={setting}"));
+    let outcome = command.args(["-C", &resolved.repository, "worktree", "add", "--detach", "--force", "--quiet", &path,
+            &resolved.commit]).output().map_err(GitError::NotInstalled)?;
     if !outcome.status.success() {
-        let _ = remove_directory_tree(Path::new(&holder));
+        let _ = remove_directory_tree(holder);
         return Err(GitError::Refused { doing: "writing out the revision",
                 message: String::from_utf8_lossy(&outcome.stderr).trim().to_owned() });
     }
@@ -579,7 +553,7 @@ fn run_remote_git(repo_dir: &str, arguments: &[&str]) -> Result<std::process::Ou
     command.arg("-C").arg(repo_dir).args(arguments).output().map_err(GitError::NotInstalled)
 }
 
-fn configure_hardened_git(command: &mut Command) {
+pub(crate) fn configure_hardened_git(command: &mut Command) {
     command.env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "never")
             .env("GIT_LFS_SKIP_SMUDGE", "1");
@@ -710,28 +684,25 @@ mod tests {
     }
 
     #[test]
-    fn a_revision_is_written_out_and_taken_away_again() {
+    fn a_revision_is_counted_with_nothing_written_and_what_a_killed_run_left_is_swept() {
+        use crate::revision_tree::TargetInRevision;
         let _guard = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let repo = create_test_repository("mezura-checkout-test");
         let root = normalise_separators(&repo.to_string_lossy()).into_owned();
-        let path = {
-            let checkout = checkout(&resolve_revision(&root, "HEAD").unwrap()).unwrap();
-            assert!(Path::new(&checkout.path).join("mezura/src/main.rs").exists(),
-                    "the revision was not written out to {}", checkout.path);
-            assert_eq!(Path::new(&root).file_name(), Path::new(&checkout.path).file_name(),
-                    "the checkout is not named like the repository's folder");
-            assert!(Path::new(&checkout.path).parent().unwrap().file_name().unwrap().to_string_lossy().starts_with(CHECKOUT_PREFIX));
-            assert!(checkout.find_target_of("mezura-core/src/").is_some());
-            assert_eq!(None, checkout.find_target_of("a-directory-this-commit-never-had/"));
-            // The repository root's prefix is empty, and its target must not end in a separator
-            // or no file path would match it on a whole-component check
-            let root = checkout.find_target_of("").unwrap();
-            assert!(!root.ends_with('/'), "{root}");
-            checkout.path.clone()
-        };
-        await_checkout_removals();
-        assert!(!Path::new(&path).exists(), "the checkout outlived the run that made it");
-        assert!(!Path::new(&path).parent().unwrap().exists(), "the folder holding the checkout outlived it");
+        let mounted = crate::revision_tree::mount_revision(&resolve_revision(&root, "HEAD").unwrap()).unwrap();
+        assert!(!Path::new(&mounted.path).parent().unwrap().exists(), "the revision was written to {}", mounted.path);
+        assert_eq!(Path::new(&root).file_name(), Path::new(&mounted.path).file_name(),
+                "the root is not named like the repository's folder");
+        assert!(Path::new(&mounted.path).parent().unwrap().file_name().unwrap().to_string_lossy().starts_with(CHECKOUT_PREFIX));
+        assert!(matches!(mounted.find_target_of("mezura-core/src/"), TargetInRevision::At(_)));
+        assert!(matches!(mounted.find_target_of("a-directory-this-commit-never-had/"), TargetInRevision::Missing));
+        let TargetInRevision::At(whole) = mounted.find_target_of("") else { panic!("the root of the revision was not found") };
+        assert!(!whole.ends_with('/'), "{whole}");
+        let engine = mezura_core::EngineConfig { trees: vec![mounted.tree.clone()], ..mezura_core::EngineConfig::new([whole]) };
+        let parsed = mezura_core::language_file::parse_languages_in_dir(crate::paths::test_paths::CORE_LANGUAGES_DIR).unwrap().0;
+        let counted = mezura_core::run(&engine, mezura_core::Languages::resolve(&engine, parsed, &Default::default()).0).unwrap();
+        assert_eq!((2, 4), (counted.total.files, counted.total.lines));
+        drop((engine, mounted));
 
         let killed = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + "0123456789ab-1");
         let locked_holder = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + "fedcba987654-1");
@@ -863,16 +834,19 @@ mod tests {
         let by_tag = parse_remote_spec(&format!("{base_url}@v1.0")).unwrap().unwrap();
         assert_eq!(first_tag.commit, fetch_remote_revision(&by_tag).unwrap().commit);
 
-        let checkout = checkout(&resolved).unwrap();
-        assert!(Path::new(&checkout.path).join("mezura/src/main.rs").exists());
+        let mounted = crate::revision_tree::mount_revision(&resolved).unwrap();
+        let engine = mezura_core::EngineConfig { trees: vec![mounted.tree.clone()], ..mezura_core::EngineConfig::new([&mounted.path]) };
+        let parsed = mezura_core::language_file::parse_languages_in_dir(crate::paths::test_paths::CORE_LANGUAGES_DIR).unwrap().0;
+        let counted = mezura_core::run(&engine, mezura_core::Languages::resolve(&engine, parsed, &Default::default()).0).unwrap();
+        assert_eq!((2, 2), (counted.total.files, counted.total.lines), "the blobless fetch of a short hash was not counted whole");
         let repo_dir = resolved.repository.clone();
-        drop(checkout);
-        await_checkout_removals();
+        drop((engine, mounted));
+        remove_remote_repositories();
 
         let blobless_first = ensure_remote_repository(&by_head.url, "blobless-first").unwrap();
         assert_eq!(first_tag.commit, fetch_revision_into_remote(&blobless_first, &by_head.url, Some("HEAD~1")).unwrap().commit);
         assert_eq!(head.commit, resolve_revision(&blobless_first, "HEAD").unwrap().commit);
-        await_checkout_removals();
+        remove_remote_repositories();
 
         remove_directory_tree(&repo).unwrap();
         assert!(!Path::new(&repo_dir).exists(), "the temporary remote repository outlived the run");

@@ -1,7 +1,6 @@
 // Reading and writing the configuration files, which are the command line written down.
 use std::collections::HashSet;
 use std::fs;
-use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
 use colored::{ColoredString, Colorize};
@@ -68,10 +67,15 @@ pub fn parse_config_file(file_name: Option<&str>, config_dir_path: Option<String
     let config_path = if let Some(dir) = config_dir_path {dir} else {PERSISTENT_APP_PATHS.config_dir.clone()};
     let file_name = if let Some(x) = file_name {x} else {DEFAULT_CONFIG_NAME.trim_end_matches(".txt")};
     let file_path = super::paths::normalise_separators(&(config_path + file_name + ".txt")).into_owned();
-    let mut reader = CountingReader { line: 0, failed_at: None, reader: BufReader::new(match fs::File::open(file_path){
-        Ok(f) => f,
-        Err(_) => return Err(ConfigFileParseError::FileNotFound(file_name.to_owned()))
-    })};
+    match fs::File::open(file_path) {
+        Ok(file) => parse_config_from(Box::new(BufReader::new(file)), file_name),
+        Err(_) => Err(ConfigFileParseError::FileNotFound(file_name.to_owned()))
+    }
+}
+
+// Also for the settings of a project inside a revision, which are no file on disk
+pub fn parse_config_from(reader: Box<dyn BufRead>, file_name: &str) -> Result<(ConfigurationBuilder, ConfigFileIssues),ConfigFileParseError> {
+    let mut reader = CountingReader { line: 0, failed_at: None, reader };
 
     let mut builder = ConfigurationBuilder::default();
     let mut issues = ConfigFileIssues::default();
@@ -406,7 +410,7 @@ fn yes_or_no(value: bool) -> &'static str {
 // reads as an ended file, which every caller already treats as the end of its block, so nothing
 // after the bad line is applied and the file is refused whole by the single check at the end.
 struct CountingReader {
-    reader: BufReader<File>,
+    reader: Box<dyn BufRead>,
     line: usize,
     failed_at: Option<(usize, std::io::Error)>
 }
