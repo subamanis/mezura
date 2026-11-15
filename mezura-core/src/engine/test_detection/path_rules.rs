@@ -565,8 +565,8 @@ impl TriggerFilesSeen {
             }
             let build_active_preset = |trigger_file, declared: Option<(Vec<String>, &'static str)>, scopes| {
                 let (names, configured_by) = match declared {
-                    Some((names, file)) => (Arc::new(PresetNames::of_declared(names, tree)), Some(file)),
-                    None => (get_preset_names(at, tree), None)
+                    Some((names, file)) => (Arc::new(PresetNames::of_declared(names)), Some(file)),
+                    None => (get_preset_names(at), None)
                 };
                 Arc::new(ActivePreset { preset, trigger_file, configured_by, directory: spell_out(directory), names_root, scopes,
                         names, matched: AtomicBool::new(false) })
@@ -687,16 +687,16 @@ struct PresetNames {
 
 impl PresetNames {
     // Pytest never collects 'conftest.py' as a test module, and it is test code all the same
-    fn of_declared(mut patterns: Vec<String>, tree: &TreeView) -> PresetNames {
+    fn of_declared(mut patterns: Vec<String>) -> PresetNames {
         let declared = patterns.len();
         if !patterns.iter().any(|pattern| pattern == CONFTEST) {
             patterns.push(CONFTEST.to_owned());
         }
-        PresetNames::compile(patterns, declared, tree)
+        PresetNames::compile(patterns, declared)
     }
 
-    fn compile(patterns: Vec<String>, declared: usize, tree: &TreeView) -> PresetNames {
-        let matcher = PathPatternMatcher::compile(&patterns, TakingBack::Refused, tree).expect("the patterns of a preset compile");
+    fn compile(patterns: Vec<String>, declared: usize) -> PresetNames {
+        let matcher = PathPatternMatcher::compile(&patterns, TakingBack::Refused, &TreeView).expect("the patterns of a preset compile");
         PresetNames { patterns, declared, matcher }
     }
 }
@@ -749,11 +749,11 @@ fn collect_noted_files() -> impl Iterator<Item = &'static str> {
 }
 
 // Compiled once, since a monorepo turns one preset on in many directories
-fn get_preset_names(at: usize, tree: &TreeView) -> Arc<PresetNames> {
+fn get_preset_names(at: usize) -> Arc<PresetNames> {
     static NAMES : OnceLock<Vec<Arc<PresetNames>>> = OnceLock::new();
     NAMES.get_or_init(|| TEST_PRESETS.iter().map(|preset| {
         let patterns = preset.patterns.iter().map(|pattern| (*pattern).to_owned()).collect();
-        Arc::new(PresetNames::compile(patterns, 0, tree))
+        Arc::new(PresetNames::compile(patterns, 0))
     }).collect())[at].clone()
 }
 

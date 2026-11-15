@@ -56,8 +56,8 @@ pub(crate) fn read_pytest_configuration(directory: &Path, is_present: impl Fn(&s
             Shape::Pyproject => read_toml(text, &[(NATIVE_TABLE, StringValue::Refused), (INI_OPTIONS_TABLE, StringValue::Split)])
         };
         match found {
-            Section::Present(declared) => return Some(build_configuration(file.name, declared, directory, tree)),
-            Section::Absent if file.decides_even_when_empty => return Some(build_configuration(file.name, Declared::default(), directory, tree)),
+            Section::Present(declared) => return Some(build_configuration(file.name, declared, directory)),
+            Section::Absent if file.decides_even_when_empty => return Some(build_configuration(file.name, Declared::default(), directory)),
             Section::Absent => ()
         }
     }
@@ -142,13 +142,13 @@ const fn collect_configuration_file_names() -> [&'static str; PYTEST_CONFIGURATI
     names
 }
 
-fn build_configuration(file: &'static str, declared: Declared, directory: &Path, tree: &TreeView) -> PytestConfiguration {
+fn build_configuration(file: &'static str, declared: Declared, directory: &Path) -> PytestConfiguration {
     let spelled = spell_out(directory);
     let spelled = spelled.trim_end_matches('/');
     PytestConfiguration {
         file,
         testpaths: declared.testpaths.as_deref().and_then(|entries| resolve_testpaths(entries, spelled)),
-        python_files: declared.python_files.as_deref().and_then(|entries| accept_python_files(entries, tree))
+        python_files: declared.python_files.as_deref().and_then(accept_python_files)
     }
 }
 
@@ -502,13 +502,13 @@ fn resolve_testpaths(entries: &[String], directory: &str) -> Option<Vec<String>>
     (!scopes.is_empty()).then_some(scopes)
 }
 
-fn accept_python_files(entries: &[String], tree: &TreeView) -> Option<Vec<String>> {
+fn accept_python_files(entries: &[String]) -> Option<Vec<String>> {
     let names = entries.iter().map(|entry| entry.trim().to_owned()).collect::<Vec<_>>();
     if names.is_empty() || names.iter().any(|name| name.is_empty() || name.contains(['!', '{', '\\']) || name.ends_with('/')
             || is_a_path_pattern(name)) {
         return None;
     }
-    PathPatternMatcher::compile(&names, TakingBack::Refused, tree).ok()?;
+    PathPatternMatcher::compile(&names, TakingBack::Refused, &TreeView).ok()?;
     Some(names)
 }
 
@@ -632,7 +632,7 @@ mod tests {
         assert_eq!(None, resolved(&["a//b"]));
         assert_eq!(None, resolved(&[]));
 
-        let accepted = |entries: &[&str]| accept_python_files(&owned(entries), &TreeView);
+        let accepted = |entries: &[&str]| accept_python_files(&owned(entries));
         assert_eq!(Some(owned(&["test_*.py", "test_*/__init__.py", "__init__.py"])), accepted(&["test_*.py", "test_*/__init__.py", "__init__.py"]));
         assert_eq!(None, accepted(&["./tests/test_*.py"]), "a place was taken for a name");
         assert_eq!(None, accepted(&["test_*.py", "!helper.py"]));
