@@ -7,6 +7,7 @@ use crate::engine::path_patterns::{PathPatternMatcher, TakingBack};
 use crate::engine::targets::{Targets, convert_to_absolute, find_names_root_of_path, is_inside_or_at, spell_out};
 use crate::engine::test_detection::{DirectoryScope, FilesOnDisk, OwnListing, PresetClimb, TestScope,
         TestsByPath, find_declaring_chain, find_test_directory_along};
+use crate::engine::tree::TreeView;
 use crate::languages::Languages;
 
 /// One file read line by line, as [`explain_file`] answers it.
@@ -237,13 +238,14 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     if !languages.describe_the_same_selection_as(config) {
         return Err(ExplainError::LanguagesFromAnotherConfig);
     }
-    if path.is_dir() {
+    let tree = TreeView;
+    if tree.is_dir(path) {
         return Err(ExplainError::IsADirectory);
     }
     let (by_name, lookups, extension_to_name) = languages.into_parts();
     let absolute = convert_to_absolute(&path.to_string_lossy());
     let targets = crate::engine::targets::resolve(&config.targets, crate::ObeyedIgnoreFiles::of(config),
-            config.should_search_in_dotted).ok();
+            config.should_search_in_dotted, &tree).ok();
     let module = match targets.as_ref().and_then(|targets| find_targets_holding(targets, &absolute)
             .max_by_key(|target| target.path.len())) {
         Some(target) => target.module.as_deref(),
@@ -254,7 +256,7 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     let Some(mut lang_name) = lookup.of_path_or_shebang(path) else {
         return Err(ExplainError::UnclaimedFile);
     };
-    let contents = std::fs::read_to_string(path)
+    let contents = tree.read_file(path).and_then(|bytes| std::io::read_to_string(bytes.as_slice()))
             .map_err(ExplainError::UnreadableFile)?;
     let mut identified_by = None;
     let extension_rules = lookup.find_extension_rules(path);
@@ -308,14 +310,15 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
 fn decide_whole_file(absolute: &str, config: &EngineConfig, targets: Option<&Targets>, language: &Language,
     lookup: &NestedLanguageLookup) -> Result<(TestsByPath, Option<TestFileRule>), ExplainError>
 {
-    let patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed)
+    let tree = TreeView;
+    let patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed, &tree)
             .map_err(ExplainError::InvalidTestPattern)?;
     let names_root = find_names_root_of_file(absolute, config, targets);
     let file = Path::new(absolute);
     let folder = file.parent().unwrap_or(file);
     let climb = PresetClimb::new(patterns.get_presets_taken_back());
     let checkout = config.checkout.as_ref().map(crate::engine::targets::resolve_checkout);
-    let holder = DirectoryScope::of_target(folder, names_root, &patterns, &climb, OwnListing::Unread, checkout.as_ref());
+    let holder = DirectoryScope::of_target(folder, names_root, &patterns, &climb, OwnListing::Unread, checkout.as_ref(), &tree);
     let (scope, decided_by, decided_by_presets) = holder.of_file(file, &patterns, &mut Vec::new());
     // Read the way a run reads it, so a file a pattern took back is still declared under the marker
     // and a declarer a pattern made whole seeds nothing of its own
@@ -324,7 +327,7 @@ fn decide_whole_file(absolute: &str, config: &EngineConfig, targets: Option<&Tar
         let root = find_names_root_of_file(&spelled, config, targets);
         let candidate = Path::new(&spelled);
         let folder = candidate.parent().unwrap_or(candidate);
-        DirectoryScope::of_target(folder, root, &patterns, &climb, OwnListing::Unread, checkout.as_ref())
+        DirectoryScope::of_target(folder, root, &patterns, &climb, OwnListing::Unread, checkout.as_ref(), &tree)
                 .of_file(candidate, &patterns, &mut Vec::new()).0 == TestScope::Tests
     };
     let mut files_on_disk = FilesOnDisk { lookup, config, is_whole: &is_whole };
@@ -344,7 +347,7 @@ fn decide_whole_file(absolute: &str, config: &EngineConfig, targets: Option<&Tar
                         TestFileRule::Declared { pattern, matched_folder }
             })
         },
-        (None, TestScope::Tests) => match (decided_by_presets, find_test_directory_along(folder, checkout.as_ref()).0) {
+        (None, TestScope::Tests) => match (decided_by_presets, find_test_directory_along(folder, checkout.as_ref(), &tree).0) {
             (None, Some(found)) => Some(TestFileRule::TestDirectory {
                 directory: spell_out(found.directory),
                 build_files: found.build_files.iter().map(|file| spell_out(file)).collect()

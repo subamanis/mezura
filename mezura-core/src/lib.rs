@@ -88,6 +88,7 @@ use engine::path_patterns::{PathPatternMatcher, TakingBack, Unused, UnusedPatter
 use engine::test_detection::{ActivePreset, ActivePresets, DirectoryScope, FilesOnDisk, OwnListing, PresetClimb,
         TestScope, promote_declared_test_modules};
 use engine::test_detection::TEST_PRESETS;
+use engine::tree::TreeView;
 
 /// The name of the file that decides which language gets an extension or a file name two of them
 /// claim.
@@ -161,13 +162,14 @@ pub fn run_watched_by<W: RunWatcher>(config: &EngineConfig, languages: Languages
     if !languages.describe_the_same_selection_as(config) {
         return Err(RunError::LanguagesFromAnotherConfig);
     }
+    let tree = TreeView;
     // Idempotent, so a caller that resolved its own targets earlier loses nothing here.
     let targets = engine::targets::resolve(&config.targets, ObeyedIgnoreFiles::of(config),
-            config.should_search_in_dotted).map_err(RunError::InvalidTargets)?;
+            config.should_search_in_dotted, &tree).map_err(RunError::InvalidTargets)?;
     let faulty_files : FaultyFilesListMut = Mutex::new(Vec::with_capacity(10));
     let finish_condition = AtomicBool::new(false);
     let (language_map, lookups, extension_to_name) = languages.into_parts();
-    let modules = Modules::of(&targets);
+    let modules = Modules::of(&targets, &tree);
     // Only here can the lookups be put in the order the walk wants them: which number a module was
     // given is decided by the targets, and the languages were resolved before they were seen.
     let language_lookups = lookups.into_lookups_per_module(&modules);
@@ -181,9 +183,9 @@ pub fn run_watched_by<W: RunWatcher>(config: &EngineConfig, languages: Languages
     let idle_producers = AtomicUsize::new(0);
     let files_injector = Injector::<ParsableFile>::new();
     let dirs_injector = Injector::<TraversedDir>::new();
-    let exclude_patterns = PathPatternMatcher::compile(&config.exclude_patterns.patterns, TakingBack::Refused)
+    let exclude_patterns = PathPatternMatcher::compile(&config.exclude_patterns.patterns, TakingBack::Refused, &tree)
             .map_err(RunError::InvalidExcludePattern)?;
-    let test_patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed)
+    let test_patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed, &tree)
             .map_err(RunError::InvalidTestPattern)?;
     // A project's own patterns are read for the whole project, so its folder counts as a target here
     let roots_of = |patterns: &PathPatterns| targets.iter().map(|target| target.path.clone())
@@ -458,18 +460,19 @@ pub(crate) fn queue_the_targets<W: RunWatcher>(config: &EngineConfig, targets: &
     let mut scopes_of_directories = HashMap::new();
     let climb = PresetClimb::new(test_patterns.get_presets_taken_back());
     let checkout = config.checkout.as_ref().map(engine::targets::resolve_checkout);
+    let tree = TreeView;
     for target in crate::engine::targets::topmost_targets(targets) {
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(&target);
         let own_root = targets.find_names_root_of(&target.path);
         let names_root = find_names_root_of_target(&config.test_patterns, &target.path, own_root);
         let exclude_root = find_names_root_of_target(&config.exclude_patterns, &target.path, own_root);
-        if dir_path.is_file() {
+        if tree.is_file(dir_path) {
             let lookup = language_lookups.get_of_module(module);
             let Some(lang_name) = lookup.of_path_or_shebang(dir_path) else {
                 continue;
             };
-            let size = std::fs::metadata(dir_path).map_or(0, |m| m.len());
+            let size = tree.get_file_size(dir_path).unwrap_or(0);
             let queued = match targets.was_written_by_hand(dir_path) {
                 true => ParsableFile::written_by_hand(dir_path.to_path_buf(), lang_name, module, size),
                 false => ParsableFile::new(dir_path.to_path_buf(), lang_name, module, size)
@@ -485,8 +488,8 @@ pub(crate) fn queue_the_targets<W: RunWatcher>(config: &EngineConfig, targets: &
             files_present.total_files += 1;
             files_present.relevant_files += 1;
             watcher.record_file_found();
-        } else if dir_path.is_dir() {
-            let gitignore_stack = GitignoreStack::for_root_dir(dir_path, ObeyedIgnoreFiles::of(config));
+        } else if tree.is_dir(dir_path) {
+            let gitignore_stack = GitignoreStack::for_root_dir(dir_path, ObeyedIgnoreFiles::of(config), &tree);
             let scope = find_test_scope_of_target(config, test_patterns, dir_path, names_root, OwnListing::ReadByTheWalk, &climb,
                     checkout.as_ref(), &mut scopes_of_directories);
             dirs_injector.push(TraversedDir::new(dir_path.to_path_buf(), gitignore_stack, module, scope, exclude_root));
@@ -538,7 +541,8 @@ fn find_test_scope_of_target(config: &EngineConfig, test_patterns: &PathPatternM
         return DirectoryScope::default();
     }
     known.entry((directory.to_path_buf(), names_root, own_listing))
-            .or_insert_with(|| DirectoryScope::of_target(directory, names_root, test_patterns, climb, own_listing, checkout))
+            .or_insert_with(|| DirectoryScope::of_target(directory, names_root, test_patterns, climb, own_listing, checkout,
+                    &TreeView))
             .clone()
 }
 
@@ -710,40 +714,40 @@ impl GitignoreStack {
         }
     }
 
-    pub(crate) fn extend_with_dir(dir: &Path, parent: Option<Arc<GitignoreStack>>, obeyed: ObeyedIgnoreFiles)
+    pub(crate) fn extend_with_dir(dir: &Path, parent: Option<Arc<GitignoreStack>>, obeyed: ObeyedIgnoreFiles, tree: &TreeView)
     -> Option<Arc<GitignoreStack>>
     {
-        let present = obeyed.get_file_names().filter(|name| dir.join(name).is_file()).collect::<Vec<_>>();
+        let present = obeyed.get_file_names().filter(|name| tree.is_file(&dir.join(name))).collect::<Vec<_>>();
         Self::extend_with_ignore_files(dir, parent, &present)
     }
 
     // The ignore files of every dir between the repository root and the given dir, excluding it
-    fn of_ancestors(dir: &Path, obeyed: ObeyedIgnoreFiles) -> Option<Arc<GitignoreStack>> {
-        if dir.join(".git").exists() {
+    fn of_ancestors(dir: &Path, obeyed: ObeyedIgnoreFiles, tree: &TreeView) -> Option<Arc<GitignoreStack>> {
+        if tree.is_repository_root(dir) {
             return None;
         }
 
         let mut relevant_ancestors: Vec<&Path> = Vec::new();
         for ancestor in dir.ancestors().skip(1) {
             relevant_ancestors.push(ancestor);
-            if ancestor.join(".git").exists() {
+            if tree.is_repository_root(ancestor) {
                 break;
             }
         }
 
         let mut stack = None;
         for ancestor in relevant_ancestors.iter().rev() {
-            stack = Self::extend_with_dir(ancestor, stack, obeyed);
+            stack = Self::extend_with_dir(ancestor, stack, obeyed, tree);
         }
         stack
     }
 
     // Explicitly given target dirs are traversed even if an ignore file of their ancestors ignores them
-    pub(crate) fn for_root_dir(dir: &Path, obeyed: ObeyedIgnoreFiles) -> Option<Arc<GitignoreStack>> {
+    pub(crate) fn for_root_dir(dir: &Path, obeyed: ObeyedIgnoreFiles, tree: &TreeView) -> Option<Arc<GitignoreStack>> {
         if obeyed.obeys_nothing() {
             return None;
         }
-        let stack = Self::of_ancestors(dir, obeyed);
+        let stack = Self::of_ancestors(dir, obeyed, tree);
         if let Some(s) = &stack && s.is_ignored(dir, true) {
             return None;
         }
@@ -751,14 +755,14 @@ impl GitignoreStack {
     }
 
     // Used for paths that the program discovered on its own, like the matches of a glob pattern
-    pub(crate) fn is_path_ignored(path: &Path, obeyed: ObeyedIgnoreFiles) -> bool {
+    pub(crate) fn is_path_ignored(path: &Path, obeyed: ObeyedIgnoreFiles, tree: &TreeView) -> bool {
         if obeyed.obeys_nothing() {
             return false;
         }
-        let is_dir = path.is_dir();
+        let is_dir = tree.is_dir(path);
         let Some(parent) = path.parent() else { return false };
 
-        let stack = Self::extend_with_dir(parent, Self::of_ancestors(parent, obeyed), obeyed);
+        let stack = Self::extend_with_dir(parent, Self::of_ancestors(parent, obeyed, tree), obeyed, tree);
         match stack {
             Some(x) => x.is_ignored_with_ancestor_dirs(path, is_dir),
             None => false
@@ -846,7 +850,7 @@ mod tests {
         let languages = languages_claiming(&[("Rust", &["rs"]), ("Go", &["go"]), ("Zig", &["zig"])]);
         let modules = Modules::of(&[crate::engine::config::Target::named("backend", "./api"),
                 crate::engine::config::Target::named("frontend", "./web"),
-                crate::engine::config::Target::of("./docs")]);
+                crate::engine::config::Target::of("./docs")], &TreeView);
         assert_eq!(3, modules.count());
 
         let stats = make_language_stats(&languages, modules.count());

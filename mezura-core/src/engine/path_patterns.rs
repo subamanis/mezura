@@ -8,6 +8,7 @@ use globset::{Candidate, GlobBuilder, GlobSet, GlobSetBuilder};
 
 use crate::engine::targets::{WILDCARDS, absolutize_pattern, convert_to_absolute, is_inside_or_at, normalise_separators};
 use crate::engine::test_detection::PresetsTakenBack;
+use crate::engine::tree::TreeView;
 
 const NEGATION : char = '!';
 const PRESET_SIGIL : char = '@';
@@ -44,12 +45,12 @@ impl std::fmt::Display for PatternError {
 
 /// Whether every test pattern of a list reads, for refusing a bad one at the moment somebody typed it.
 pub fn validate_test_patterns(patterns: &[impl AsRef<str>]) -> Result<(), PatternError> {
-    PathPatternMatcher::compile(patterns, TakingBack::Allowed).map(|_| ())
+    PathPatternMatcher::compile(patterns, TakingBack::Allowed, &TreeView).map(|_| ())
 }
 
 /// Whether every exclude pattern reads, a `!` among them refused, for refusing a bad one when typed.
 pub fn validate_exclude_patterns(patterns: &[impl AsRef<str>]) -> Result<(), PatternError> {
-    PathPatternMatcher::compile(patterns, TakingBack::Refused).map(|_| ())
+    PathPatternMatcher::compile(patterns, TakingBack::Refused, &TreeView).map(|_| ())
 }
 
 /// The `!` in front of a pattern, or an empty string, and the rest of the pattern trimmed.
@@ -79,7 +80,7 @@ pub fn absolutize_path_pattern(pattern: &str) -> String {
     let text = normalise_separators(text);
     let (_, without_suffix) = strip_folder_suffix(&text);
     let suffix = &text[without_suffix.len()..];
-    let (place, rest, _) = split_place(without_suffix);
+    let (place, rest, _) = split_place(without_suffix, &TreeView);
     format!("{negation}{}{suffix}", join_place_and_rest(&absolutize_place(place), rest))
 }
 
@@ -87,7 +88,7 @@ pub fn absolutize_path_pattern(pattern: &str) -> String {
 pub fn is_on_disk(pattern: &str) -> bool {
     let text = normalise_separators(split_negation(pattern).1);
     let (_, without_suffix) = strip_folder_suffix(&text);
-    split_place(without_suffix).2
+    split_place(without_suffix, &TreeView).2
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,7 +123,7 @@ pub(crate) struct PathPatternMatcher {
 }
 
 impl PathPatternMatcher {
-    pub(crate) fn compile(patterns: &[impl AsRef<str>], taking_back: TakingBack) -> Result<Self, PatternError> {
+    pub(crate) fn compile(patterns: &[impl AsRef<str>], taking_back: TakingBack, tree: &TreeView) -> Result<Self, PatternError> {
         let mut names = GlobSetBuilder::new();
         let mut paths = GlobSetBuilder::new();
         let mut names_written_at = Vec::new();
@@ -152,7 +153,7 @@ impl PathPatternMatcher {
             }
             let invalid = |_| PatternError::InvalidGlob(pattern.to_owned());
             let kind = if is_a_path_pattern(text) {
-                let (place, on_disk, glob) = resolve_path_pattern(text);
+                let (place, on_disk, glob) = resolve_path_pattern(text, tree);
                 let case_follows_the_filesystem = cfg!(any(windows, target_os = "macos"));
                 for glob in [glob.clone(), format!("{glob}{EVERYTHING_BELOW}")] {
                     paths.add(GlobBuilder::new(&glob).literal_separator(true)
@@ -334,20 +335,20 @@ fn strip_folder_suffix(text: &str) -> (bool, &str) {
 }
 
 // The place is escaped in the glob, so that a folder named 'br [v2]' is a name and no character class
-fn resolve_path_pattern(text: &str) -> (String, bool, String) {
-    let (place, rest, on_disk) = split_place(text);
+fn resolve_path_pattern(text: &str, tree: &TreeView) -> (String, bool, String) {
+    let (place, rest, on_disk) = split_place(text, tree);
     let absolute = absolutize_place(place);
     let glob = join_place_and_rest(&globset::escape(&absolute), rest);
     (absolute, on_disk, glob)
 }
 
 // What exists is taken whole, and otherwise the place ends at the last separator before the first wildcard
-fn split_place(text: &str) -> (&str, &str, bool) {
-    if Path::new(text).exists() {
+fn split_place<'a>(text: &'a str, tree: &TreeView) -> (&'a str, &'a str, bool) {
+    if tree.exists(Path::new(text)) {
         return (text, "", true);
     }
     match text.find(WILDCARDS).and_then(|wildcard| text[..wildcard].rfind('/')) {
-        Some(slash) => (&text[..=slash], &text[slash + 1..], Path::new(&text[..=slash]).exists()),
+        Some(slash) => (&text[..=slash], &text[slash + 1..], tree.exists(Path::new(&text[..=slash]))),
         None => (text, "", false)
     }
 }
@@ -391,7 +392,7 @@ mod tests {
     use super::*;
 
     fn matcher(patterns: &[&str]) -> PathPatternMatcher {
-        PathPatternMatcher::compile(&owned(patterns), TakingBack::Allowed).unwrap()
+        PathPatternMatcher::compile(&owned(patterns), TakingBack::Allowed, &TreeView).unwrap()
     }
 
     fn owned(patterns: &[&str]) -> Vec<String> {
@@ -555,7 +556,7 @@ mod tests {
 
     #[test]
     fn a_pattern_that_names_nothing_or_does_not_parse_is_refused_as_written() {
-        let compile = |patterns: &[&str]| PathPatternMatcher::compile(&owned(patterns), TakingBack::Allowed).map(|_| ());
+        let compile = |patterns: &[&str]| PathPatternMatcher::compile(&owned(patterns), TakingBack::Allowed, &TreeView).map(|_| ());
         assert_eq!(Err(PatternError::Empty("!".to_owned())), compile(&["!"]));
         assert_eq!(Err(PatternError::Empty("/".to_owned())), compile(&["/"]));
         assert_eq!(Err(PatternError::Empty(" ! / ".to_owned())), compile(&[" ! / "]));
@@ -578,7 +579,7 @@ mod tests {
         assert!(validate_exclude_patterns(&owned(&["node_modules", "*.min.js", "src/generated", "./target"])).is_ok());
 
         let root = "D:/dev/".len();
-        let excluded = PathPatternMatcher::compile(&owned(&["node_modules", "*.min.js", "build/"]), TakingBack::Refused).unwrap();
+        let excluded = PathPatternMatcher::compile(&owned(&["node_modules", "*.min.js", "build/"]), TakingBack::Refused, &TreeView).unwrap();
         let path = |x: &str| std::path::PathBuf::from(x);
         assert!(excluded.matches(&path("D:/dev/proj/node_modules"), root, true, &mut Vec::new()));
         assert!(excluded.matches(&path("D:/dev/proj/app/x.min.js"), root, false, &mut Vec::new()));

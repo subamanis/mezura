@@ -14,6 +14,7 @@ use crate::engine::file_parser;
 use crate::engine::identity::ModuleLookups;
 use crate::engine::targets::spell_out;
 use crate::engine::test_detection::ModuleRow;
+use crate::engine::tree::TreeView;
 
 const INITIAL_FILE_BUFFER_BYTES : usize = 150;
 
@@ -193,7 +194,7 @@ fn start_parsing_files<W: RunWatcher>(id: usize, files_injector: &Injector<Parsa
                         // The listing gives no size on unix, and the json report carries one for
                         // every faulty file, so it is asked for here, on the failure path alone
                         let size = match parsable_file.size {
-                            0 => std::fs::metadata(&parsable_file.path).map_or(0, |m| m.len()),
+                            0 => TreeView.get_file_size(&parsable_file.path).unwrap_or(0),
                             listed => listed
                         };
                         local_faulty.push(FaultyFileDetails { path: spell_out(&parsable_file.path), error_msg: x, size })

@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::engine::config::Target;
 use crate::engine::targets::{normalise_separators, path_comparison_key, topmost_targets};
+use crate::engine::tree::TreeView;
 
 // Carried through the queue as an index and never as a name: a string key would be an allocation on
 // every single file.
@@ -24,7 +25,7 @@ impl Modules {
     // Built from the resolved paths and never from what was typed: where the comparison is case
     // sensitive, 'frontend=./Web' over a real './web' matches nothing, that module comes out empty,
     // and every file falls into '(unnamed)' with nothing said about why.
-    pub(crate) fn of(targets: &[Target]) -> Self {
+    pub(crate) fn of(targets: &[Target], tree: &TreeView) -> Self {
         if targets.iter().all(|x| x.module.is_none()) {
             return Modules::default();
         }
@@ -49,7 +50,7 @@ impl Modules {
             }
             let id = modules.id_of(&target.module);
             let key = path_comparison_key(target.path.trim_end_matches('/'));
-            if Path::new(&target.path).is_dir() {
+            if tree.is_dir(Path::new(&target.path)) {
                 modules.dir_boundaries.insert(key, id);
             } else {
                 modules.file_boundaries.insert(key, id);
@@ -114,7 +115,7 @@ mod tests {
             None => Target::of(*entry)
         }).collect::<Vec<_>>();
     
-        Modules::of(&targets)
+        Modules::of(&targets, &TreeView)
     }
 
     #[test]

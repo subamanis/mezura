@@ -7,6 +7,7 @@ use std::path::{Component, Path};
 
 use crate::GitignoreStack;
 use crate::engine::config::{RepositoryCheckout, Target};
+use crate::engine::tree::TreeView;
 
 pub(crate) const WILDCARDS : [char; 4] = ['*', '?', '[', '{'];
 
@@ -98,7 +99,7 @@ pub(crate) fn path_comparison_key(path: &str) -> String {
 // the nested ones are then dropped unless they carry a module of their own.
 //
 // Idempotent, because all of it is existence-first: what one pass resolved, the next takes literally.
-pub(crate) fn resolve(declared: &[Target], obeyed: crate::ObeyedIgnoreFiles, search_in_dotted: bool)
+pub(crate) fn resolve(declared: &[Target], obeyed: crate::ObeyedIgnoreFiles, search_in_dotted: bool, tree: &TreeView)
 -> Result<Targets, TargetError>
 {
     let prepared = validate_and_absolutize(declared)?;
@@ -107,13 +108,13 @@ pub(crate) fn resolve(declared: &[Target], obeyed: crate::ObeyedIgnoreFiles, sea
     let mut names_roots = HashMap::new();
     for target in &prepared {
         let path = Path::new(&target.path);
-        let is_dir = path.is_dir();
-        if is_dir || path.is_file() {
+        let is_dir = tree.is_dir(path);
+        if is_dir || tree.is_file(path) {
             written_by_hand.insert(target.path.clone());
             names_roots.insert(target.path.clone(), find_names_root_of_path(&target.path, !is_dir));
         }
     }
-    let resolved = expand_patterns(prepared, obeyed, search_in_dotted, &mut names_roots)?;
+    let resolved = expand_patterns(prepared, obeyed, search_in_dotted, &mut names_roots, tree)?;
     Ok(Targets { resolved, written_by_hand, names_roots })
 }
 
@@ -124,6 +125,7 @@ pub(crate) fn resolve(declared: &[Target], obeyed: crate::ObeyedIgnoreFiles, sea
 /// moment somebody typed it. It does not expand patterns, because which of a pattern's matches
 /// survive depends on settings this cannot see.
 pub fn validate_and_absolutize(declared: &[Target]) -> Result<Vec<Target>, TargetError> {
+    let tree = TreeView;
     let mut prepared: Vec<Target> = Vec::with_capacity(declared.len());
     for target in declared {
         let (module, trimmed) = (&target.module, target.path.trim());
@@ -137,7 +139,7 @@ pub fn validate_and_absolutize(declared: &[Target]) -> Result<Vec<Target>, Targe
         // nothing. The other way round, the brackets in a real directory's name, or in the working
         // directory a relative path was joined to, are read as a character class and a place that
         // exists is refused.
-        if is_valid_path(trimmed) {
+        if is_valid_path(trimmed, &tree) {
             prepared.push(Target { module, path: convert_to_absolute(trimmed) });
         } else if has_glob_metacharacters(trimmed) {
             prepared.push(Target { module, path: absolutize_pattern(trimmed) });
@@ -159,23 +161,24 @@ pub fn validate_and_absolutize(declared: &[Target]) -> Result<Vec<Target>, Targe
 /// A literal path needs only to exist on disk; a pattern must parse and have at least one match
 /// left after the ignore files, dotted entries and links `config` skips have been taken out.
 pub fn validate_target(target: &Target, config: &crate::EngineConfig) -> Result<(), TargetError> {
+    let tree = TreeView;
     let trimmed = target.path.trim();
-    if is_valid_path(trimmed) {
+    if is_valid_path(trimmed, &tree) {
         return Ok(());
     }
     if !has_glob_metacharacters(trimmed) {
         return Err(TargetError::InvalidPath(trimmed.to_owned()));
     }
     let pattern = absolutize_pattern(trimmed);
-    let Ok(paths) = glob::glob(&pattern) else {
+    let Ok(paths) = tree.expand_glob(&pattern) else {
         return Err(TargetError::InvalidGlob(pattern));
     };
     let base_depth = pattern_base_depth(&pattern);
     let obeyed = crate::ObeyedIgnoreFiles::of(config);
     let mut matched_any = false;
-    for path in paths.flatten().filter(|x| x.is_dir() || x.is_file()) {
+    for path in paths.filter(|x| tree.is_dir(x) || tree.is_file(x)) {
         matched_any = true;
-        if is_relevant_glob_match(&path, base_depth, obeyed, config.should_search_in_dotted) {
+        if is_relevant_glob_match(&path, base_depth, obeyed, config.should_search_in_dotted, &tree) {
             return Ok(());
         }
     }
@@ -307,18 +310,18 @@ fn is_ancestor_of(ancestor: &str, path: &str) -> bool {
 }
 
 fn expand_patterns(targets: Vec<Target>, obeyed: crate::ObeyedIgnoreFiles, search_in_dotted: bool,
-        names_roots: &mut HashMap<String, usize>)
+        names_roots: &mut HashMap<String, usize>, tree: &TreeView)
 -> Result<Vec<Target>, TargetError>
 {
     let mut resolved = Vec::with_capacity(targets.len());
     for target in targets {
         // Existence decides here too: prepared targets come back through this on the second
         // resolution pass, and an absolutized literal may carry pattern characters it never typed
-        if !is_valid_path(&target.path) && has_glob_metacharacters(&target.path) {
-            let Ok(paths) = glob::glob(&target.path) else {
+        if !is_valid_path(&target.path, tree) && has_glob_metacharacters(&target.path) {
+            let Ok(paths) = tree.expand_glob(&target.path) else {
                 return Err(TargetError::InvalidGlob(target.path));
             };
-            let matches = paths.flatten().filter(|x| x.is_dir() || x.is_file()).collect::<Vec<_>>();
+            let matches = paths.filter(|x| tree.is_dir(x) || tree.is_file(x)).collect::<Vec<_>>();
             if matches.is_empty() {
                 return Err(TargetError::NoGlobMatches(target.path));
             }
@@ -326,7 +329,7 @@ fn expand_patterns(targets: Vec<Target>, obeyed: crate::ObeyedIgnoreFiles, searc
             let base_depth = pattern_base_depth(&target.path);
             let names_root = find_names_root_of_pattern(&target.path);
             let relevant = matches.iter()
-                    .filter(|x| is_relevant_glob_match(x, base_depth, obeyed, search_in_dotted))
+                    .filter(|x| is_relevant_glob_match(x, base_depth, obeyed, search_in_dotted, tree))
                     .filter_map(|x| x.to_str().map(convert_to_absolute))
                     .map(|path| Target { module: target.module.clone(), path }).collect::<Vec<_>>();
             if relevant.is_empty() {
@@ -368,11 +371,11 @@ fn is_dotted_below_base(path: &Path, base_depth: usize, search_in_dotted: bool) 
 // skipped, since it counts whatever it points at a second time. Named on its own it is still
 // followed, as any target is.
 fn is_relevant_glob_match(path: &Path, base_depth: usize, obeyed: crate::ObeyedIgnoreFiles,
-        search_in_dotted: bool) -> bool
+        search_in_dotted: bool, tree: &TreeView) -> bool
 {
     !is_dotted_below_base(path, base_depth, search_in_dotted)
-            && !path.is_symlink()
-            && !GitignoreStack::is_path_ignored(path, obeyed)
+            && !tree.is_link(path)
+            && !GitignoreStack::is_path_ignored(path, obeyed, tree)
             && path.to_str().is_some()
 }
 
@@ -388,9 +391,9 @@ fn has_glob_metacharacters(s: &str) -> bool {
     s.contains(WILDCARDS)
 }
 
-fn is_valid_path(s: &str) -> bool {
+fn is_valid_path(s: &str, tree: &TreeView) -> bool {
     let p = Path::new(s.trim());
-    p.is_dir() || p.is_file()
+    tree.is_dir(p) || tree.is_file(p)
 }
 
 // A share canonicalizes to '\\?\UNC\server\share\x', and dropping the whole prefix would leave a
@@ -528,7 +531,7 @@ mod target_path_tests {
         std::fs::create_dir_all(&bracketed).unwrap();
         let bracketed_str = bracketed.to_str().unwrap().replace('\\', "/");
 
-        let resolved = resolve(&[Target::of(bracketed_str)], obey_every_ignore_file(), false);
+        let resolved = resolve(&[Target::of(bracketed_str)], obey_every_ignore_file(), false, &TreeView);
         std::fs::remove_dir_all(&root).unwrap();
 
         let resolved = resolved.unwrap();
@@ -539,7 +542,7 @@ mod target_path_tests {
     fn resolved_paths(declared: Vec<Target>, respect_ignore_files: bool) -> Result<Vec<String>, TargetError> {
         let obeyed = crate::ObeyedIgnoreFiles { gitignore: respect_ignore_files,
                 search_tools: respect_ignore_files };
-        resolve(&declared, obeyed, false).map(|x| x.iter().map(Target::to_string).collect())
+        resolve(&declared, obeyed, false, &TreeView).map(|x| x.iter().map(Target::to_string).collect())
     }
 
     fn obey_every_ignore_file() -> crate::ObeyedIgnoreFiles {
@@ -553,9 +556,11 @@ mod target_path_tests {
         std::fs::create_dir_all(&root).unwrap();
         let root_str = root.to_str().unwrap().replace('\\', "/");
 
-        let contested = resolve(&[Target::named("code", root_str.clone()), Target::named("other", root_str.clone())], obey_every_ignore_file(), false);
-        let unnamed = resolve(&[Target::named("code", root_str.clone()), Target::of(root_str.clone())], obey_every_ignore_file(), false);
-        let repeated = resolve(&[Target::named("code", root_str.clone()), Target::named("code", root_str)], obey_every_ignore_file(), false);
+        let contested = resolve(&[Target::named("code", root_str.clone()), Target::named("other", root_str.clone())], obey_every_ignore_file(), false,
+                &TreeView);
+        let unnamed = resolve(&[Target::named("code", root_str.clone()), Target::of(root_str.clone())], obey_every_ignore_file(), false, &TreeView);
+        let repeated = resolve(&[Target::named("code", root_str.clone()), Target::named("code", root_str)], obey_every_ignore_file(), false,
+                &TreeView);
         std::fs::remove_dir_all(&root).unwrap();
 
         assert!(matches!(contested, Err(TargetError::Contested(_, ref a, ref b)) if a == "code" && b == "other"));
@@ -672,15 +677,16 @@ mod target_path_tests {
         let root_str = root.to_str().unwrap().replace('\\', "/");
         let abs = |x: &str| convert_to_absolute(&format!("{root_str}/{x}"));
 
-        let kept = resolve(&[Target::of(format!("{root_str}/src/*/x.rs"))], obey_every_ignore_file(), false).unwrap();
+        let kept = resolve(&[Target::of(format!("{root_str}/src/*/x.rs"))], obey_every_ignore_file(), false, &TreeView).unwrap();
         assert_eq!(vec![abs("src/open/x.rs")], kept.iter().map(|t| t.path.clone()).collect::<Vec<_>>());
 
-        let with_dotted = resolve(&[Target::of(format!("{root_str}/**/*.rs"))], obey_every_ignore_file(), true).unwrap();
+        let with_dotted = resolve(&[Target::of(format!("{root_str}/**/*.rs"))], obey_every_ignore_file(), true, &TreeView).unwrap();
         assert_eq!(vec![abs("src/.hidden/x.rs"), abs("src/open/x.rs")],
                 with_dotted.iter().map(|t| t.path.clone()).collect::<Vec<_>>(),
                 "'.git' was matched by a pattern under '--search-in-dotted'");
 
-        let explicit_dotted = resolve(&[Target::of(format!("{root_str}/src/.hidden/*.rs"))], obey_every_ignore_file(), false).unwrap();
+        let explicit_dotted = resolve(&[Target::of(format!("{root_str}/src/.hidden/*.rs"))], obey_every_ignore_file(), false, &TreeView)
+                .unwrap();
         assert_eq!(vec![abs("src/.hidden/x.rs")], explicit_dotted.iter().map(|t| t.path.clone()).collect::<Vec<_>>());
 
         std::fs::remove_dir_all(std::env::temp_dir().join("mezura-dotted-holder")).unwrap();
@@ -747,7 +753,7 @@ mod target_path_tests {
         let pattern_str = nowhere.join("a?b").to_str().unwrap().replace('\\', "/");
         let plain_str = nowhere.join("plain").to_str().unwrap().replace('\\', "/");
 
-        assert!(matches!(resolve(&[Target::of(pattern_str)], obey_every_ignore_file(), false),
+        assert!(matches!(resolve(&[Target::of(pattern_str)], obey_every_ignore_file(), false, &TreeView),
                 Err(TargetError::NoGlobMatches(_))));
         assert!(matches!(validate_and_absolutize(&[Target::of(plain_str.clone())]), Err(TargetError::InvalidPath(p)) if p == plain_str));
     }
@@ -802,7 +808,7 @@ mod target_path_tests {
         let root_str = convert_to_absolute(&root.join("a/..").to_string_lossy());
         let declared = [Target::of(format!("{root_str}/a")), Target::of(format!("{root_str}/b/src/../src")),
                 Target::of(format!("{root_str}/*/src")), Target::of(format!("{root_str}/a/src/one.rs"))];
-        let resolved = resolve(&declared, obey_every_ignore_file(), false).unwrap();
+        let resolved = resolve(&declared, obey_every_ignore_file(), false, &TreeView).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
 
         let below_root = |path: &str| path[resolved.find_names_root_of(path)..].to_owned();

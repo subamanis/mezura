@@ -12,6 +12,7 @@ use crate::domain::FileStats;
 use crate::engine::file_parser::{BYTE_ORDER_MARK, NestedLanguageLookup, TestReport, read_module_declarations};
 use crate::engine::modules::ModuleId;
 use crate::engine::targets::spell_out;
+use crate::engine::tree::TreeView;
 use super::attribute::RAW_IDENTIFIER;
 use super::{attribute, build_byte_table, find_next_brace, find_word_end, is_word_byte, is_word_start, skip_whitespace};
 
@@ -100,11 +101,11 @@ pub(crate) struct FilesOnDisk<'a> {
 
 impl DeclarationSource for FilesOnDisk<'_> {
     fn is_file(&mut self, path: &Path) -> bool {
-        path.is_file()
+        TreeView.is_file(path)
     }
 
     fn read_declarations(&mut self, path: &Path, language_name: &str) -> Option<Vec<Declaration>> {
-        let contents = std::fs::read_to_string(path).ok()?;
+        let contents = String::from_utf8(TreeView.read_file(path).ok()?).ok()?;
         let language = self.lookup.languages.get(language_name)?;
         let mut declarations = read_module_declarations(&contents, language, self.lookup, self.config)?;
         if (self.is_whole)(path) {
@@ -114,7 +115,9 @@ impl DeclarationSource for FilesOnDisk<'_> {
     }
 
     fn list_files(&mut self, folder: &Path) -> Vec<PathBuf> {
-        std::fs::read_dir(folder).map(|listing| listing.flatten().map(|entry| entry.path()).collect()).unwrap_or_default()
+        let mut items = Vec::new();
+        TreeView.list_dir_into(folder, &mut items)
+                .map(|()| items.into_iter().map(|item| folder.join(item.name)).collect()).unwrap_or_default()
     }
 }
 

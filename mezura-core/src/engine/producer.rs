@@ -1,6 +1,4 @@
-use std::ffi::{OsStr, OsString};
-use std::fs;
-use std::fs::DirEntry;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -18,6 +16,7 @@ use crate::engine::modules::{ModuleId, Modules};
 use crate::engine::path_patterns::PathPatternMatcher;
 use crate::engine::targets::spell_out;
 use crate::engine::test_detection::{ActivePreset, BuildFilesSeen, DirectoryScope, PresetsTakenBack, TestScope, TriggerFilesSeen};
+use crate::engine::tree::{DirItem, ItemKind, TreeView};
 
 // A panic is caught here rather than read back from 'join', because these threads stop by counting
 // how many of them have gone idle against how many started: one that dies without ever going idle
@@ -69,6 +68,7 @@ fn search_for_files<W: RunWatcher>(id: usize, files_injector: &Injector<Parsable
     let mut ignore_files = Vec::new();
     let mut patterns_found = Vec::new();
     let presets_taken_back = test_patterns.get_presets_taken_back();
+    let tree = TreeView;
 
     loop {
         // Newest of its own subdirectories first, so a thread finishes the branch it is in before it
@@ -89,20 +89,17 @@ fn search_for_files<W: RunWatcher>(id: usize, files_injector: &Injector<Parsable
                 panic!("test-induced producer panic");
             }
 
-            match fs::read_dir(&dir.path) {
-                Ok(read_dir) => {
-                    // The whole listing is read before a single child is pushed, so the build files
-                    // in it settle the scope of every child before anything under that child is
-                    // found. A listing made streaming would break that without a word.
-                    entries.extend(read_dir.flatten().map(|entry| {
-                        let file_name = entry.file_name();
-                        (entry, file_name)
-                    }));
+            // The whole listing is read before a single child is pushed, so the build files in it
+            // settle the scope of every child before anything under that child is found. A listing
+            // made streaming would break that without a word.
+            match tree.list_dir_into(&dir.path, &mut entries) {
+                Ok(()) => {
                     let (build_files, trigger_files) = find_ignore_build_and_trigger_files_among(&entries,
-                            ObeyedIgnoreFiles::of(config), config.detect_tests, &mut ignore_files);
+                            ObeyedIgnoreFiles::of(config), config.detect_tests, &mut ignore_files, &dir.path, &tree);
                     let gitignore_stack = GitignoreStack::extend_with_ignore_files(&dir.path,
                             dir.gitignore_stack.clone(), &ignore_files);
-                    let with_presets = turn_on_presets(&dir.scope, trigger_files, &dir.path, presets_taken_back, applied_presets);
+                    let with_presets = turn_on_presets(&dir.scope, trigger_files, &dir.path, presets_taken_back, applied_presets,
+                            &tree);
                     traverse_dir(files_injector, &mut entries, &worker, language_lookups, exclude_patterns, dir.exclude_root,
                             test_patterns, &mut patterns_found, &gitignore_stack, config, modules, dir.module,
                             with_presets.as_ref().unwrap_or(&dir.scope), build_files, &dir.path, &mut files_present, watcher)
@@ -153,8 +150,8 @@ fn steal_a_dir(id: usize, dirs_injector: &Injector<TraversedDir>, stealers: &[St
     None
 }
 
-fn find_ignore_build_and_trigger_files_among(entries: &[(DirEntry, OsString)], obeyed: ObeyedIgnoreFiles, detect_tests: bool,
-        ignore_files: &mut Vec<&'static str>)
+fn find_ignore_build_and_trigger_files_among(entries: &[DirItem], obeyed: ObeyedIgnoreFiles, detect_tests: bool,
+        ignore_files: &mut Vec<&'static str>, directory: &Path, tree: &TreeView)
 -> (BuildFilesSeen, TriggerFilesSeen)
 {
     ignore_files.clear();
@@ -163,8 +160,8 @@ fn find_ignore_build_and_trigger_files_among(entries: &[(DirEntry, OsString)], o
     if obeyed.obeys_nothing() && !detect_tests {
         return (build_files, trigger_files);
     }
-    for (entry, file_name) in entries {
-        let name = file_name.as_encoded_bytes();
+    for item in entries {
+        let name = item.name.as_encoded_bytes();
         let ignore_file = obeyed.get_file_names().find(|wanted| is_the_same_name(name, wanted.as_bytes()));
         let is_a_build_file = detect_tests && BuildFilesSeen::is_a_build_file(name);
         let is_a_trigger_file = detect_tests && TriggerFilesSeen::is_a_trigger_file(name);
@@ -173,10 +170,11 @@ fn find_ignore_build_and_trigger_files_among(entries: &[(DirEntry, OsString)], o
         }
         // A listing says a symbolic link is a link and not what it points at, and an ignore file
         // reached through one is still read, so that case alone asks the disk.
-        let is_a_file = entry.file_type().is_ok_and(|file_type| match file_type.is_symlink() {
-            true => entry.path().is_file(),
-            false => file_type.is_file()
-        });
+        let is_a_file = match item.kind {
+            ItemKind::File => true,
+            ItemKind::Link => tree.is_file(&join_path(directory, &item.name)),
+            ItemKind::Dir => false
+        };
         if !is_a_file {
             continue;
         }
@@ -200,9 +198,9 @@ fn find_ignore_build_and_trigger_files_among(entries: &[(DirEntry, OsString)], o
 
 // Before the listing is walked, so that a test file beside the tool's own file is taken as one
 fn turn_on_presets(scope: &DirectoryScope, trigger_files: TriggerFilesSeen, directory: &Path, taken_back: PresetsTakenBack,
-        applied_presets: &Mutex<Vec<Arc<ActivePreset>>>) -> Option<DirectoryScope>
+        applied_presets: &Mutex<Vec<Arc<ActivePreset>>>, tree: &TreeView) -> Option<DirectoryScope>
 {
-    let turned_on = trigger_files.turn_on(directory, taken_back);
+    let turned_on = trigger_files.turn_on(directory, taken_back, tree);
     if turned_on.is_empty() {
         return None;
     }
@@ -212,7 +210,7 @@ fn turn_on_presets(scope: &DirectoryScope, trigger_files: TriggerFilesSeen, dire
 
 // 'module' is decided when the directory is queued and its entries inherit it. The two lookups below
 // only happen in a run with a target inside another target.
-fn traverse_dir<W: RunWatcher>(files_injector: &Injector<ParsableFile>, entries: &mut Vec<(DirEntry, OsString)>, dirs_worker: &Worker<TraversedDir>,
+fn traverse_dir<W: RunWatcher>(files_injector: &Injector<ParsableFile>, entries: &mut Vec<DirItem>, dirs_worker: &Worker<TraversedDir>,
         language_lookups: &ModuleLookups, exclude_patterns: &PathPatternMatcher, exclude_root: usize, test_patterns: &PathPatternMatcher,
         patterns_found: &mut Vec<usize>, gitignore_stack: &Option<Arc<GitignoreStack>>, config: &EngineConfig, modules: &Modules,
         module: ModuleId, scope: &DirectoryScope, build_files: BuildFilesSeen, dir_path: &Path, files_present: &mut FilesPresent,
@@ -222,18 +220,12 @@ fn traverse_dir<W: RunWatcher>(files_injector: &Injector<ParsableFile>, entries:
     let mut local_relevant_files = 0;
     let mut local_excluded_files = 0;
     let (dir_boundaries, file_boundaries) = (modules.has_dir_boundaries(), modules.has_file_boundaries());
-    for (e, file_name) in entries.drain(..) {
-        if let Ok(ft) = e.file_type() {
-            // A link is where files already counted elsewhere get counted again. Tested before the
-            // two arms below and not inside them, because the second is reached by everything that
-            // is not a file: on Windows a junction answers no to both 'is_file' and 'is_dir', and a
-            // link to one file lands there too, fails to open and vanishes without a word. A target
-            // named explicitly is still followed; only what the scan finds by itself must not
-            // double back.
-            if ft.is_symlink() {
-                continue;
-            }
-            if ft.is_file() {
+    for DirItem { name: file_name, kind, size } in entries.drain(..) {
+        match kind {
+            // A link is where files already counted elsewhere get counted again. A target named
+            // explicitly is still followed. Only what the scan finds by itself must not double back.
+            ItemKind::Link => {},
+            ItemKind::File => {
                 // A worktree or a submodule keeps in a '.git' file what a repository keeps in its folder
                 if file_name == ".git" { continue; }
                 local_total_files += 1;
@@ -267,9 +259,6 @@ fn traverse_dir<W: RunWatcher>(files_injector: &Injector<ParsableFile>, entries:
                     continue;
                 };
                 local_relevant_files += 1;
-                // Free on Windows, where the directory listing carries it. Elsewhere it would be one
-                // call per file, and the consumer learns the size from the read itself.
-                let size = if cfg!(windows) { e.metadata().map_or(0, |m| m.len()) } else { 0 };
                 let (test_scope, _, decided_by_presets) = match config.detect_tests {
                     true => scope.of_file(&path_buf, test_patterns, patterns_found),
                     false => (TestScope::Ordinary, None, None)
@@ -278,7 +267,8 @@ fn traverse_dir<W: RunWatcher>(files_injector: &Injector<ParsableFile>, entries:
                         .with_extension_rules(language_lookup.find_extension_rules(name))
                         .with_test_scope(test_scope, decided_by_presets));
                 watcher.record_file_found();
-            } else {
+            },
+            ItemKind::Dir => {
                 // Read lossily, and only to ask whether it is dotted, which a lossy reading answers
                 // correctly since a leading '.' is ASCII and survives any replacement. Demanding
                 // valid UTF-8 skips the whole directory over a name used for nothing else.
@@ -322,6 +312,8 @@ fn join_path(dir_path: &Path, file_name: &OsStr) -> PathBuf {
 // walk queued and under which module, which a result has already folded into buckets.
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use crate::engine::config::Target;
     use crate::engine::path_patterns::TakingBack;
@@ -370,7 +362,7 @@ mod tests {
         };
         // The same first step 'run' takes, with the flags the walk is about to obey
         let targets = crate::engine::targets::resolve(&config.targets, crate::ObeyedIgnoreFiles::of(&config),
-                config.should_search_in_dotted).unwrap();
+                config.should_search_in_dotted, &TreeView).unwrap();
         let language_map = crate::languages::keyed_by_name(
                 crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0);
         let files_injector = Injector::new();
@@ -380,13 +372,13 @@ mod tests {
                         by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
                         by_shebang: build_language_map_by(ClaimKind::Shebang, &language_map, &Default::default(), &Default::default()).0,
                         ..Default::default() }));
-        let modules = Modules::of(&targets);
+        let modules = Modules::of(&targets, &TreeView);
         let mut files_present = FilesPresent::default();
-        let test_patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed).unwrap();
+        let test_patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed, &TreeView).unwrap();
         let above = queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector, &mut files_present,
                 &language_lookups, &modules, &crate::Unwatched);
 
-        let exclude_patterns = PathPatternMatcher::compile(&config.exclude_patterns.patterns, TakingBack::Refused).unwrap();
+        let exclude_patterns = PathPatternMatcher::compile(&config.exclude_patterns.patterns, TakingBack::Refused, &TreeView).unwrap();
         let (found, _) = search_for_files(0, &files_injector, &dirs_injector,
                 Worker::new_lifo(), &[], &idle_producers, &language_lookups, &exclude_patterns, &test_patterns, &config, &modules,
                 &Mutex::new(above), &AtomicUsize::new(1), &crate::Unwatched);
@@ -628,21 +620,21 @@ mod tests {
 
         let config = EngineConfig { threads: crate::Threads::new(1, 1), ..EngineConfig::new([&root_str]) };
         let targets = crate::engine::targets::resolve(&config.targets, crate::ObeyedIgnoreFiles::of(&config),
-                config.should_search_in_dotted).unwrap();
+                config.should_search_in_dotted, &TreeView).unwrap();
         let language_map = crate::languages::keyed_by_name(
                 crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0);
         let language_lookups = ModuleLookups::OfTheWholeRun(Box::new(
                 LanguageLookup { by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
                         ..Default::default() }));
-        let modules = Modules::of(&targets);
+        let modules = Modules::of(&targets, &TreeView);
         let (files_injector, dirs_injector) = (Injector::new(), Injector::new());
         let mut files_present = FilesPresent::default();
-        let test_patterns = PathPatternMatcher::compile(&[] as &[&str], TakingBack::Allowed).unwrap();
+        let test_patterns = PathPatternMatcher::compile(&[] as &[&str], TakingBack::Allowed, &TreeView).unwrap();
         queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector,
                 &mut files_present, &language_lookups, &modules, &crate::Unwatched);
         dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0, DirectoryScope::default(), 0));
 
-        let exclude_patterns = PathPatternMatcher::compile(&[] as &[&str], TakingBack::Refused).unwrap();
+        let exclude_patterns = PathPatternMatcher::compile(&[] as &[&str], TakingBack::Refused, &TreeView).unwrap();
         let (found, unreadable) = search_for_files(0, &files_injector, &dirs_injector,
                 Worker::new_lifo(), &[], &AtomicUsize::new(0), &language_lookups, &exclude_patterns, &test_patterns,
                 &config, &modules, &Mutex::new(Vec::new()), &AtomicUsize::new(1), &crate::Unwatched);

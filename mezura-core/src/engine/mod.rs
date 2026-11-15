@@ -11,6 +11,7 @@ pub(crate) mod masks;
 pub(crate) mod modules;
 pub(crate) mod producer;
 pub(crate) mod test_detection;
+pub(crate) mod tree;
 
 // Compared without regard to case wherever the filesystem ignores it, since the name a listing
 // spells is the same file there.
