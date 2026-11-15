@@ -59,6 +59,7 @@ pub enum GitError {
     PatternTarget { pattern: String },
     // The revision was read and the counting of it failed, so git had no part in this one.
     CountingRevision { revision: String, error: mezura_core::RunError },
+    FetchRunsRepositoryProgram { repository: String, revision: String, setting: String },
     Refused { doing: &'static str, message: String }
 }
 
@@ -76,6 +77,7 @@ impl std::fmt::Display for GitError {
             Self::SameCommit { first, second, commit } => write!(f, "'{first}' and '{second}' name the same commit, {}, so the comparison has nothing to say.", &commit[..commit.len().min(12)]),
             Self::PatternTarget { pattern } => write!(f, "'{pattern}' is a glob pattern, and what it matches in the working tree and what it would match at that commit are two different sets of files. Write out the paths it should mean."),
             Self::CountingRevision { revision, error } => write!(f, "'{revision}' was written out, but counting it failed. {error}"),
+            Self::FetchRunsRepositoryProgram { repository, revision, setting } => write!(f, "'{repository}' lacks files of '{revision}', and fetching them would run a program named by '{setting}' in the repository's own configuration. If that setting is yours, move it to your own git configuration and run this again."),
             Self::Refused { doing, message } => write!(f, "git refused while {doing}: {message}")
         }
     }

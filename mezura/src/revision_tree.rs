@@ -112,7 +112,12 @@ fn fetch_missing_objects(resolved: &ResolvedRevision) -> Result<(), GitError> {
         if missing.is_empty() || missing == asked_for {
             return Ok(());
         }
-        let mut fetch = build_hardened_git(repository).args(["-c", "fetch.negotiationAlgorithm=noop", "fetch", "--no-tags",
+        let mut command = build_hardened_git(repository);
+        if asked_for.is_empty() && let Some(setting) = find_setting_naming_a_fetch_program(repository, &command) {
+            return Err(GitError::FetchRunsRepositoryProgram { repository: repository.to_owned(),
+                    revision: resolved.revision.clone(), setting });
+        }
+        let mut fetch = command.args(["-c", "fetch.negotiationAlgorithm=noop", "fetch", "--no-tags",
                 "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none", "--stdin", "--", &promisor])
                 .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(GitError::NotInstalled)?;
         if let Some(mut input) = fetch.stdin.take() {
@@ -125,6 +130,20 @@ fn fetch_missing_objects(resolved: &ResolvedRevision) -> Result<(), GitError> {
         }
         asked_for = missing;
     }
+}
+
+// What the person's own configuration and the machine's name is theirs to trust, so only the
+// repository's own counts. 'GIT_SSH_COMMAND' outranks 'core.sshCommand' wherever it is set.
+fn find_setting_naming_a_fetch_program(repository: &str, fetch: &Command) -> Option<String> {
+    let ssh_command_is_given = std::env::var_os("GIT_SSH_COMMAND").is_some()
+            || fetch.get_envs().any(|(name, value)| name == "GIT_SSH_COMMAND" && value.is_some());
+    let settings = read_git_config(repository, &["--show-scope", "--get-regexp",
+            r"^(core\.(gitproxy|sshcommand)|credential\.(.*\.)?helper)$"])?;
+    settings.lines().filter_map(|line| line.split_once('\t'))
+            .filter(|(scope, _)| matches!(*scope, "local" | "worktree"))
+            .filter_map(|(_, setting)| setting.split_once(' '))
+            .find(|(name, program)| !program.trim().is_empty() && !(*name == "core.sshcommand" && ssh_command_is_given))
+            .map(|(name, _)| name.to_owned())
 }
 
 fn read_output_of(command: &mut Command, doing: &'static str) -> Result<Vec<u8>, GitError> {
@@ -388,6 +407,31 @@ mod tests {
         let resolved = resolve_revision(&normalise_separators(&clone.to_string_lossy()), "HEAD~1").unwrap();
         assert!(matches!(super::mount_revision(&resolved), Err(GitError::Refused { .. })));
         assert!(!Path::new(&ran).exists(), "the program the repository names as its transport was run");
+        remove_directory_tree(&holder).unwrap();
+    }
+
+    #[test]
+    fn the_fetch_is_refused_while_the_repositorys_own_configuration_names_a_program_for_it() {
+        let _guard = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let holder = create_fresh_folder("mezura-mounted-program-settings");
+        let origin = create_origin(&holder);
+        let _ssh = crate::test_support::install_local_ssh_helper();
+        let clone = clone_partially(&origin, &holder, "blob:none");
+        let resolved = resolve_revision(&normalise_separators(&clone.to_string_lossy()), "HEAD~1").unwrap();
+        let ran = normalise_separators(&holder.join("ran").to_string_lossy()).into_owned();
+        let ssh_command = format!("echo ran > '{ran}' #");
+
+        for (setting, program) in [("credential.helper", "store"), ("credential.https://example.com.helper", "store"),
+                ("core.gitProxy", "proxy-command"), ("core.sshCommand", ssh_command.as_str())] {
+            run_git(&clone, &["config", setting, program]);
+            assert!(matches!(super::mount_revision(&resolved), Err(GitError::FetchRunsRepositoryProgram { setting: named, .. })
+                    if named.eq_ignore_ascii_case(setting)), "'{setting}' in the repository's own configuration did not stop the fetch");
+            run_git(&clone, &["config", "--unset", setting]);
+        }
+        assert!(!Path::new(&ran).exists(), "the ssh command the repository names was run");
+
+        run_git(&clone, &["config", "credential.helper", ""]);
+        drop(super::mount_revision(&resolved).unwrap());
         remove_directory_tree(&holder).unwrap();
     }
 
