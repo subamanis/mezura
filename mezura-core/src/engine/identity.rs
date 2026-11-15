@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::{Language, warnings};
 use crate::engine::modules::{ModuleId, Modules};
+use crate::engine::tree::TreeView;
 
 // Longer than any extension or filename anybody writes: the stack buffer below is what keeps the
 // case-insensitive lookup from allocating once per file
@@ -275,8 +276,8 @@ impl LanguageLookup {
 
     // For a file named directly as a target, where nothing between the name lookup and the probe
     // gets to exclude it
-    pub(crate) fn of_path_or_shebang(&self, path: &Path) -> Option<Arc<str>> {
-        self.of_path(path).or_else(|| self.of_shebang(path))
+    pub(crate) fn of_path_or_shebang(&self, path: &Path, tree: &TreeView) -> Option<Arc<str>> {
+        self.of_path(path).or_else(|| self.of_shebang(path, tree))
     }
 
     pub(crate) fn find_extension_rules(&self, name: &Path) -> Option<Arc<ExtensionRules>> {
@@ -306,11 +307,11 @@ impl LanguageLookup {
                 && !self.claims_the_whole_name(path)
     }
 
-    pub(crate) fn of_shebang(&self, path: &Path) -> Option<Arc<str>> {
+    pub(crate) fn of_shebang(&self, path: &Path, tree: &TreeView) -> Option<Arc<str>> {
         if !self.needs_a_shebang_probe(path) {
             return None;
         }
-        let (buffer, length) = read_first_bytes(path)?;
+        let (buffer, length) = read_first_bytes(path, tree)?;
         let mut line = &buffer[..length];
         // A full buffer with no line break means the first line was cut, and a cut word must
         // not be matched: 'rubyfmt' cut at 'ruby' would count as Ruby. Everything after the
@@ -439,9 +440,16 @@ pub(crate) fn find_interpreter(first_line: &[u8]) -> Option<&[u8]> {
 
 // Looped because one 'read' may legally return short, and an interrupted call is retried
 // instead of being read as "no language".
-fn read_first_bytes(path: &Path) -> Option<([u8; SHEBANG_READ_LIMIT], usize)> {
-    let mut file = open_for_probe(path)?;
+fn read_first_bytes(path: &Path, tree: &TreeView) -> Option<([u8; SHEBANG_READ_LIMIT], usize)> {
     let mut buffer = [0u8; SHEBANG_READ_LIMIT];
+    if let Some(mount) = tree.find_mount_of(path) {
+        let mut whole = Vec::new();
+        mount.read_into(path, &mut whole).ok()?;
+        let length = whole.len().min(SHEBANG_READ_LIMIT);
+        buffer[..length].copy_from_slice(&whole[..length]);
+        return Some((buffer, length));
+    }
+    let mut file = open_for_probe(path)?;
     let mut length = 0;
     while length < SHEBANG_READ_LIMIT {
         match file.read(&mut buffer[length..]) {
@@ -769,15 +777,15 @@ mod tests {
         let lookup = shebang_lookup(&[("OldPython", &["python"]), ("NewPython", &["python3"]),
                 ("Perl", &["perl"]), ("Raku", &["perl6"]), ("R", &["Rscript"])]);
 
-        assert_eq!(Some("NewPython"), lookup.of_shebang(&script("py312", "#!/usr/bin/python3.12")).as_deref());
-        assert_eq!(Some("OldPython"), lookup.of_shebang(&script("py27", "#!/usr/bin/python2.7")).as_deref());
-        assert_eq!(Some("NewPython"), lookup.of_shebang(&script("enved", "#!/usr/bin/env python3")).as_deref());
-        assert_eq!(Some("Raku"), lookup.of_shebang(&script("raku", "#!/usr/bin/perl6.0.0")).as_deref());
-        assert_eq!(Some("Perl"), lookup.of_shebang(&script("perl", "#!/usr/bin/perl5.36.0")).as_deref());
+        assert_eq!(Some("NewPython"), lookup.of_shebang(&script("py312", "#!/usr/bin/python3.12"), &TreeView::of(&[])).as_deref());
+        assert_eq!(Some("OldPython"), lookup.of_shebang(&script("py27", "#!/usr/bin/python2.7"), &TreeView::of(&[])).as_deref());
+        assert_eq!(Some("NewPython"), lookup.of_shebang(&script("enved", "#!/usr/bin/env python3"), &TreeView::of(&[])).as_deref());
+        assert_eq!(Some("Raku"), lookup.of_shebang(&script("raku", "#!/usr/bin/perl6.0.0"), &TreeView::of(&[])).as_deref());
+        assert_eq!(Some("Perl"), lookup.of_shebang(&script("perl", "#!/usr/bin/perl5.36.0"), &TreeView::of(&[])).as_deref());
         // matched the way every other identity is, without case
-        assert_eq!(Some("R"), lookup.of_shebang(&script("rscript", "#!/usr/bin/env Rscript")).as_deref());
+        assert_eq!(Some("R"), lookup.of_shebang(&script("rscript", "#!/usr/bin/env Rscript"), &TreeView::of(&[])).as_deref());
         // an interpreter that is nothing but digits after the trim is not a match for everything
-        assert_eq!(None, lookup.of_shebang(&script("digits", "#!/usr/bin/386")).as_deref());
+        assert_eq!(None, lookup.of_shebang(&script("digits", "#!/usr/bin/386"), &TreeView::of(&[])).as_deref());
 
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -797,15 +805,15 @@ mod tests {
         // sized so the window ends right after the 'ruby' inside 'rubyfmt'
         let padding = "a".repeat(SHEBANG_READ_LIMIT - "#!/usr/bin/env -S F= ruby".len());
         let cut_mid_word = script("cut", &format!("#!/usr/bin/env -S F={padding} rubyfmt --check"));
-        assert_eq!(None, lookup.of_shebang(&cut_mid_word).as_deref());
+        assert_eq!(None, lookup.of_shebang(&cut_mid_word, &TreeView::of(&[])).as_deref());
 
         // an interpreter that fits inside the window still answers, whatever runs past it
         let cut_in_arguments = script("late-cut", &format!("#!/bin/bash {}", "x".repeat(400)));
-        assert_eq!(Some("Shell"), lookup.of_shebang(&cut_in_arguments).as_deref());
+        assert_eq!(Some("Shell"), lookup.of_shebang(&cut_in_arguments, &TreeView::of(&[])).as_deref());
 
         // and one unbroken word filling the window answers nothing rather than a prefix of itself
         let one_word = script("one-word", &format!("#!/usr/bin/ruby{}", "y".repeat(400)));
-        assert_eq!(None, lookup.of_shebang(&one_word).as_deref());
+        assert_eq!(None, lookup.of_shebang(&one_word, &TreeView::of(&[])).as_deref());
 
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -843,24 +851,24 @@ mod tests {
 
         let deploy = script("deploy", "#!/bin/bash\necho hi\n");
         assert!(lookup.needs_a_shebang_probe(&deploy));
-        assert_eq!(Some("Shell"), lookup.of_shebang(&deploy).as_deref());
-        assert_eq!(Some("Shell"), lookup.of_path_or_shebang(&deploy).as_deref());
+        assert_eq!(Some("Shell"), lookup.of_shebang(&deploy, &TreeView::of(&[])).as_deref());
+        assert_eq!(Some("Shell"), lookup.of_path_or_shebang(&deploy, &TreeView::of(&[])).as_deref());
 
         // an extension, even one nothing claims, keeps the file out of the probe
         let with_extension = script("deploy.xyz", "#!/bin/bash\necho hi\n");
         assert!(!lookup.needs_a_shebang_probe(&with_extension));
-        assert_eq!(None, lookup.of_shebang(&with_extension));
+        assert_eq!(None, lookup.of_shebang(&with_extension, &TreeView::of(&[])));
 
         // a first line that is not a shebang, and a binary-shaped one, both stay unclaimed
-        assert_eq!(None, lookup.of_shebang(&script("LICENSE", "MIT License\n")));
-        assert_eq!(None, lookup.of_shebang(&script("compiled", "\u{0}\u{1}binary#!/bin/sh")));
+        assert_eq!(None, lookup.of_shebang(&script("LICENSE", "MIT License\n"), &TreeView::of(&[])));
+        assert_eq!(None, lookup.of_shebang(&script("compiled", "\u{0}\u{1}binary#!/bin/sh"), &TreeView::of(&[])));
         // an interpreter nobody declares stays unclaimed too
-        assert_eq!(None, lookup.of_shebang(&script("looped", "#!/usr/bin/lua\nprint(1)\n")));
+        assert_eq!(None, lookup.of_shebang(&script("looped", "#!/usr/bin/lua\nprint(1)\n"), &TreeView::of(&[])));
 
         // with no language declaring a shebang, nothing qualifies and nothing is opened
         let no_shebangs = LanguageLookup::default();
         assert!(!no_shebangs.needs_a_shebang_probe(&deploy));
-        assert_eq!(None, no_shebangs.of_shebang(&deploy));
+        assert_eq!(None, no_shebangs.of_shebang(&deploy, &TreeView::of(&[])));
 
         std::fs::remove_dir_all(&root).unwrap();
     }

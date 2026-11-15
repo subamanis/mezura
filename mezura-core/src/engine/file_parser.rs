@@ -21,6 +21,7 @@ use crate::engine::masks::{Classes, MaskFinder, find_lines_holding_words_and_con
 use crate::engine::masks::{has_avx2_tier, has_avx512_tier};
 use crate::engine::masks::BLOCK_BYTES;
 use crate::engine::test_detection::{Declaration, ModuleDeclarations, TestScope, TestWalk, TestsByPath};
+use crate::engine::tree::TreeView;
 
 pub(crate) const BYTE_ORDER_MARK : &[u8] = b"\xef\xbb\xbf";
 pub(crate) const MAX_RETAINED_FILE_BUFFER_BYTES: usize = 4_194_304;
@@ -134,22 +135,27 @@ pub(crate) fn parse_file(path: &Path, size: u64, lang_name: &str, buf: &mut Vec<
     lookup: &NestedLanguageLookup, matchers: &mut KeywordMatchers,
     id_matchers: &mut IdentificationMatchers, config: &EngineConfig,
     written_by_hand: bool, test_scope: TestScope, extension_rules: Option<&crate::engine::identity::ExtensionRules>,
-    language_lookup: &crate::engine::identity::LanguageLookup)
+    language_lookup: &crate::engine::identity::LanguageLookup, tree: &TreeView)
 -> Result<FileOutcome,String>
 {
     // None unless MEZURA_PHASE_TIMING is set, so a normal run never reads the clock at all
     let mut at = phase_timing::ENABLED.then(Instant::now);
 
-    let mut file = match File::open(path){
-        Ok(f) => f,
-        Err(x) => return Err(x.to_string())
+    let held = match tree.find_mount_of(path) {
+        None => {
+            let mut file = match File::open(path){
+                Ok(f) => f,
+                Err(x) => return Err(x.to_string())
+            };
+            if let Some(t) = at {
+                buffers.timing.open_nanos += phase_timing::nanos_since(t);
+                at = Some(Instant::now());
+            }
+            read_file_into(&mut file, buf, size)
+        },
+        Some(mount) => mount.read_into(path, buf).map(|()| HeldFile::InBuffer(buf.len()))
     };
-    if let Some(t) = at {
-        buffers.timing.open_nanos += phase_timing::nanos_since(t);
-        at = Some(Instant::now());
-    }
-
-    let held = match read_file_into(&mut file, buf, size) {
+    let held = match held {
         Ok(held) => held,
         Err(x) => return Err(x.to_string())
     };
@@ -3236,7 +3242,7 @@ mod tests {
     fn parse_file_report(path: &Path, lang_name: &str, buf: &mut Vec<u8>, config: &EngineConfig) -> Result<FileReport, String> {
         match parse_file(path, get_size_of(path), lang_name, buf, &mut ParseBuffers::default(), &shipped_lookup(),
                 &mut KeywordMatchers::default(), &mut IdentificationMatchers::default(), config,
-                false, TestScope::Ordinary, None, &LanguageLookup::default())? {
+                false, TestScope::Ordinary, None, &LanguageLookup::default(), &TreeView::of(&[]))? {
             FileOutcome::Counted(report, _) => Ok(report),
             FileOutcome::Skipped(kind) => panic!("{} was skipped as {}", path.display(), kind.as_str()),
             FileOutcome::NotSelected => panic!("{} was left out by the language selection", path.display())
@@ -5912,7 +5918,7 @@ mod tests {
             let contents = std::fs::read_to_string(&path).unwrap();
             let lang_name = match parse_expectations(contents.lines().next().unwrap_or_default()).and_then(|(declared, _)| declared) {
                 Some(declared) => Arc::from(declared.as_str()),
-                None => fixture_lookup().of_path_or_shebang(&path).unwrap(),
+                None => fixture_lookup().of_path_or_shebang(&path, &TreeView::of(&[])).unwrap(),
             };
             let language = LANGUAGE_MAP_REF.get(lang_name.as_ref()).unwrap();
             let count = |tier: u8| {
@@ -5958,7 +5964,7 @@ mod tests {
 
             let lang_name = match declared {
                 Some(declared) => std::sync::Arc::from(declared.as_str()),
-                None => match lookup.of_path_or_shebang(&path) {
+                None => match lookup.of_path_or_shebang(&path, &TreeView::of(&[])) {
                     Some(found) => found,
                     None => {
                         failures.push(format!("{name}: no supported language claims this name, its extension or its first line"));
@@ -6033,7 +6039,7 @@ mod tests {
         for path in fixture_paths(&fixtures_dir()) {
             let name = path.file_name().unwrap().to_string_lossy().into_owned();
             if name.ends_with(".md") { continue; }
-            let Some(lang_name) = lookup.of_path_or_shebang(&path) else { continue };
+            let Some(lang_name) = lookup.of_path_or_shebang(&path, &TreeView::of(&[])) else { continue };
 
             let mut buf = Vec::new();
             let counted = parse_file_report(&path, lang_name.as_ref(), &mut buf, &config)
@@ -6155,7 +6161,7 @@ mod tests {
             let mut buf = Vec::new();
             match parse_file(&path, size, "Rust", &mut buf, &mut ParseBuffers::default(),
                     &shipped_lookup(), &mut KeywordMatchers::default(),
-                    &mut IdentificationMatchers::default(), &config, false, TestScope::Ordinary, None, &LanguageLookup::default()) {
+                    &mut IdentificationMatchers::default(), &config, false, TestScope::Ordinary, None, &LanguageLookup::default(), &TreeView::of(&[])) {
                 Ok(FileOutcome::Counted(report, _)) => report.into_whole().lines,
                 _ => panic!("{} was not counted", path.display())
             }
@@ -6195,7 +6201,7 @@ mod tests {
             let mut buf = Vec::new();
             matches!(parse_file(path, get_size_of(path), "JavaScript", &mut buf, &mut ParseBuffers::default(),
                     &shipped_lookup(), &mut KeywordMatchers::default(),
-                    &mut IdentificationMatchers::default(), config, false, TestScope::Ordinary, None, &LanguageLookup::default()),
+                    &mut IdentificationMatchers::default(), config, false, TestScope::Ordinary, None, &LanguageLookup::default(), &TreeView::of(&[])),
                     Ok(FileOutcome::Skipped(ScanSkip::Minified)))
         };
 
@@ -6286,7 +6292,7 @@ mod tests {
             let mut buf = Vec::new();
             matches!(parse_file(&path, get_size_of(&path), "JavaScript", &mut buf, &mut ParseBuffers::default(),
                     &shipped_lookup(), &mut KeywordMatchers::default(),
-                    &mut IdentificationMatchers::default(), config, false, TestScope::Ordinary, None, &LanguageLookup::default()),
+                    &mut IdentificationMatchers::default(), config, false, TestScope::Ordinary, None, &LanguageLookup::default(), &TreeView::of(&[])),
                     Ok(FileOutcome::Skipped(ScanSkip::Generated)))
         };
         let default = EngineConfig::default();
@@ -6642,7 +6648,7 @@ mod tests {
             let mut buf = Vec::new();
             match parse_file(path, get_size_of(path), "Go", &mut buf, &mut ParseBuffers::default(), &shipped_lookup(),
                     &mut KeywordMatchers::default(), &mut IdentificationMatchers::default(), config,
-                    false, scope, None, &LanguageLookup::default()).unwrap() {
+                    false, scope, None, &LanguageLookup::default(), &TreeView::of(&[])).unwrap() {
                 FileOutcome::Counted(report, _) => report.tests.map(|tests| (tests.stats.lines, tests.stats.classes.clone(), tests.bytes)),
                 FileOutcome::Skipped(kind) => panic!("skipped as {}", kind.as_str()),
                 FileOutcome::NotSelected => panic!("left out by the language selection")

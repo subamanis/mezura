@@ -93,6 +93,8 @@ pub(crate) const TEST_PRESETS : [TestPreset; 13] = [
 const TRIGGER_NAME_LENGTHS : [u64; 256] = build_trigger_name_lengths();
 const BUILD_NAME_LENGTHS : [u64; 256] = build_build_name_lengths();
 
+type DirectoryAndRoot = (PathBuf, Option<PathBuf>);
+
 /// A test tool's default names for its test files, as the tool's documentation gives them.
 ///
 /// The walk applies a preset on its own under the directory holding one of its
@@ -185,14 +187,14 @@ impl TestScope {
         scope
     }
 
-    pub(crate) fn of_target<'a>(path: &'a Path, checkout: Option<&'a RepositoryCheckout>, tree: &TreeView)
+    pub(crate) fn of_target<'a>(path: &'a Path, checkout: Option<&'a RepositoryCheckout>, tree: &TreeView<'a>)
     -> (DirectoryScope, Option<&'a Path>)
     {
         let (test_directory, roots) = find_test_directory_along(path, checkout, tree);
         if let Some(found) = test_directory {
             return (DirectoryScope { scope: TestScope::Tests, roots, ..DirectoryScope::default() }, Some(found.directory));
         }
-        let is_jvm_sources = path.file_name().zip(find_parent_of(path, checkout)).is_some_and(|(name, parent)| {
+        let is_jvm_sources = path.file_name().zip(find_parent_of(path, checkout, tree)).is_some_and(|(name, parent)| {
             let name = name.as_encoded_bytes();
             (roots.jvm_build && is_the_jvm_sources_directory(name)) || is_jvm_sources(name, parent, tree)
         });
@@ -441,7 +443,9 @@ impl PresetMatch {
 // one target per matched file, and every one of them climbs the same folders.
 #[derive(Default)]
 pub(crate) struct PresetClimb {
-    by_directory: RefCell<HashMap<PathBuf, Vec<Arc<ActivePreset>>>>,
+    // One run can climb into a folder above a repository from two copies of it, and the names root
+    // and the scopes of what it turns on belong to the copy, so the root of the copy is in the key
+    by_directory_and_root: RefCell<HashMap<DirectoryAndRoot, Vec<Arc<ActivePreset>>>>,
     taken_back: PresetsTakenBack,
 }
 
@@ -450,47 +454,50 @@ impl PresetClimb {
         PresetClimb { taken_back, ..PresetClimb::default() }
     }
 
-    // Above a checkout, a preset reads names from the checkout's own folder down, the most its paths
-    // can spell, so a preset two folders above the repository never matches the folder between them.
+    // Above a checkout or a mounted tree, a preset reads names from the folder holding its root down,
+    // the most its paths can spell, so a preset two folders above the repository never matches the
+    // folder between them.
     pub(crate) fn find_presets_above(&self, path: &Path, own_listing: OwnListing, checkout: Option<&RepositoryCheckout>,
             tree: &TreeView) -> Option<ActivePresets>
     {
-        let mut directories = collect_folders_up_from(path, checkout).into_iter()
+        let copy = find_copy_of_repository_holding(path, checkout, tree);
+        let mut directories = collect_folders_up_from(path, checkout, tree).into_iter()
                 .skip(usize::from(own_listing == OwnListing::ReadByTheWalk)).collect::<Vec<_>>();
         directories.reverse();
         let mut presets = Vec::new();
         for directory in directories {
-            let (names_root, above_the_checkout) = match checkout {
-                Some(checkout) if !directory.starts_with(&checkout.root) =>
-                        (Path::new(&checkout.root).parent().map_or(0, find_names_root_below), Some(checkout)),
+            let (names_root, above_the_copy) = match copy {
+                Some((root, repository)) if !directory.starts_with(root) =>
+                        (root.parent().map_or(0, find_names_root_below), Some((root, repository))),
                 _ => (find_names_root_below(directory), None)
             };
-            presets.extend(self.read_presets_of(directory, names_root, above_the_checkout, tree));
+            presets.extend(self.read_presets_of(directory, names_root, above_the_copy, tree));
         }
         (!presets.is_empty()).then(|| Arc::from(presets))
     }
 
     pub(crate) fn into_turned_on(self) -> Vec<Arc<ActivePreset>> {
-        self.by_directory.into_inner().into_values().flatten().collect()
+        self.by_directory_and_root.into_inner().into_values().flatten().collect()
     }
 
-    // A folder above a checkout is the repository's, so what its configuration names moves into the checkout
-    fn read_presets_of(&self, directory: &Path, names_root: usize, above_the_checkout: Option<&RepositoryCheckout>,
+    // A folder above the root is the repository's, so what its configuration names moves under the root
+    fn read_presets_of(&self, directory: &Path, names_root: usize, above_the_copy: Option<(&Path, &Path)>,
             tree: &TreeView) -> Vec<Arc<ActivePreset>>
     {
-        if let Some(known) = self.by_directory.borrow().get(directory) {
+        let key = (directory.to_path_buf(), above_the_copy.map(|(root, _)| root.to_path_buf()));
+        if let Some(known) = self.by_directory_and_root.borrow().get(&key) {
             return known.clone();
         }
         let mut turned_on = read_trigger_files_of(directory, tree).turn_on_reading_names_from(directory, names_root, self.taken_back,
                 tree);
-        if let Some(checkout) = above_the_checkout {
+        if let Some((root, repository)) = above_the_copy {
             for preset in &mut turned_on {
                 if let Some(preset) = Arc::get_mut(preset) {
-                    preset.scopes = preset.scopes.iter().map(|scope| move_into_checkout(scope, checkout)).collect();
+                    preset.scopes = preset.scopes.iter().map(|scope| move_under_root(scope, root, repository)).collect();
                 }
             }
         }
-        self.by_directory.borrow_mut().insert(directory.to_path_buf(), turned_on.clone());
+        self.by_directory_and_root.borrow_mut().insert(key, turned_on.clone());
         turned_on
     }
 }
@@ -636,10 +643,10 @@ pub(crate) struct TestDirectory<'a> {
 
 // The components are read by name, and the disk is asked only at one named like a test
 // directory, plus the root files at every directory above the path.
-pub(crate) fn find_test_directory_along<'a>(path: &'a Path, checkout: Option<&'a RepositoryCheckout>, tree: &TreeView)
+pub(crate) fn find_test_directory_along<'a>(path: &'a Path, checkout: Option<&'a RepositoryCheckout>, tree: &TreeView<'a>)
 -> (Option<TestDirectory<'a>>, RootsAbove)
 {
-    let mut directories = collect_folders_up_from(path, checkout);
+    let mut directories = collect_folders_up_from(path, checkout, tree);
     directories.reverse();
     let mut jvm_build_root = None;
     // The walk takes 'src' as the sources of a build rooted above it, so 'src/test' needs a root above 'src'
@@ -647,7 +654,7 @@ pub(crate) fn find_test_directory_along<'a>(path: &'a Path, checkout: Option<&'a
     let mut go_module_root = None;
     for directory in directories {
         let roots = RootsAbove { jvm_build: jvm_build_root.is_some(), go_module: go_module_root.is_some() };
-        if let (Some(name), Some(parent)) = (directory.file_name(), find_parent_of(directory, checkout)) {
+        if let (Some(name), Some(parent)) = (directory.file_name(), find_parent_of(directory, checkout, tree)) {
             let name = name.as_encoded_bytes();
             if let Some(root) = &jvm_build_root_above_parent && is_the_jvm_test_directory(name)
                     && parent.file_name().is_some_and(|above| is_the_jvm_sources_directory(above.as_encoded_bytes())) {
@@ -696,7 +703,7 @@ impl PresetNames {
     }
 
     fn compile(patterns: Vec<String>, declared: usize) -> PresetNames {
-        let matcher = PathPatternMatcher::compile(&patterns, TakingBack::Refused, &TreeView).expect("the patterns of a preset compile");
+        let matcher = PathPatternMatcher::compile(&patterns, TakingBack::Refused, &TreeView::of(&[])).expect("the patterns of a preset compile");
         PresetNames { patterns, declared, matcher }
     }
 }
@@ -757,10 +764,11 @@ fn get_preset_names(at: usize) -> Arc<PresetNames> {
     }).collect())[at].clone()
 }
 
-fn move_into_checkout(scope: &str, checkout: &RepositoryCheckout) -> String {
-    let repository = checkout.repository.trim_end_matches('/');
+fn move_under_root(scope: &str, root: &Path, repository: &Path) -> String {
+    let repository = repository.to_string_lossy();
+    let repository = repository.trim_end_matches('/');
     match is_inside_scope(scope, repository) {
-        true => format!("{}{}", checkout.root.trim_end_matches('/'), &scope[repository.len()..]),
+        true => format!("{}{}", root.to_string_lossy().trim_end_matches('/'), &scope[repository.len()..]),
         false => scope.to_owned()
     }
 }
@@ -800,7 +808,7 @@ fn read_trigger_files_of(directory: &Path, tree: &TreeView) -> TriggerFilesSeen 
     seen
 }
 
-fn find_build_of_test_directory<'a>(name: &[u8], parent: &'a Path, checkout: Option<&'a RepositoryCheckout>, tree: &TreeView)
+fn find_build_of_test_directory<'a>(name: &[u8], parent: &'a Path, checkout: Option<&'a RepositoryCheckout>, tree: &TreeView<'a>)
 -> Option<(&'a Path, &'static [&'static str])>
 {
     BUILD_TOOLS.iter().find_map(|tool| tool.test_directories.iter().find_map(|directory| {
@@ -815,22 +823,33 @@ fn find_build_of_test_directory<'a>(name: &[u8], parent: &'a Path, checkout: Opt
             None => Some(parent),
             Some(above) => parent.file_name()
                     .filter(|parent_name| is_the_same_name(parent_name.as_encoded_bytes(), above.as_bytes()))
-                    .and_then(|_| find_parent_of(parent, checkout))
+                    .and_then(|_| find_parent_of(parent, checkout, tree))
         };
         holder.filter(|holder| tool.files.iter().all(|file| tree.is_file(&holder.join(file)))).map(|holder| (holder, tool.files))
     }))
 }
 
-fn collect_folders_up_from<'a>(path: &'a Path, checkout: Option<&'a RepositoryCheckout>) -> Vec<&'a Path> {
-    std::iter::successors(Some(path), |directory| find_parent_of(directory, checkout)).collect()
+fn collect_folders_up_from<'a>(path: &'a Path, checkout: Option<&'a RepositoryCheckout>, tree: &TreeView<'a>) -> Vec<&'a Path> {
+    std::iter::successors(Some(path), |directory| find_parent_of(directory, checkout, tree)).collect()
 }
 
 // A checkout sits in a temporary folder that belongs to nobody, so above its root the folders are
 // the repository's
-fn find_parent_of<'a>(directory: &'a Path, checkout: Option<&'a RepositoryCheckout>) -> Option<&'a Path> {
+fn find_parent_of<'a>(directory: &'a Path, checkout: Option<&'a RepositoryCheckout>, tree: &TreeView<'a>) -> Option<&'a Path> {
     match checkout {
         Some(checkout) if directory == Path::new(&checkout.root) => Path::new(&checkout.repository).parent(),
-        _ => directory.parent()
+        _ => tree.find_parent_of(directory)
+    }
+}
+
+// The root a copy of a repository is read under, and the repository. The copy is a checkout written
+// to disk, or the mounted tree holding the path when that tree names its repository.
+fn find_copy_of_repository_holding<'a>(path: &Path, checkout: Option<&'a RepositoryCheckout>, tree: &TreeView<'a>)
+-> Option<(&'a Path, &'a Path)>
+{
+    match checkout {
+        Some(checkout) => Some((Path::new(&checkout.root), Path::new(&checkout.repository))),
+        None => tree.find_mount_of(path).and_then(|mount| Some((mount.get_root(), mount.get_repository()?)))
     }
 }
 
@@ -962,10 +981,10 @@ mod tests {
         let root_str = root.to_str().unwrap().replace('\\', "/");
         let names_root = root_str.len() + 1;
         let patterns = PathPatternMatcher::compile(&["spec/".to_owned(), "!spec/helpers/".to_owned(), "!tests/fixtures/".to_owned(),
-                "!vendor/".to_owned(), "!*_test.go".to_owned()], crate::engine::path_patterns::TakingBack::Allowed, &TreeView).unwrap();
+                "!vendor/".to_owned(), "!*_test.go".to_owned()], crate::engine::path_patterns::TakingBack::Allowed, &TreeView::of(&[])).unwrap();
         let climb = PresetClimb::default();
         let of = |path: &str| DirectoryScope::of_target(&root.join(path), names_root, &patterns, &climb, OwnListing::ReadByTheWalk, None,
-                &TreeView);
+                &TreeView::of(&[]));
         let child = |holder: &DirectoryScope, path: &str, build_files: &[&str]| {
             let name = Path::new(path).file_name().unwrap().to_str().unwrap().to_owned();
             holder.of_child(&name, seen(build_files), &root.join(path), &patterns, &mut Vec::new())
@@ -1007,12 +1026,12 @@ mod tests {
         assert!(!TriggerFilesSeen::is_a_trigger_file(b"jest.config.ts.bak"));
         assert!(!TriggerFilesSeen::is_a_trigger_file(b"conftest.pyc"));
         let none_taken_back = PresetsTakenBack::default();
-        let turned_on = triggers(&[".rspec", "Gemfile", "package.json"]).turn_on(Path::new("D:/proj/rails"), none_taken_back, &TreeView);
+        let turned_on = triggers(&[".rspec", "Gemfile", "package.json"]).turn_on(Path::new("D:/proj/rails"), none_taken_back, &TreeView::of(&[]));
         assert_eq!(vec![("rspec", ".rspec", "D:/proj/rails".to_owned())],
                 turned_on.iter().map(|x| (x.preset.name, x.trigger_file, x.directory.clone())).collect::<Vec<_>>());
-        assert!(triggers(&[".rspec"]).turn_on(Path::new("D:/proj/bare"), none_taken_back, &TreeView).is_empty(),
+        assert!(triggers(&[".rspec"]).turn_on(Path::new("D:/proj/bare"), none_taken_back, &TreeView::of(&[])).is_empty(),
                 "a '.rspec' without its Gemfile turned the preset on");
-        assert!(triggers(&["Gemfile"]).turn_on(Path::new("D:/proj/gem"), none_taken_back, &TreeView).is_empty(),
+        assert!(triggers(&["Gemfile"]).turn_on(Path::new("D:/proj/gem"), none_taken_back, &TreeView::of(&[])).is_empty(),
                 "a companion alone turned the preset on");
     }
 
@@ -1020,7 +1039,7 @@ mod tests {
     fn every_shipped_preset_compiles_and_its_trigger_files_fit_the_table() {
         for preset in &TEST_PRESETS {
             assert!(!preset.name.is_empty() && !preset.patterns.is_empty(), "{}", preset.name);
-            if let Err(error) = PathPatternMatcher::compile(preset.patterns, TakingBack::Refused, &TreeView) {
+            if let Err(error) = PathPatternMatcher::compile(preset.patterns, TakingBack::Refused, &TreeView::of(&[])) {
                 panic!("{}: {error:?}", preset.name);
             }
             assert!(preset.companion_file.is_none() || !preset.trigger_files.is_empty(), "{}: a companion of nothing", preset.name);
@@ -1046,7 +1065,7 @@ mod tests {
             std::fs::write(&path, contents).unwrap();
         }
         let none_taken_back = PresetsTakenBack::default();
-        let turned_on = |directory: &str, files: &[&str]| triggers(files).turn_on(&root.join(directory), none_taken_back, &TreeView).iter()
+        let turned_on = |directory: &str, files: &[&str]| triggers(files).turn_on(&root.join(directory), none_taken_back, &TreeView::of(&[])).iter()
                 .map(|preset| (preset.preset.name, preset.trigger_file, preset.scopes.clone())).collect::<Vec<_>>();
         let tests_of = |directory: &str| vec![format!("{}/tests", spell_out(&root.join(directory)))];
 
@@ -1058,7 +1077,7 @@ mod tests {
                 "the conftest.py beside a configuration was narrowed by its testpaths");
         let mut taken_back = PresetsTakenBack::default();
         assert!(taken_back.take_back("pytest"));
-        assert!(triggers(&["pytest.ini"]).turn_on(&root.join("alone"), taken_back, &TreeView).is_empty(),
+        assert!(triggers(&["pytest.ini"]).turn_on(&root.join("alone"), taken_back, &TreeView::of(&[])).is_empty(),
                 "'!@pytest' left the configuration's preset on");
 
         std::fs::remove_dir_all(&root).unwrap();
@@ -1079,18 +1098,19 @@ mod tests {
         use TestScope::{JvmSources, Ordinary, Tests};
         let root = std::env::temp_dir().join("mezura_test_scope_of_target");
         let _ = std::fs::remove_dir_all(&root);
-        for dir in ["cargo/tests/common", "cargo/src/tests", "bare/tests", "jvm/src/test/java", "jvm/src/main", "jvm/test",
+        let dirs = ["cargo/tests/common", "cargo/src/tests", "bare/tests", "jvm/src/test/java", "jvm/src/main", "jvm/test",
                 "octave/tests", "r/tests", "outer/tests/app", "cased/Tests", "sbt/core/src/test/scala", "sbt/core/src/main",
                 "sbt/core/jvm/src/test", "sbt/api/test", "gradle/app/src/test", "gradle/app/src/main", "go/testdata",
-                "go/pkg/testdata/deep", "go/pkg/data", "loose/testdata", "rooted/src/test"] {
+                "go/pkg/testdata/deep", "go/pkg/data", "loose/testdata", "rooted/src/test"];
+        for dir in dirs {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
         for file in ["cargo/Cargo.toml", "jvm/pom.xml", "octave/DESCRIPTION", "r/DESCRIPTION", "r/NAMESPACE", "cased/Cargo.toml",
                 "sbt/build.sbt", "gradle/settings.gradle.kts", "go/go.mod", "rooted/src/settings.gradle"] {
             std::fs::write(root.join(file), "").unwrap();
         }
-        let of = |path: &str| TestScope::of_target(&root.join(path), None, &TreeView).0.scope;
-        let inside = |path: &str| TestScope::of_target(&root.join(path), None, &TreeView).0.roots.jvm_build;
+        let of = |path: &str| TestScope::of_target(&root.join(path), None, &TreeView::of(&[])).0.scope;
+        let inside = |path: &str| TestScope::of_target(&root.join(path), None, &TreeView::of(&[])).0.roots.jvm_build;
 
         assert_eq!(of("cargo/tests"), Tests);
         assert_eq!(of("cargo/tests/common"), Tests);
@@ -1124,13 +1144,21 @@ mod tests {
 
         assert_eq!(of("go/testdata"), Tests);
         assert_eq!(of("go/pkg/testdata/deep"), Tests, "a 'testdata' deeper down the module");
-        assert_eq!((of("go/pkg/data"), TestScope::of_target(&root.join("go/pkg/data"), None, &TreeView).0.roots.go_module), (Ordinary, true));
-        assert_eq!((of("go"), TestScope::of_target(&root.join("go"), None, &TreeView).0.roots.go_module), (Ordinary, false));
+        assert_eq!((of("go/pkg/data"), TestScope::of_target(&root.join("go/pkg/data"), None, &TreeView::of(&[])).0.roots.go_module), (Ordinary, true));
+        assert_eq!((of("go"), TestScope::of_target(&root.join("go"), None, &TreeView::of(&[])).0.roots.go_module), (Ordinary, false));
         assert_eq!(of("loose/testdata"), Ordinary, "a 'testdata' with no go.mod above it");
         let deep = root.join("go/pkg/testdata/deep");
-        let (found, _) = find_test_directory_along(&deep, None, &TreeView);
+        let (found, _) = find_test_directory_along(&deep, None, &TreeView::of(&[]));
         let found = found.unwrap();
         assert_eq!((root.join("go/pkg/testdata").as_path(), vec![root.join("go/go.mod")]), (found.directory, found.build_files));
+
+        let mounted = format!("{}-mounted", spell_out(&root));
+        let trees = [crate::mount_copy_of(&root, &mounted, Some(&spell_out(&root)))];
+        for dir in dirs.into_iter().chain(["cargo", "cargo/tests", "cargo/src", "jvm/src", "sbt", "sbt/core", "sbt/core/src", "go"]) {
+            let (on_disk, _) = TestScope::of_target(&root.join(dir), None, &TreeView::of(&[]));
+            let (in_the_copy, _) = TestScope::of_target(&Path::new(&mounted).join(dir), None, &TreeView::of(&trees));
+            assert_eq!((on_disk.scope, on_disk.roots), (in_the_copy.scope, in_the_copy.roots), "'{dir}' in a mounted copy");
+        }
 
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -1148,26 +1176,31 @@ mod tests {
         for file in ["w/jest.config.js", "w/.mocharc.json", "w/go.mod", "a/test/holder/web/src/a.test.ts"] {
             std::fs::write(root.join(file), "").unwrap();
         }
-        let at = |path: &str| PathBuf::from(spell_out(&root.join(path)));
         let checkout = RepositoryCheckout { root: spell_out(&root.join("a/test/holder/web")), repository: spell_out(&root.join("w/web")) };
-        let patterns = PathPatternMatcher::compile(&[] as &[String], TakingBack::Allowed, &TreeView).unwrap();
-        let names_root = spell_out(&root.join("a/test/holder")).len() + 1;
+        let trees = [crate::mount_copy_of(&root.join("a/test/holder/web"), &spell_out(&root.join("m/test/holder/web")),
+                Some(&spell_out(&root.join("w/web"))))];
+        let patterns = PathPatternMatcher::compile(&[] as &[String], TakingBack::Allowed, &TreeView::of(&[])).unwrap();
 
-        let climb = PresetClimb::default();
-        let presets = climb.find_presets_above(&at("a/test/holder/web"), OwnListing::ReadByTheWalk, Some(&checkout), &TreeView).unwrap();
-        assert_eq!(vec!["jest", "mocha"], presets.iter().map(|preset| preset.preset.name).collect::<Vec<_>>());
-        assert!(PresetClimb::default().find_presets_above(&at("a/test/holder/web"), OwnListing::ReadByTheWalk, None, &TreeView).is_none());
+        for (copy, checkout, tree) in [("a", Some(&checkout), TreeView::of(&[])), ("m", None, TreeView::of(&trees))] {
+            let at = |path: &str| PathBuf::from(spell_out(&root.join(copy).join(path)));
+            let names_root = spell_out(&root.join(copy).join("test/holder")).len() + 1;
+            let climb = PresetClimb::default();
+            let presets = climb.find_presets_above(&at("test/holder/web"), OwnListing::ReadByTheWalk, checkout, &tree).unwrap();
+            assert_eq!(vec!["jest", "mocha"], presets.iter().map(|preset| preset.preset.name).collect::<Vec<_>>(), "{copy}");
 
-        let target = DirectoryScope::of_target(&at("a/test/holder/web"), names_root, &patterns, &climb, OwnListing::ReadByTheWalk,
-                Some(&checkout), &TreeView);
-        assert_eq!(TestScope::Ordinary, target.scope, "mocha's 'test/' took the folder the checkout was written into");
-        let sources = DirectoryScope::of_target(&at("a/test/holder/web/src"), names_root, &patterns, &climb,
-                OwnListing::ReadByTheWalk, Some(&checkout), &TreeView);
-        assert_eq!(TestScope::Tests, sources.of_file(&at("a/test/holder/web/src/a.test.ts"), &patterns, &mut Vec::new()).0);
+            let target = DirectoryScope::of_target(&at("test/holder/web"), names_root, &patterns, &climb, OwnListing::ReadByTheWalk,
+                    checkout, &tree);
+            assert_eq!(TestScope::Ordinary, target.scope, "mocha's 'test/' took the folder '{copy}' is read under");
+            let sources = DirectoryScope::of_target(&at("test/holder/web/src"), names_root, &patterns, &climb,
+                    OwnListing::ReadByTheWalk, checkout, &tree);
+            assert_eq!(TestScope::Tests, sources.of_file(&at("test/holder/web/src/a.test.ts"), &patterns, &mut Vec::new()).0, "{copy}");
 
-        assert_eq!(TestScope::Tests, TestScope::of_target(&at("a/test/holder/web/testdata"), Some(&checkout), &TreeView).0.scope,
-                "a 'go.mod' above the repository was not read for its checkout");
-        assert_eq!(TestScope::Ordinary, TestScope::of_target(&at("a/test/holder/web/testdata"), None, &TreeView).0.scope);
+            assert_eq!(TestScope::Tests, TestScope::of_target(&at("test/holder/web/testdata"), checkout, &tree).0.scope,
+                    "a 'go.mod' above the repository was not read for '{copy}'");
+        }
+        let at = |path: &str| PathBuf::from(spell_out(&root.join(path)));
+        assert!(PresetClimb::default().find_presets_above(&at("a/test/holder/web"), OwnListing::ReadByTheWalk, None, &TreeView::of(&[])).is_none());
+        assert_eq!(TestScope::Ordinary, TestScope::of_target(&at("a/test/holder/web/testdata"), None, &TreeView::of(&[])).0.scope);
 
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -1180,19 +1213,35 @@ mod tests {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
         std::fs::write(root.join("w/pytest.ini"), "[pytest]\ntestpaths = web/tests\n").unwrap();
-        let at = |path: &str| PathBuf::from(spell_out(&root.join(path)));
         let checkout = RepositoryCheckout { root: spell_out(&root.join("c/web")), repository: spell_out(&root.join("w/web")) };
-        let patterns = PathPatternMatcher::compile(&[] as &[String], TakingBack::Allowed, &TreeView).unwrap();
-        let names_root = spell_out(&root.join("c")).len() + 1;
+        let trees = [crate::mount_copy_of(&root.join("c/web"), &spell_out(&root.join("m/web")), Some(&spell_out(&root.join("w/web"))))];
+        let patterns = PathPatternMatcher::compile(&[] as &[String], TakingBack::Allowed, &TreeView::of(&[])).unwrap();
+
+        for (copy, checkout, tree) in [("c", Some(&checkout), TreeView::of(&[])), ("m", None, TreeView::of(&trees))] {
+            let at = |path: &str| PathBuf::from(spell_out(&root.join(copy).join(path)));
+            let names_root = spell_out(&root.join(copy)).len() + 1;
+            let climb = PresetClimb::default();
+            let tests = DirectoryScope::of_target(&at("web/tests"), names_root, &patterns, &climb, OwnListing::ReadByTheWalk, checkout,
+                    &tree);
+            assert_eq!(TestScope::Tests, tests.of_file(&at("web/tests/test_a.py"), &patterns, &mut Vec::new()).0,
+                    "the folder the configuration names was looked for outside '{copy}'");
+            let elsewhere = DirectoryScope::of_target(&at("web"), names_root, &patterns, &climb, OwnListing::ReadByTheWalk, checkout,
+                    &tree);
+            assert_eq!(TestScope::Ordinary, elsewhere.of_file(&at("web/test_b.py"), &patterns, &mut Vec::new()).0, "{copy}");
+        }
 
         let climb = PresetClimb::default();
-        let tests = DirectoryScope::of_target(&at("c/web/tests"), names_root, &patterns, &climb, OwnListing::ReadByTheWalk, Some(&checkout),
-                &TreeView);
-        assert_eq!(TestScope::Tests, tests.of_file(&at("c/web/tests/test_a.py"), &patterns, &mut Vec::new()).0,
-                "the folder the configuration names was looked for outside the checkout");
-        let elsewhere = DirectoryScope::of_target(&at("c/web"), names_root, &patterns, &climb, OwnListing::ReadByTheWalk, Some(&checkout),
-                &TreeView);
-        assert_eq!(TestScope::Ordinary, elsewhere.of_file(&at("c/web/test_b.py"), &patterns, &mut Vec::new()).0);
+        for copy in ["w", "m", "w"] {
+            let at = |path: &str| PathBuf::from(spell_out(&root.join(copy).join(path)));
+            let tests = DirectoryScope::of_target(&at("web/tests"), spell_out(&root.join(copy)).len() + 1, &patterns, &climb,
+                    OwnListing::ReadByTheWalk, None, &TreeView::of(&trees));
+            assert_eq!(TestScope::Tests, tests.of_file(&at("web/tests/test_a.py"), &patterns, &mut Vec::new()).0,
+                    "'{copy}' was given the scopes the other copy read above the repository");
+        }
+        let applied = crate::describe_applied_presets(&climb.into_turned_on());
+        assert_eq!(vec![("pytest", "pytest.ini")], applied.iter().filter(|preset| preset.directory == spell_out(&root.join("w")))
+                .map(|preset| (preset.name.as_str(), preset.trigger_file.as_str())).collect::<Vec<_>>(),
+                "the folder read for two copies was reported twice");
 
         std::fs::remove_dir_all(&root).unwrap();
     }

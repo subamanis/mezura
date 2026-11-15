@@ -54,6 +54,7 @@ fn start_parsing_files<W: RunWatcher>(id: usize, files_injector: &Injector<Parsa
     language_lookups: &ModuleLookups,
     config: &EngineConfig, skipped_files: &Mutex<SkippedFiles>, watcher: &W)
 {
+    let tree = TreeView::of(&config.trees);
     let mut buf = Vec::with_capacity(INITIAL_FILE_BUFFER_BYTES);
     let mut parse_buffers = file_parser::ParseBuffers::default();
     let mut idle_iterations = 0u32;
@@ -109,7 +110,7 @@ fn start_parsing_files<W: RunWatcher>(id: usize, files_injector: &Injector<Parsa
                 match file_parser::parse_file(&parsable_file.path, parsable_file.size, lang_name, &mut buf,
                         &mut parse_buffers, &lookup, &mut keyword_matchers, &mut identification_matchers,
                         config, parsable_file.written_by_hand, parsable_file.test_scope,
-                        parsable_file.extension_rules.as_deref(), language_lookups.get_of_module(parsable_file.module)) {
+                        parsable_file.extension_rules.as_deref(), language_lookups.get_of_module(parsable_file.module), &tree) {
                     Ok(file_parser::FileOutcome::Counted(mut report, resolved)) => {
                         for preset in parsable_file.decided_by_presets.iter().flat_map(|presets| presets.iter()) {
                             preset.record_match();
@@ -194,7 +195,7 @@ fn start_parsing_files<W: RunWatcher>(id: usize, files_injector: &Injector<Parsa
                         // The listing gives no size on unix, and the json report carries one for
                         // every faulty file, so it is asked for here, on the failure path alone
                         let size = match parsable_file.size {
-                            0 => TreeView.get_file_size(&parsable_file.path).unwrap_or(0),
+                            0 => tree.get_file_size(&parsable_file.path).unwrap_or(0),
                             listed => listed
                         };
                         local_faulty.push(FaultyFileDetails { path: spell_out(&parsable_file.path), error_msg: x, size })

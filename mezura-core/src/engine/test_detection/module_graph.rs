@@ -101,11 +101,11 @@ pub(crate) struct FilesOnDisk<'a> {
 
 impl DeclarationSource for FilesOnDisk<'_> {
     fn is_file(&mut self, path: &Path) -> bool {
-        TreeView.is_file(path)
+        TreeView::of(&self.config.trees).is_file(path)
     }
 
     fn read_declarations(&mut self, path: &Path, language_name: &str) -> Option<Vec<Declaration>> {
-        let contents = String::from_utf8(TreeView.read_file(path).ok()?).ok()?;
+        let contents = String::from_utf8(TreeView::of(&self.config.trees).read_file(path).ok()?).ok()?;
         let language = self.lookup.languages.get(language_name)?;
         let mut declarations = read_module_declarations(&contents, language, self.lookup, self.config)?;
         if (self.is_whole)(path) {
@@ -116,7 +116,7 @@ impl DeclarationSource for FilesOnDisk<'_> {
 
     fn list_files(&mut self, folder: &Path) -> Vec<PathBuf> {
         let mut items = Vec::new();
-        TreeView.list_dir_into(folder, &mut items)
+        TreeView::of(&self.config.trees).list_dir_into(folder, &mut items)
                 .map(|()| items.into_iter().map(|item| folder.join(item.name)).collect()).unwrap_or_default()
     }
 }

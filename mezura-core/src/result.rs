@@ -616,7 +616,7 @@ mod tests {
         RunResult::of_nothing(
                 FilesPresent { total_files: relevant, relevant_files: relevant, excluded_files: 0 },
                 Performance { duration_millis: 0, threads: Threads::new(1, 1) },
-                &Modules::of(&[], &TreeView), Vec::new(), unreadable, Vec::new(), Vec::new())
+                &Modules::of(&[], &TreeView::of(&[])), Vec::new(), unreadable, Vec::new(), Vec::new())
     }
 
     #[test]

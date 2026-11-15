@@ -115,7 +115,7 @@ mod tests {
             None => Target::of(*entry)
         }).collect::<Vec<_>>();
     
-        Modules::of(&targets, &TreeView)
+        Modules::of(&targets, &TreeView::of(&[]))
     }
 
     #[test]

@@ -238,7 +238,7 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
     if !languages.describe_the_same_selection_as(config) {
         return Err(ExplainError::LanguagesFromAnotherConfig);
     }
-    let tree = TreeView;
+    let tree = TreeView::of(&config.trees);
     if tree.is_dir(path) {
         return Err(ExplainError::IsADirectory);
     }
@@ -253,7 +253,7 @@ pub fn explain_file(path: &Path, config: &EngineConfig, languages: Languages)
                 .and_then(|target| target.module.as_deref())
     };
     let lookup = lookups.get_of_module_named(module);
-    let Some(mut lang_name) = lookup.of_path_or_shebang(path) else {
+    let Some(mut lang_name) = lookup.of_path_or_shebang(path, &tree) else {
         return Err(ExplainError::UnclaimedFile);
     };
     let contents = tree.read_file(path).and_then(|bytes| std::io::read_to_string(bytes.as_slice()))
@@ -438,6 +438,20 @@ mod tests {
     fn resolved_languages(config: &EngineConfig) -> Languages {
         let languages = crate::language_file::parse_languages_in_dir(test_paths::LANGUAGES_DIR).unwrap().0;
         Languages::resolve(config, languages, &Default::default()).0
+    }
+
+    // A copy of 'root' mounted under a root nothing on disk has explains every line of each file as
+    // the folder does, with each path it names spelled under the root that was read
+    fn assert_a_mounted_copy_explains_alike(root: &Path, files: &[&str]) {
+        let on_disk = spell_out(root);
+        let mounted = format!("{on_disk}-mounted");
+        let of_the_copy = EngineConfig { trees: vec![crate::mount_copy_of(root, &mounted, Some(&on_disk))], ..EngineConfig::default() };
+        let explain = |base: &str, config: &EngineConfig, file: &str|
+                format!("{:?}", explain_file(&Path::new(base).join(file), config, resolved_languages(config)).unwrap()).replace(base, "<root>");
+        for file in files {
+            assert_eq!(explain(&on_disk, &EngineConfig::default(), file), explain(&mounted, &of_the_copy, file),
+                    "'{file}' read from a mounted copy");
+        }
     }
 
     fn explain_in_own_dir(test_name: &str, file_name: &str, contents: &str) -> FileExplanation {
@@ -710,6 +724,8 @@ mod tests {
                 vec![false, false, false]), explain("proj/vendor/Vendored.java", &declared), "a '!' pattern left the file marker on");
         assert_eq!((None, vec![false, false, false, false]), explain("proj/src/Marked.java", &detection_off));
 
+        assert_a_mounted_copy_explains_alike(&root, &["proj/src/lib.rs", "proj/tests/a.rs", "jvm/core/src/test/java/A.java",
+                "proj/go/parser_test.go", "proj/src/checks.rs", "proj/src/Marked.java"]);
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -821,6 +837,8 @@ mod tests {
         let detection_off = EngineConfig { detect_tests: false, ..EngineConfig::default() };
         assert_eq!((None, vec![false]), explain("proj/src/tests/mod.rs", &detection_off));
 
+        assert_a_mounted_copy_explains_alike(&root, &["proj/src/tests/mod.rs", "proj/src/tests/all.rs", "proj/src/plain.rs",
+                "proj/src/bin/tool_tests.rs", "proj/src/lib.rs"]);
         fs::remove_dir_all(&root).unwrap();
     }
 

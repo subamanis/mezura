@@ -2,6 +2,9 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+
+use crate::engine::tree::MountedTree;
 
 /// One place to count, and the name its figures are reported under.
 #[derive(Debug,PartialEq,Eq,Clone)]
@@ -400,6 +403,11 @@ pub struct EngineConfig {
     /// from a rule or an earlier pattern and switches the toolchain's file names and the file
     /// markers off for it, while the markers that open lines stay. Nothing while detection is off.
     pub test_patterns: PathPatterns,
+    /// Sets of files that are no folder on disk, each counted under its root as though it were one.
+    /// Every path below the root of one of them is read from that tree, a target and the place a
+    /// pattern names included, and nothing below that root is read from the disk. Empty by default.
+    /// See [`MountedTree`] for the lines that build one.
+    pub trees: Vec<Arc<MountedTree>>,
     /// Set when the targets sit in a checkout of a repository written to another place on disk,
     /// such as a revision written out to a temporary folder. The folders above the checkout are
     /// then read above the repository, so a build file or a test tool's file there decides the
@@ -431,6 +439,7 @@ impl Default for EngineConfig {
             detect_shebangs: true,
             detect_tests: true,
             test_patterns: PathPatterns::default(),
+            trees: Vec::new(),
             checkout: None
         }
     }

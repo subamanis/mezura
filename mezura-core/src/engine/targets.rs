@@ -4,10 +4,11 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path};
+use std::sync::Arc;
 
 use crate::GitignoreStack;
 use crate::engine::config::{RepositoryCheckout, Target};
-use crate::engine::tree::TreeView;
+use crate::engine::tree::{MountedTree, TreeView};
 
 pub(crate) const WILDCARDS : [char; 4] = ['*', '?', '[', '{'];
 
@@ -102,7 +103,7 @@ pub(crate) fn path_comparison_key(path: &str) -> String {
 pub(crate) fn resolve(declared: &[Target], obeyed: crate::ObeyedIgnoreFiles, search_in_dotted: bool, tree: &TreeView)
 -> Result<Targets, TargetError>
 {
-    let prepared = validate_and_absolutize(declared)?;
+    let prepared = absolutize_targets(declared, tree)?;
     // Taken before the expansion, which is what turns one pattern into paths nobody typed
     let mut written_by_hand = HashSet::new();
     let mut names_roots = HashMap::new();
@@ -123,45 +124,20 @@ pub(crate) fn resolve(declared: &[Target], obeyed: crate::ObeyedIgnoreFiles, sea
 ///
 /// [`crate::run`] does this as its first step anyway, so call it only to refuse a bad path at the
 /// moment somebody typed it. It does not expand patterns, because which of a pattern's matches
-/// survive depends on settings this cannot see.
-pub fn validate_and_absolutize(declared: &[Target]) -> Result<Vec<Target>, TargetError> {
-    let tree = TreeView;
-    let mut prepared: Vec<Target> = Vec::with_capacity(declared.len());
-    for target in declared {
-        let (module, trimmed) = (&target.module, target.path.trim());
-        // Two spellings of one name are one module, and the first one seen is the one the report
-        // prints
-        let module = module.as_ref().map(|name| prepared.iter()
-                .find_map(|x: &Target| x.module.clone().filter(|seen| seen.to_lowercase() == name.to_lowercase()))
-                .unwrap_or_else(|| name.clone()));
-        // What exists wins over what the text looks like: a path naming something on disk is taken
-        // literally whatever characters it has, and pattern syntax is only read in text that names
-        // nothing. The other way round, the brackets in a real directory's name, or in the working
-        // directory a relative path was joined to, are read as a character class and a place that
-        // exists is refused.
-        if is_valid_path(trimmed, &tree) {
-            prepared.push(Target { module, path: convert_to_absolute(trimmed) });
-        } else if has_glob_metacharacters(trimmed) {
-            prepared.push(Target { module, path: absolutize_pattern(trimmed) });
-        } else {
-            return Err(TargetError::InvalidPath(trimmed.to_owned()));
-        }
-    }
-    // Here as well as after the patterns expand, and not only there: a contest between two literal
-    // paths is decidable the moment they are typed, and under '--diff' the later check runs against
-    // a checkout, so it names a temporary directory nobody wrote.
-    find_contested_target(&prepared)?;
-
-    Ok(prepared)
+/// survive depends on settings this cannot see. A target below the root of one of `trees` is
+/// looked for in that tree, as the run given those trees looks for it.
+pub fn validate_and_absolutize(declared: &[Target], trees: &[Arc<MountedTree>]) -> Result<Vec<Target>, TargetError> {
+    absolutize_targets(declared, &TreeView::of(trees))
 }
 
 /// Checks whether a single target names a place that [`crate::run`] will visit under `config`,
 /// expanding a pattern only far enough to find its first surviving match.
 ///
-/// A literal path needs only to exist on disk; a pattern must parse and have at least one match
-/// left after the ignore files, dotted entries and links `config` skips have been taken out.
+/// A literal path needs only to exist, on disk or in one of the trees of `config`. A pattern must
+/// parse and have at least one match left after the ignore files, dotted entries and links `config`
+/// skips have been taken out.
 pub fn validate_target(target: &Target, config: &crate::EngineConfig) -> Result<(), TargetError> {
-    let tree = TreeView;
+    let tree = TreeView::of(&config.trees);
     let trimmed = target.path.trim();
     if is_valid_path(trimmed, &tree) {
         return Ok(());
@@ -188,8 +164,8 @@ pub fn validate_target(target: &Target, config: &crate::EngineConfig) -> Result<
     }
 }
 
-// Two names over one path is not something a rule can settle: there is no more specific one of the
-// two, and whichever won would take the other's files away without a word.
+// Two names over one path is not something a rule can settle. Neither of the two is more specific,
+// and whichever won would take the other's files away without a word.
 fn find_contested_target(targets: &[Target]) -> Result<(), TargetError> {
     for (position, target) in targets.iter().enumerate() {
         let key = path_comparison_key(&target.path);
@@ -276,6 +252,36 @@ pub(crate) fn is_inside_or_at(path: &str, folder: &str) -> bool {
 // Spelled the way the targets are, since the climbs above them compare the two by component
 pub(crate) fn resolve_checkout(checkout: &RepositoryCheckout) -> RepositoryCheckout {
     RepositoryCheckout { root: convert_to_absolute(&checkout.root), repository: convert_to_absolute(&checkout.repository) }
+}
+
+fn absolutize_targets(declared: &[Target], tree: &TreeView) -> Result<Vec<Target>, TargetError> {
+    let mut prepared: Vec<Target> = Vec::with_capacity(declared.len());
+    for target in declared {
+        let (module, trimmed) = (&target.module, target.path.trim());
+        // Two spellings of one name are one module, and the first one seen is the one the report
+        // prints
+        let module = module.as_ref().map(|name| prepared.iter()
+                .find_map(|x: &Target| x.module.clone().filter(|seen| seen.to_lowercase() == name.to_lowercase()))
+                .unwrap_or_else(|| name.clone()));
+        // What exists wins over what the text looks like: a path naming something on disk is taken
+        // literally whatever characters it has, and pattern syntax is only read in text that names
+        // nothing. The other way round, the brackets in a real directory's name, or in the working
+        // directory a relative path was joined to, are read as a character class and a place that
+        // exists is refused.
+        if is_valid_path(trimmed, tree) {
+            prepared.push(Target { module, path: convert_to_absolute(trimmed) });
+        } else if has_glob_metacharacters(trimmed) {
+            prepared.push(Target { module, path: absolutize_pattern(trimmed) });
+        } else {
+            return Err(TargetError::InvalidPath(trimmed.to_owned()));
+        }
+    }
+    // Here as well as after the patterns expand. A contest between two literal paths is decidable
+    // the moment they are typed, and under '--diff' the later check runs against a checkout, so it
+    // names a temporary directory nobody wrote.
+    find_contested_target(&prepared)?;
+
+    Ok(prepared)
 }
 
 // Sorted by path with the duplicates gone, so the nearest enclosing target of any entry is the last
@@ -531,7 +537,7 @@ mod target_path_tests {
         std::fs::create_dir_all(&bracketed).unwrap();
         let bracketed_str = bracketed.to_str().unwrap().replace('\\', "/");
 
-        let resolved = resolve(&[Target::of(bracketed_str)], obey_every_ignore_file(), false, &TreeView);
+        let resolved = resolve(&[Target::of(bracketed_str)], obey_every_ignore_file(), false, &TreeView::of(&[]));
         std::fs::remove_dir_all(&root).unwrap();
 
         let resolved = resolved.unwrap();
@@ -542,7 +548,7 @@ mod target_path_tests {
     fn resolved_paths(declared: Vec<Target>, respect_ignore_files: bool) -> Result<Vec<String>, TargetError> {
         let obeyed = crate::ObeyedIgnoreFiles { gitignore: respect_ignore_files,
                 search_tools: respect_ignore_files };
-        resolve(&declared, obeyed, false, &TreeView).map(|x| x.iter().map(Target::to_string).collect())
+        resolve(&declared, obeyed, false, &TreeView::of(&[])).map(|x| x.iter().map(Target::to_string).collect())
     }
 
     fn obey_every_ignore_file() -> crate::ObeyedIgnoreFiles {
@@ -557,10 +563,10 @@ mod target_path_tests {
         let root_str = root.to_str().unwrap().replace('\\', "/");
 
         let contested = resolve(&[Target::named("code", root_str.clone()), Target::named("other", root_str.clone())], obey_every_ignore_file(), false,
-                &TreeView);
-        let unnamed = resolve(&[Target::named("code", root_str.clone()), Target::of(root_str.clone())], obey_every_ignore_file(), false, &TreeView);
+                &TreeView::of(&[]));
+        let unnamed = resolve(&[Target::named("code", root_str.clone()), Target::of(root_str.clone())], obey_every_ignore_file(), false, &TreeView::of(&[]));
         let repeated = resolve(&[Target::named("code", root_str.clone()), Target::named("code", root_str)], obey_every_ignore_file(), false,
-                &TreeView);
+                &TreeView::of(&[]));
         std::fs::remove_dir_all(&root).unwrap();
 
         assert!(matches!(contested, Err(TargetError::Contested(_, ref a, ref b)) if a == "code" && b == "other"));
@@ -580,8 +586,8 @@ mod target_path_tests {
 
         // The two spellings are one path once absolutized, which is what makes it a contest
         let contested = validate_and_absolutize(&[Target::named("one", slashes.clone()),
-                Target::named("two", backslashes)]);
-        let apart = validate_and_absolutize(&[Target::named("one", slashes.clone()), Target::of(slashes)]);
+                Target::named("two", backslashes)], &[]);
+        let apart = validate_and_absolutize(&[Target::named("one", slashes.clone()), Target::of(slashes)], &[]);
         std::fs::remove_dir_all(&root).unwrap();
 
         assert!(matches!(contested, Err(TargetError::Contested(_, ref a, ref b)) if a == "one" && b == "two"),
@@ -677,15 +683,15 @@ mod target_path_tests {
         let root_str = root.to_str().unwrap().replace('\\', "/");
         let abs = |x: &str| convert_to_absolute(&format!("{root_str}/{x}"));
 
-        let kept = resolve(&[Target::of(format!("{root_str}/src/*/x.rs"))], obey_every_ignore_file(), false, &TreeView).unwrap();
+        let kept = resolve(&[Target::of(format!("{root_str}/src/*/x.rs"))], obey_every_ignore_file(), false, &TreeView::of(&[])).unwrap();
         assert_eq!(vec![abs("src/open/x.rs")], kept.iter().map(|t| t.path.clone()).collect::<Vec<_>>());
 
-        let with_dotted = resolve(&[Target::of(format!("{root_str}/**/*.rs"))], obey_every_ignore_file(), true, &TreeView).unwrap();
+        let with_dotted = resolve(&[Target::of(format!("{root_str}/**/*.rs"))], obey_every_ignore_file(), true, &TreeView::of(&[])).unwrap();
         assert_eq!(vec![abs("src/.hidden/x.rs"), abs("src/open/x.rs")],
                 with_dotted.iter().map(|t| t.path.clone()).collect::<Vec<_>>(),
                 "'.git' was matched by a pattern under '--search-in-dotted'");
 
-        let explicit_dotted = resolve(&[Target::of(format!("{root_str}/src/.hidden/*.rs"))], obey_every_ignore_file(), false, &TreeView)
+        let explicit_dotted = resolve(&[Target::of(format!("{root_str}/src/.hidden/*.rs"))], obey_every_ignore_file(), false, &TreeView::of(&[]))
                 .unwrap();
         assert_eq!(vec![abs("src/.hidden/x.rs")], explicit_dotted.iter().map(|t| t.path.clone()).collect::<Vec<_>>());
 
@@ -753,9 +759,9 @@ mod target_path_tests {
         let pattern_str = nowhere.join("a?b").to_str().unwrap().replace('\\', "/");
         let plain_str = nowhere.join("plain").to_str().unwrap().replace('\\', "/");
 
-        assert!(matches!(resolve(&[Target::of(pattern_str)], obey_every_ignore_file(), false, &TreeView),
+        assert!(matches!(resolve(&[Target::of(pattern_str)], obey_every_ignore_file(), false, &TreeView::of(&[])),
                 Err(TargetError::NoGlobMatches(_))));
-        assert!(matches!(validate_and_absolutize(&[Target::of(plain_str.clone())]), Err(TargetError::InvalidPath(p)) if p == plain_str));
+        assert!(matches!(validate_and_absolutize(&[Target::of(plain_str.clone())], &[]), Err(TargetError::InvalidPath(p)) if p == plain_str));
     }
 
     #[test]
@@ -766,8 +772,8 @@ mod target_path_tests {
         std::fs::create_dir_all(root.join("b")).unwrap();
         let path = |x: &str| root.join(x).to_str().unwrap().replace('\\', "/");
 
-        let prepared = validate_and_absolutize(&[Target::named("code", path("a")), Target::named("CODE", path("b"))]);
-        let separate = validate_and_absolutize(&[Target::named("code", path("a")), Target::named("suite", path("b"))]);
+        let prepared = validate_and_absolutize(&[Target::named("code", path("a")), Target::named("CODE", path("b"))], &[]);
+        let separate = validate_and_absolutize(&[Target::named("code", path("a")), Target::named("suite", path("b"))], &[]);
         std::fs::remove_dir_all(&root).unwrap();
 
         assert_eq!(vec![Some("code".to_owned()), Some("code".to_owned())],
@@ -808,7 +814,7 @@ mod target_path_tests {
         let root_str = convert_to_absolute(&root.join("a/..").to_string_lossy());
         let declared = [Target::of(format!("{root_str}/a")), Target::of(format!("{root_str}/b/src/../src")),
                 Target::of(format!("{root_str}/*/src")), Target::of(format!("{root_str}/a/src/one.rs"))];
-        let resolved = resolve(&declared, obey_every_ignore_file(), false, &TreeView).unwrap();
+        let resolved = resolve(&declared, obey_every_ignore_file(), false, &TreeView::of(&[])).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
 
         let below_root = |path: &str| path[resolved.find_names_root_of(path)..].to_owned();

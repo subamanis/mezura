@@ -508,7 +508,7 @@ fn accept_python_files(entries: &[String]) -> Option<Vec<String>> {
             || is_a_path_pattern(name)) {
         return None;
     }
-    PathPatternMatcher::compile(&names, TakingBack::Refused, &TreeView).ok()?;
+    PathPatternMatcher::compile(&names, TakingBack::Refused, &TreeView::of(&[])).ok()?;
     Some(names)
 }
 
@@ -667,7 +667,7 @@ mod tests {
         let present = |directory: &str| {
             let directory = root.join(directory);
             let names = fs::read_dir(&directory).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
-            read_pytest_configuration(&directory, move |file| names.iter().any(|name| name == file), &TreeView)
+            read_pytest_configuration(&directory, move |file| names.iter().any(|name| name == file), &TreeView::of(&[]))
         };
         let scope = |directory: &str, below: &str| vec![format!("{}/{below}", spell_out(&root.join(directory)))];
 
@@ -681,7 +681,7 @@ mod tests {
         assert_eq!(("tox.ini", Some(scope("pyproject-without-table", "tests"))), (found.file, found.testpaths), "a pyproject.toml without a pytest table decided");
         let found = present("bom").unwrap();
         assert_eq!(Some(scope("bom", "tests")), found.testpaths, "a byte order mark hid the section");
-        assert!(read_pytest_configuration(&root.join("bom"), |_| false, &TreeView).is_none(), "a file the listing does not hold was read");
+        assert!(read_pytest_configuration(&root.join("bom"), |_| false, &TreeView::of(&[])).is_none(), "a file the listing does not hold was read");
 
         fs::remove_dir_all(&root).unwrap();
     }

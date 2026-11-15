@@ -1,5 +1,22 @@
 # Changelog
 
+## 4.0.0, unreleased
+
+Breaking:
+
+- `EngineConfig` gains the public field `trees`, so a literal of it names it.
+- `validate_and_absolutize` takes the mounted trees of the run as its second argument, an empty
+  slice where there are none.
+- `EngineConfig` is no longer `UnwindSafe` or `RefUnwindSafe`, since a `MountedTree` holds a
+  function of the caller's.
+
+New:
+
+- `MountedTree`, a set of files that is no folder on disk, such as a revision of a repository, read
+  through a function of the caller's and counted under a root as though it were a folder. A run
+  takes its trees in `EngineConfig::trees`, and `MountedTree::holds` checks whether a path names a
+  file or a folder of one.
+
 ## 3.0.0, 2026-11-12
 
 25,997 Total lines  -  17,068 Code lines

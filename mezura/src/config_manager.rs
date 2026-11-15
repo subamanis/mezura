@@ -1171,6 +1171,7 @@ impl ConfigurationBuilder {
                 detect_tests: !hidden.tests,
                 collect_files: self.by_file.is_some(),
                 test_patterns: self.test_patterns.clone().unwrap_or_default(),
+                trees: Vec::new(),
                 checkout
             },
             view: ViewConfig {
@@ -2235,7 +2236,7 @@ fn targets_match_by(one: &[Target], other: &[Target], include_modules: bool) -> 
                 Ok(crate::git::TargetSpec::LocalRevision { path, revision, .. }) =>
                     format!("{}@{revision}", absolutize_local_path(&path)),
                 Ok(crate::git::TargetSpec::Remote(remote)) => remote.display,
-                _ => mezura_core::validate_and_absolutize(std::slice::from_ref(target)).ok()
+                _ => mezura_core::validate_and_absolutize(std::slice::from_ref(target), &[]).ok()
                         .and_then(|mut prepared| prepared.pop())
                         .map_or_else(|| mezura_core::convert_to_absolute(&target.path), |prepared| prepared.path)
             };
@@ -2395,7 +2396,7 @@ fn parse_targets(tokens: &[String]) -> Result<Vec<Target>, ArgParsingError> {
                 resolved.push(target);
             },
             crate::git::TargetSpec::LocalPath(_) => {
-                let mut local = mezura_core::validate_and_absolutize(std::slice::from_ref(&target))
+                let mut local = mezura_core::validate_and_absolutize(std::slice::from_ref(&target), &[])
                         .map_err(map_target_error)?;
                 resolved.append(&mut local);
             }
@@ -2544,7 +2545,7 @@ fn materialize_checkout_targets(config_builder: &mut ConfigurationBuilder, hide_
         }
     }
 
-    let validated = mezura_core::validate_and_absolutize(&rewritten)
+    let validated = mezura_core::validate_and_absolutize(&rewritten, &[])
             .map_err(|error| map_target_error_outside_checkouts(error, &checkouts))?;
     config_builder.targets = Some(validated);
     config_builder.target_checkouts = checkouts;

@@ -63,6 +63,7 @@ pub use engine::path_patterns::{PatternError, absolutize_path_pattern, is_a_path
 pub use engine::targets::{TargetError, convert_to_absolute, normalise_separators, validate_and_absolutize,
         validate_target};
 pub use engine::test_detection::{DependencyManifest, TestPreset};
+pub use engine::tree::MountedTree;
 pub use explain::{Carried, ExplainError, ExplainedLine, FileExplanation, MatchedPreset, TestFileRule, explain_file};
 pub use languages::{LanguageClaims, Languages};
 pub use progress::{RunWatcher, ScanProgress, Unwatched};
@@ -71,9 +72,10 @@ pub use result::{AppliedPreset, FaultyFileDetails, FileEntry, FilesPresent, Modu
 pub use warnings::{Affects, Code, Warning};
 
 #[cfg(test)]
-pub(crate) use test_support::{languages_claiming, test_paths};
+pub(crate) use test_support::{languages_claiming, mount_copy_of, test_paths};
 
 use std::collections::HashMap;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -162,7 +164,7 @@ pub fn run_watched_by<W: RunWatcher>(config: &EngineConfig, languages: Languages
     if !languages.describe_the_same_selection_as(config) {
         return Err(RunError::LanguagesFromAnotherConfig);
     }
-    let tree = TreeView;
+    let tree = TreeView::of(&config.trees);
     // Idempotent, so a caller that resolved its own targets earlier loses nothing here.
     let targets = engine::targets::resolve(&config.targets, ObeyedIgnoreFiles::of(config),
             config.should_search_in_dotted, &tree).map_err(RunError::InvalidTargets)?;
@@ -460,7 +462,7 @@ pub(crate) fn queue_the_targets<W: RunWatcher>(config: &EngineConfig, targets: &
     let mut scopes_of_directories = HashMap::new();
     let climb = PresetClimb::new(test_patterns.get_presets_taken_back());
     let checkout = config.checkout.as_ref().map(engine::targets::resolve_checkout);
-    let tree = TreeView;
+    let tree = TreeView::of(&config.trees);
     for target in crate::engine::targets::topmost_targets(targets) {
         let dir_path = Path::new(&target.path);
         let module = modules.of_target(&target);
@@ -469,7 +471,7 @@ pub(crate) fn queue_the_targets<W: RunWatcher>(config: &EngineConfig, targets: &
         let exclude_root = find_names_root_of_target(&config.exclude_patterns, &target.path, own_root);
         if tree.is_file(dir_path) {
             let lookup = language_lookups.get_of_module(module);
-            let Some(lang_name) = lookup.of_path_or_shebang(dir_path) else {
+            let Some(lang_name) = lookup.of_path_or_shebang(dir_path, &tree) else {
                 continue;
             };
             let size = tree.get_file_size(dir_path).unwrap_or(0);
@@ -693,7 +695,7 @@ pub(crate) struct GitignoreStack {
 impl GitignoreStack {
     // The names must arrive in the order 'get_file_names' gives them, since the last rule that
     // matches is the one that answers.
-    pub(crate) fn extend_with_ignore_files(dir: &Path, parent: Option<Arc<GitignoreStack>>, names: &[&str])
+    pub(crate) fn extend_with_ignore_files(dir: &Path, parent: Option<Arc<GitignoreStack>>, names: &[&str], tree: &TreeView)
     -> Option<Arc<GitignoreStack>>
     {
         if names.is_empty() {
@@ -701,10 +703,14 @@ impl GitignoreStack {
         }
 
         let mut builder = ignore::gitignore::GitignoreBuilder::new(dir);
+        let mount = tree.find_mount_of(dir);
         for name in names {
             // Ignored the way 'Gitignore::new' ignores it: a file that could not be read, or a
             // pattern that does not parse, costs that one rule and not the whole walk
-            let _ = builder.add(dir.join(name));
+            match mount {
+                None => { let _ = builder.add(dir.join(name)); },
+                Some(mount) => add_mounted_ignore_file(&mut builder, mount, dir.join(name))
+            }
         }
 
         match builder.build() {
@@ -717,7 +723,7 @@ impl GitignoreStack {
     -> Option<Arc<GitignoreStack>>
     {
         let present = obeyed.get_file_names().filter(|name| tree.is_file(&dir.join(name))).collect::<Vec<_>>();
-        Self::extend_with_ignore_files(dir, parent, &present)
+        Self::extend_with_ignore_files(dir, parent, &present, tree)
     }
 
     // The ignore files of every dir between the repository root and the given dir, excluding it
@@ -799,6 +805,20 @@ impl GitignoreStack {
     }
 }
 
+// Read the way 'GitignoreBuilder::add' reads a file it opened. A line that is no UTF-8 ends the
+// file, and the byte order mark git skips is dropped from the first line.
+fn add_mounted_ignore_file(builder: &mut ignore::gitignore::GitignoreBuilder, mount: &MountedTree, path: PathBuf) {
+    let mut bytes = Vec::new();
+    if mount.read_into(&path, &mut bytes).is_err() {
+        return;
+    }
+    for (at, line) in bytes.as_slice().lines().enumerate() {
+        let Ok(line) = line else { break };
+        let line = if at == 0 { line.trim_start_matches('\u{feff}') } else { &line };
+        let _ = builder.add_line(Some(path.clone()), line);
+    }
+}
+
 fn merge_over_modules<T: Clone + Default>(per_module: &[HashMap<String, T>], add: fn(&mut T, &T))
 -> HashMap<String, T> {
     let mut merged = per_module[0].clone();
@@ -849,7 +869,7 @@ mod tests {
         let languages = languages_claiming(&[("Rust", &["rs"]), ("Go", &["go"]), ("Zig", &["zig"])]);
         let modules = Modules::of(&[crate::engine::config::Target::named("backend", "./api"),
                 crate::engine::config::Target::named("frontend", "./web"),
-                crate::engine::config::Target::of("./docs")], &TreeView);
+                crate::engine::config::Target::of("./docs")], &TreeView::of(&[]));
         assert_eq!(3, modules.count());
 
         let stats = make_language_stats(&languages, modules.count());
@@ -885,6 +905,30 @@ mod tests {
 
         // nothing to add up is a total of nothing
         assert_eq!(0, Stats::calculate_total_of(&HashMap::new()).files);
+    }
+
+    #[test]
+    fn a_file_that_is_no_utf8_fails_alike_in_a_mounted_copy_and_carries_its_size() {
+        let root = std::env::temp_dir().join("mezura_mounted_faulty_file");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("good.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(root.join("bad.rs"), [0xFF, 0xFE, 0x80, b'\n']).unwrap();
+        let on_disk = engine::targets::spell_out(&root);
+        let mounted = format!("{on_disk}-mounted");
+        let count = |base: &str, trees: Vec<Arc<MountedTree>>| {
+            let config = EngineConfig { threads: Threads::new(1, 2), trees, ..EngineConfig::new([base]) };
+            let languages = language_file::parse_languages_in_dir(test_paths::LANGUAGES_DIR).unwrap().0;
+            let result = run(&config, Languages::resolve(&config, languages, &Default::default()).0).unwrap();
+            (result.total.files, result.faulty_files.into_iter()
+                    .map(|faulty| (faulty.path[base.len()..].to_owned(), faulty.error_msg, faulty.size)).collect::<Vec<_>>())
+        };
+
+        let read_from_disk = count(&on_disk, Vec::new());
+        assert_eq!((1, vec![("/bad.rs".to_owned(), "stream did not contain valid UTF-8".to_owned(), 4)]), read_from_disk);
+        assert_eq!(read_from_disk, count(&mounted, vec![mount_copy_of(&root, &mounted, None)]));
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
 

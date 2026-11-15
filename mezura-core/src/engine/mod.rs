@@ -13,10 +13,12 @@ pub(crate) mod producer;
 pub(crate) mod test_detection;
 pub(crate) mod tree;
 
+pub(crate) const NAMES_FOLD_CASE : bool = cfg!(any(windows, target_os = "macos"));
+
 // Compared without regard to case wherever the filesystem ignores it, since the name a listing
 // spells is the same file there.
 pub(crate) fn is_the_same_name(listed: &[u8], wanted: &[u8]) -> bool {
-    match cfg!(any(windows, target_os = "macos")) {
+    match NAMES_FOLD_CASE {
         true => listed.eq_ignore_ascii_case(wanted),
         false => listed == wanted
     }

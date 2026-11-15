@@ -45,12 +45,12 @@ impl std::fmt::Display for PatternError {
 
 /// Whether every test pattern of a list reads, for refusing a bad one at the moment somebody typed it.
 pub fn validate_test_patterns(patterns: &[impl AsRef<str>]) -> Result<(), PatternError> {
-    PathPatternMatcher::compile(patterns, TakingBack::Allowed, &TreeView).map(|_| ())
+    PathPatternMatcher::compile(patterns, TakingBack::Allowed, &TreeView::of(&[])).map(|_| ())
 }
 
 /// Whether every exclude pattern reads, a `!` among them refused, for refusing a bad one when typed.
 pub fn validate_exclude_patterns(patterns: &[impl AsRef<str>]) -> Result<(), PatternError> {
-    PathPatternMatcher::compile(patterns, TakingBack::Refused, &TreeView).map(|_| ())
+    PathPatternMatcher::compile(patterns, TakingBack::Refused, &TreeView::of(&[])).map(|_| ())
 }
 
 /// The `!` in front of a pattern, or an empty string, and the rest of the pattern trimmed.
@@ -80,7 +80,7 @@ pub fn absolutize_path_pattern(pattern: &str) -> String {
     let text = normalise_separators(text);
     let (_, without_suffix) = strip_folder_suffix(&text);
     let suffix = &text[without_suffix.len()..];
-    let (place, rest, _) = split_place(without_suffix, &TreeView);
+    let (place, rest, _) = split_place(without_suffix, &TreeView::of(&[]));
     format!("{negation}{}{suffix}", join_place_and_rest(&absolutize_place(place), rest))
 }
 
@@ -88,7 +88,7 @@ pub fn absolutize_path_pattern(pattern: &str) -> String {
 pub fn is_on_disk(pattern: &str) -> bool {
     let text = normalise_separators(split_negation(pattern).1);
     let (_, without_suffix) = strip_folder_suffix(&text);
-    split_place(without_suffix, &TreeView).2
+    split_place(without_suffix, &TreeView::of(&[])).2
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -392,7 +392,7 @@ mod tests {
     use super::*;
 
     fn matcher(patterns: &[&str]) -> PathPatternMatcher {
-        PathPatternMatcher::compile(&owned(patterns), TakingBack::Allowed, &TreeView).unwrap()
+        PathPatternMatcher::compile(&owned(patterns), TakingBack::Allowed, &TreeView::of(&[])).unwrap()
     }
 
     fn owned(patterns: &[&str]) -> Vec<String> {
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn a_pattern_that_names_nothing_or_does_not_parse_is_refused_as_written() {
-        let compile = |patterns: &[&str]| PathPatternMatcher::compile(&owned(patterns), TakingBack::Allowed, &TreeView).map(|_| ());
+        let compile = |patterns: &[&str]| PathPatternMatcher::compile(&owned(patterns), TakingBack::Allowed, &TreeView::of(&[])).map(|_| ());
         assert_eq!(Err(PatternError::Empty("!".to_owned())), compile(&["!"]));
         assert_eq!(Err(PatternError::Empty("/".to_owned())), compile(&["/"]));
         assert_eq!(Err(PatternError::Empty(" ! / ".to_owned())), compile(&[" ! / "]));
@@ -579,7 +579,7 @@ mod tests {
         assert!(validate_exclude_patterns(&owned(&["node_modules", "*.min.js", "src/generated", "./target"])).is_ok());
 
         let root = "D:/dev/".len();
-        let excluded = PathPatternMatcher::compile(&owned(&["node_modules", "*.min.js", "build/"]), TakingBack::Refused, &TreeView).unwrap();
+        let excluded = PathPatternMatcher::compile(&owned(&["node_modules", "*.min.js", "build/"]), TakingBack::Refused, &TreeView::of(&[])).unwrap();
         let path = |x: &str| std::path::PathBuf::from(x);
         assert!(excluded.matches(&path("D:/dev/proj/node_modules"), root, true, &mut Vec::new()));
         assert!(excluded.matches(&path("D:/dev/proj/app/x.min.js"), root, false, &mut Vec::new()));

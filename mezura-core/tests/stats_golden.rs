@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use mezura_core::{CountingModel, EngineConfig, Languages, LineClasses, Stats, language_file, run};
+use mezura_core::{CountingModel, EngineConfig, Languages, LineClasses, MountedTree, Stats, language_file, run};
 
 const LANGUAGES_DIR : &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/languages/");
 
@@ -63,14 +64,36 @@ fn render_classes(classes: &LineClasses) -> String {
             .join(" ")
 }
 
+fn collect_stats() -> String {
+    collect_stats_of(&fixtures_root().to_str().unwrap().replace('\\', "/"), Vec::new())
+}
+
+// The corpus as a tree read under a root nothing on disk has, each file read from where it lies,
+// which is how a revision read from git reaches the library
+fn mount_the_corpus() -> (String, Arc<MountedTree>) {
+    let corpus = fixtures_root();
+    let root = format!("{}-mounted", corpus.to_str().unwrap().replace('\\', "/"));
+    assert!(!Path::new(&root).exists(), "{root} is on disk, so a read the tree missed would go unnoticed");
+    let files = std::fs::read_dir(&corpus).unwrap().flatten().map(|entry| {
+        assert!(entry.file_type().unwrap().is_file(), "the corpus holds a folder, which this copy does not walk");
+        PathBuf::from(entry.file_name())
+    }).collect::<Vec<_>>();
+    let originals = files.iter().map(|file| corpus.join(file)).collect::<Vec<_>>();
+    let tree = MountedTree::new(&root, None, files, move |at, buf| {
+        std::io::Read::read_to_end(&mut std::fs::File::open(&originals[at])?, buf).map(|_| ())
+    });
+    (root, Arc::new(tree))
+}
+
 // One producer and several consumers, which is where the per-thread stats merging happens and where
 // the historical nondeterminism bugs lived. Through 'run' and not through a hand-built queue, so
 // that what is measured is the wiring the program actually uses.
-fn collect_stats() -> String {
+fn collect_stats_of(target: &str, trees: Vec<Arc<MountedTree>>) -> String {
     // Only the counting half, since nothing here is printed.
     let config = EngineConfig {
         threads: mezura_core::Threads::new(1, CONSUMER_THREADS),
-        ..EngineConfig::new([fixtures_root().to_str().unwrap().replace('\\', "/")])
+        trees,
+        ..EngineConfig::new([target])
     };
 
     // The repository's own files and not the copies baked into the library, so that editing one of
@@ -103,8 +126,7 @@ fn stats_of_the_fixture_corpus_match_the_golden_byte_for_byte() {
 
     // The line endings are normalised on the way in, the way the layouts golden beside this one
     // already does it. The file is written with '\n' and git hands it back with '\r\n' on a Windows
-    // checkout, so the two differ in every line ending and in nothing else: the comparison failed
-    // while every line matched, and a fresh clone on this platform failed on its first run.
+    // checkout, so the two differ in every line ending and in nothing else.
     let expected = std::fs::read_to_string(&golden).unwrap_or_else(|x|
             panic!("cannot read {}: {x}\nRun with {UPDATE_ENV_VAR}=1 to create it.", golden.display()))
             .replace("\r\n", "\n");
@@ -128,6 +150,12 @@ fn stats_of_the_fixture_corpus_match_the_golden_byte_for_byte() {
         panic!("\nthe fixture corpus no longer produces the recorded stats:\n  {}\n\nIf the change is intended, rerun with {UPDATE_ENV_VAR}=1 and review the diff of {}.\n",
                 differences.join("\n  "), golden.display());
     }
+}
+
+#[test]
+fn a_mounted_copy_of_the_fixture_corpus_counts_as_the_corpus_on_disk() {
+    let (root, tree) = mount_the_corpus();
+    assert_eq!(collect_stats(), collect_stats_of(&root, vec![tree]), "the corpus read from a mounted tree counted otherwise");
 }
 
 #[test]

@@ -68,7 +68,7 @@ fn search_for_files<W: RunWatcher>(id: usize, files_injector: &Injector<Parsable
     let mut ignore_files = Vec::new();
     let mut patterns_found = Vec::new();
     let presets_taken_back = test_patterns.get_presets_taken_back();
-    let tree = TreeView;
+    let tree = TreeView::of(&config.trees);
 
     loop {
         // Newest of its own subdirectories first, so a thread finishes the branch it is in before it
@@ -97,12 +97,13 @@ fn search_for_files<W: RunWatcher>(id: usize, files_injector: &Injector<Parsable
                     let (build_files, trigger_files) = find_ignore_build_and_trigger_files_among(&entries,
                             ObeyedIgnoreFiles::of(config), config.detect_tests, &mut ignore_files, &dir.path, &tree);
                     let gitignore_stack = GitignoreStack::extend_with_ignore_files(&dir.path,
-                            dir.gitignore_stack.clone(), &ignore_files);
+                            dir.gitignore_stack.clone(), &ignore_files, &tree);
                     let with_presets = turn_on_presets(&dir.scope, trigger_files, &dir.path, presets_taken_back, applied_presets,
                             &tree);
                     traverse_dir(files_injector, &mut entries, &worker, language_lookups, exclude_patterns, dir.exclude_root,
                             test_patterns, &mut patterns_found, &gitignore_stack, config, modules, dir.module,
-                            with_presets.as_ref().unwrap_or(&dir.scope), build_files, &dir.path, &mut files_present, watcher)
+                            with_presets.as_ref().unwrap_or(&dir.scope), build_files, &dir.path, &mut files_present, watcher,
+                            &tree)
                 },
                 // Everything under it goes uncounted and reaches no total, not even the number of
                 // files looked at, and nothing else would say so. The reason travels with the path,
@@ -214,7 +215,7 @@ fn traverse_dir<W: RunWatcher>(files_injector: &Injector<ParsableFile>, entries:
         language_lookups: &ModuleLookups, exclude_patterns: &PathPatternMatcher, exclude_root: usize, test_patterns: &PathPatternMatcher,
         patterns_found: &mut Vec<usize>, gitignore_stack: &Option<Arc<GitignoreStack>>, config: &EngineConfig, modules: &Modules,
         module: ModuleId, scope: &DirectoryScope, build_files: BuildFilesSeen, dir_path: &Path, files_present: &mut FilesPresent,
-        watcher: &W)
+        watcher: &W, tree: &TreeView)
 {
     let mut local_total_files = 0;
     let mut local_relevant_files = 0;
@@ -255,7 +256,7 @@ fn traverse_dir<W: RunWatcher>(files_injector: &Injector<ParsableFile>, entries:
                     }
                     continue;
                 }
-                let Some(lang_name) = claimed.or_else(|| language_lookup.of_shebang(&path_buf)) else {
+                let Some(lang_name) = claimed.or_else(|| language_lookup.of_shebang(&path_buf, tree)) else {
                     continue;
                 };
                 local_relevant_files += 1;
@@ -336,6 +337,34 @@ mod tests {
     }
 
     fn scan(target: &str, extra_args: &str) -> (usize, usize, usize, Vec<ParsableFile>, Modules) {
+        scan_in(target, extra_args, &[])
+    }
+
+    // What the scan of a folder and the scan of a copy of it mounted under a root nothing on disk has
+    // find, which must be the same files with the same languages and test scopes. The copy names the
+    // folder as its repository, so the climbs above both roots read the same folders. '{root}' in the
+    // arguments is each scan's own root.
+    fn assert_a_mounted_copy_scans_alike(folder: &Path, targets_below: &[&str], arg_lists: &[&str]) {
+        let on_disk = spell_out(folder);
+        let mounted = format!("{on_disk}-mounted");
+        let trees = [crate::mount_copy_of(folder, &mounted, Some(&on_disk))];
+        let describe = |root: &str, target: &str, args: &str, trees: &[Arc<crate::MountedTree>]| {
+            let (total, relevant, excluded, found, _) = scan_in(&format!("{root}{target}"), &args.replace("{root}", root), trees);
+            let mut files = found.into_iter()
+                    .map(|file| (spell_out(&file.path)[root.len()..].to_owned(), file.language_name.to_string(), file.test_scope))
+                    .collect::<Vec<_>>();
+            files.sort_by(|a, b| a.0.cmp(&b.0));
+            (total, relevant, excluded, files)
+        };
+        for target in targets_below {
+            for args in arg_lists {
+                assert_eq!(describe(&on_disk, target, args, &[]), describe(&mounted, target, args, &trees),
+                        "the mounted copy of '{target}' scanned with '{args}' found something else");
+            }
+        }
+    }
+
+    fn scan_in(target: &str, extra_args: &str, trees: &[Arc<crate::MountedTree>]) -> (usize, usize, usize, Vec<ParsableFile>, Modules) {
         // The rule the real parser applies. Whitespace separates one target from the next only once a
         // module has been named, so a path with a space in it survives while nothing is named.
         let declares_a_module = target.contains('=');
@@ -358,11 +387,13 @@ mod tests {
             detect_tests: !extra_args.contains("--hide tests"),
             exclude_patterns: crate::PathPatterns::of(patterns_of("--exclude ")),
             test_patterns: crate::PathPatterns::of(patterns_of("--tests ")),
+            trees: trees.to_vec(),
             ..Default::default()
         };
+        let tree = TreeView::of(&config.trees);
         // The same first step 'run' takes, with the flags the walk is about to obey
         let targets = crate::engine::targets::resolve(&config.targets, crate::ObeyedIgnoreFiles::of(&config),
-                config.should_search_in_dotted, &TreeView).unwrap();
+                config.should_search_in_dotted, &tree).unwrap();
         let language_map = crate::languages::keyed_by_name(
                 crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0);
         let files_injector = Injector::new();
@@ -372,13 +403,13 @@ mod tests {
                         by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
                         by_shebang: build_language_map_by(ClaimKind::Shebang, &language_map, &Default::default(), &Default::default()).0,
                         ..Default::default() }));
-        let modules = Modules::of(&targets, &TreeView);
+        let modules = Modules::of(&targets, &tree);
         let mut files_present = FilesPresent::default();
-        let test_patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed, &TreeView).unwrap();
+        let test_patterns = PathPatternMatcher::compile(&config.test_patterns.patterns, TakingBack::Allowed, &tree).unwrap();
         let above = queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector, &mut files_present,
                 &language_lookups, &modules, &crate::Unwatched);
 
-        let exclude_patterns = PathPatternMatcher::compile(&config.exclude_patterns.patterns, TakingBack::Refused, &TreeView).unwrap();
+        let exclude_patterns = PathPatternMatcher::compile(&config.exclude_patterns.patterns, TakingBack::Refused, &tree).unwrap();
         let (found, _) = search_for_files(0, &files_injector, &dirs_injector,
                 Worker::new_lifo(), &[], &idle_producers, &language_lookups, &exclude_patterns, &test_patterns, &config, &modules,
                 &Mutex::new(above), &AtomicUsize::new(1), &crate::Unwatched);
@@ -447,6 +478,8 @@ mod tests {
         let off = scopes_of(scan(&root_str, "--hide tests").3);
         assert!(off.values().all(|scope| *scope == Ordinary), "{off:?}");
 
+        assert_a_mounted_copy_scans_alike(&root, &["", "/cargo/tests/common", "/jvm/src", "/sbt/core", "/sbt", "/cargo/tests/c.rs"],
+                &["", "--hide tests"]);
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -511,6 +544,8 @@ mod tests {
         let off = scan(&proj, "--tests spec/ --hide tests").3;
         assert!(off.iter().all(|f| f.test_scope == Ordinary));
 
+        assert_a_mounted_copy_scans_alike(&root, &["/spec/proj", "/spec/proj/spec/s.rs"],
+                &["--tests spec/,!spec/helpers/", "--tests !tests/fixtures/,!vendor/", "--tests {root}/spec/proj/src"]);
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -560,6 +595,7 @@ mod tests {
         let off = scopes_of(&proj, "--hide tests");
         assert!(off.values().all(|scope| *scope == Ordinary), "{off:?}");
 
+        assert_a_mounted_copy_scans_alike(&root, &["/proj", "/proj/app/src", "/proj/app/a.test.ts"], &["", "--tests !vendor/,!*.spec.ts"]);
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -604,6 +640,8 @@ mod tests {
         let (total, relevant, excluded, _) = count_files_of(&proj, "--exclude *.min.js,*.js");
         assert_eq!((8, 6, 2), (total, relevant, excluded));
 
+        assert_a_mounted_copy_scans_alike(&root, &["/tests/proj"], &["", "--exclude node_modules,*.min.js", "--exclude build/",
+                "--exclude {root}/tests/proj/br [v2]", "--exclude {root}/*/proj/src/gen"]);
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -620,21 +658,21 @@ mod tests {
 
         let config = EngineConfig { threads: crate::Threads::new(1, 1), ..EngineConfig::new([&root_str]) };
         let targets = crate::engine::targets::resolve(&config.targets, crate::ObeyedIgnoreFiles::of(&config),
-                config.should_search_in_dotted, &TreeView).unwrap();
+                config.should_search_in_dotted, &TreeView::of(&[])).unwrap();
         let language_map = crate::languages::keyed_by_name(
                 crate::language_file::parse_languages_in_dir(LANGUAGES_DIR).unwrap().0);
         let language_lookups = ModuleLookups::OfTheWholeRun(Box::new(
                 LanguageLookup { by_extension: build_extension_language_map(&language_map, &Default::default(), &Default::default()).0,
                         ..Default::default() }));
-        let modules = Modules::of(&targets, &TreeView);
+        let modules = Modules::of(&targets, &TreeView::of(&[]));
         let (files_injector, dirs_injector) = (Injector::new(), Injector::new());
         let mut files_present = FilesPresent::default();
-        let test_patterns = PathPatternMatcher::compile(&[] as &[&str], TakingBack::Allowed, &TreeView).unwrap();
+        let test_patterns = PathPatternMatcher::compile(&[] as &[&str], TakingBack::Allowed, &TreeView::of(&[])).unwrap();
         queue_the_targets(&config, &targets, &test_patterns, &dirs_injector, &files_injector,
                 &mut files_present, &language_lookups, &modules, &crate::Unwatched);
         dirs_injector.push(TraversedDir::new(std::path::PathBuf::from(&vanished), None, 0, DirectoryScope::default(), 0));
 
-        let exclude_patterns = PathPatternMatcher::compile(&[] as &[&str], TakingBack::Refused, &TreeView).unwrap();
+        let exclude_patterns = PathPatternMatcher::compile(&[] as &[&str], TakingBack::Refused, &TreeView::of(&[])).unwrap();
         let (found, unreadable) = search_for_files(0, &files_injector, &dirs_injector,
                 Worker::new_lifo(), &[], &AtomicUsize::new(0), &language_lookups, &exclude_patterns, &test_patterns,
                 &config, &modules, &Mutex::new(Vec::new()), &AtomicUsize::new(1), &crate::Unwatched);
@@ -696,6 +734,7 @@ mod tests {
         let (_, _, _, found_files) = count_files_of(&format!("{root}/*,{root}/**/*.rs"), "");
         assert_eq!(vec!["a.rs", "b.rs", "c.rs"], found_files);
 
+        assert_a_mounted_copy_scans_alike(Path::new(&root), &["/*", "/**/*.rs", "/sub/*"], &[""]);
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -834,14 +873,18 @@ mod tests {
         // and a file the ignore checks cover was never identified, so it is not 'excluded' either
         assert_eq!((6, 2, 0), (total, relevant, excluded));
 
+        assert_a_mounted_copy_scans_alike(&root, &["", "/deploy"], &[""]);
         fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn what_a_gitignore_names_is_left_out_of_the_walk() {
-        let root = std::env::temp_dir().join("mezura_gitignore_test");
-        let _ = fs::remove_dir_all(&root);
+        let holder = std::env::temp_dir().join("mezura_gitignore_test");
+        let _ = fs::remove_dir_all(&holder);
+        let root = holder.join("repo");
         fs::create_dir_all(root.join(".git")).unwrap();
+        // Read only by a climb that went past the root of the repository
+        fs::write(holder.join(".gitignore"), "*.rs\n").unwrap();
         fs::create_dir_all(root.join("ignored_dir")).unwrap();
         fs::create_dir_all(root.join("sub")).unwrap();
         fs::write(root.join(".gitignore"), "*.py\nignored_dir/\n!keep.py\n").unwrap();
@@ -867,7 +910,8 @@ mod tests {
         assert_eq!(1, relevant);
         assert_eq!(vec!["c.rs"], found_files);
 
-        fs::remove_dir_all(&root).unwrap();
+        assert_a_mounted_copy_scans_alike(&root, &["", "/ignored_dir", "/sub"], &["", "--no-gitignore"]);
+        fs::remove_dir_all(&holder).unwrap();
     }
 
     // A '.ignore' is what somebody writes to hide a vendored dependency from their search tools
@@ -905,6 +949,7 @@ mod tests {
         let (_, _, _, found_files) = count_files_of(&root_str, "--no-gitignore --no-ignore-files");
         assert_eq!(vec!["built.rs", "bundle.rs", "dep.rs", "mine.rs"], found_files);
 
+        assert_a_mounted_copy_scans_alike(&root, &[""], &["", "--no-ignore-files", "--no-gitignore"]);
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -936,6 +981,7 @@ mod tests {
         let (_, _, _, found_files) = count_files_of(&root_str, "");
         assert_eq!(vec!["keep.rs"], found_files);
 
+        assert_a_mounted_copy_scans_alike(&root, &[""], &[""]);
         fs::remove_dir_all(&root).unwrap();
     }
 }

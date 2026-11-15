@@ -88,6 +88,9 @@ receive the figures per language as they are counted.
 Languages of your own go in through `Languages::shipped_with`, and a caller keeping its own
 directory of language files parses them with `language_file` and hands them to `Languages::resolve`.
 
+Files that are no folder on disk, such as a revision of a repository, are counted through a
+`MountedTree`. A run takes them in `EngineConfig::trees`.
+
 The full API is on [docs.rs](https://docs.rs/mezura-core).
 
 ## License
