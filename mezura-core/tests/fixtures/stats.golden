@@ -1,12 +1,12 @@
-files=89 lines=1237 code=671 comments=283
+files=89 lines=1241 code=675 comments=283
 
 Ada
   files=1 lines=8 code=5 comments=2
   words_in_code=5 string_content=0 comment_words_beside_code=0 words_in_comment=2 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
   packages=1 types=1
 Assembly
-  files=1 lines=12 code=6 comments=5
-  words_in_code=6 string_content=0 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
+  files=1 lines=16 code=10 comments=5
+  words_in_code=7 string_content=3 comment_words_beside_code=0 words_in_comment=5 punctuation_in_code=0 punctuation_in_comment=0 blank=1 blank_in_comment=0 blank_in_string=0
 Astro
   files=1 lines=17 code=11 comments=4
   words_in_code=11 string_content=0 comment_words_beside_code=0 words_in_comment=4 punctuation_in_code=2 punctuation_in_comment=0 blank=0 blank_in_comment=0 blank_in_string=0

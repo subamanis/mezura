@@ -7,6 +7,9 @@ s asm nasm
 String symbols
 " '
 
+Line string symbols
+#include #define #undef #if #ifdef #ifndef #elif #else #endif #error #warning #pragma #line
+
 Escape character
 \
 
