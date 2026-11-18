@@ -8,7 +8,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use mezura_core::MountedTree;
 
-use super::git::{GitError, ResolvedRevision, build_git_read, build_hardened_git, read_git_config, read_scoped_git_settings};
+use super::git::{GitError, ResolvedRevision, build_git_fetch, build_git_read, read_git_config, read_scoped_git_settings};
 use super::paths::fold_ascii_case;
 
 const LINK_MODE : &str = "120000";
@@ -112,7 +112,7 @@ fn fetch_missing_objects(resolved: &ResolvedRevision) -> Result<(), GitError> {
         if missing.is_empty() || missing == asked_for {
             return Ok(());
         }
-        let mut command = build_hardened_git(repository);
+        let mut command = build_git_fetch(repository);
         if asked_for.is_empty() && let Some(setting) = find_setting_naming_a_fetch_program(repository, &command) {
             return Err(GitError::FetchRunsRepositoryProgram { repository: repository.to_owned(),
                     revision: resolved.revision.clone(), setting });

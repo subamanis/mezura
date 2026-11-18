@@ -415,11 +415,15 @@ pub(crate) fn build_git_read(repository: &str) -> Command {
     command
 }
 
+// A git before 2.44 can fetch during a read, where the repository's 'core.sshCommand' would outrank the person's
 pub(crate) fn build_hardened_git(repository: &str) -> Command {
-    let mut command = Command::new("git");
-    configure_hardened_git(&mut command);
-    command.arg("-C").arg(repository);
-    command
+    build_git(repository, false)
+}
+
+pub(crate) fn build_git_fetch(repository: &str) -> Command {
+    let own_ssh_command = read_scoped_git_settings(repository, r"^core\.sshcommand$").into_iter()
+            .rfind(|(scope, _, _)| !matches!(scope.as_str(), "local" | "worktree"));
+    build_git(repository, own_ssh_command.is_some_and(|(_, _, command)| !command.trim().is_empty()))
 }
 
 // Reading a setting runs no program. The hardened settings would replace 'core.symlinks' with their own.
@@ -586,10 +590,17 @@ fn build_remote_spec(prefix: &str, separator: &str, path_part: &str, full_raw: &
 }
 
 fn run_remote_git(repo_dir: &str, arguments: &[&str]) -> Result<std::process::Output, GitError> {
-    build_hardened_git(repo_dir).args(arguments).output().map_err(GitError::NotInstalled)
+    build_git_fetch(repo_dir).args(arguments).output().map_err(GitError::NotInstalled)
 }
 
-fn configure_hardened_git(command: &mut Command) {
+fn build_git(repository: &str, person_names_ssh_command: bool) -> Command {
+    let mut command = Command::new("git");
+    configure_hardened_git(&mut command, person_names_ssh_command);
+    command.arg("-C").arg(repository);
+    command
+}
+
+fn configure_hardened_git(command: &mut Command, person_names_ssh_command: bool) {
     command.env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "never")
             .env("GIT_LFS_SKIP_SMUDGE", "1");
@@ -600,7 +611,8 @@ fn configure_hardened_git(command: &mut Command) {
     if let Some(ssh) = test_ssh {
         command.env("GIT_SSH", ssh).env_remove("GIT_SSH_COMMAND").env("GIT_CONFIG_GLOBAL", "/dev/null")
                 .env("GIT_CONFIG_NOSYSTEM", "1");
-    } else if std::env::var_os("GIT_SSH_COMMAND").is_none() && std::env::var_os("GIT_SSH").is_none() {
+    } else if !person_names_ssh_command && std::env::var_os("GIT_SSH_COMMAND").is_none()
+            && std::env::var_os("GIT_SSH").is_none() {
         command.env("GIT_SSH_COMMAND", DEFAULT_SSH_COMMAND);
     }
     command.args(HARDENED_GIT_CONFIG).args(NETWORK_GIT_CONFIG);
