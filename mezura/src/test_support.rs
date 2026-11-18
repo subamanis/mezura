@@ -4,12 +4,27 @@ use std::process::Command;
 
 use mezura_core::{FilesPresent, LineClasses, ModuleResult, Performance, RunResult, Stats, Target, Threads};
 
+use crate::git::{GitError, ResolvedRevision};
+
 pub struct LocalSshGuard(PathBuf);
 
 impl Drop for LocalSshGuard {
     fn drop(&mut self) {
         *crate::git::TEST_GIT_SSH.lock().unwrap_or_else(|e| e.into_inner()) = None;
         let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+// A commit written out with 'git worktree add', which the tests hold a mounted revision against
+#[derive(Debug)]
+pub struct Checkout {
+    pub path: String,
+    pub resolved: ResolvedRevision
+}
+
+impl Drop for Checkout {
+    fn drop(&mut self) {
+        crate::git::remove_worktree(&self.resolved.repository, &self.path);
     }
 }
 
@@ -88,6 +103,24 @@ pub fn install_local_ssh_helper() -> LocalSshGuard {
     };
     *crate::git::TEST_GIT_SSH.lock().unwrap_or_else(|e| e.into_inner()) = Some(path.to_string_lossy().into_owned());
     LocalSshGuard(path)
+}
+
+pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
+    let path = crate::git::find_place_for_revision(resolved);
+    let holder = Path::new(&path).parent().unwrap();
+    let _ = crate::git::remove_directory_tree(holder);
+    std::fs::create_dir_all(holder).map_err(|error| GitError::Refused { doing: "making room for the revision",
+            message: error.to_string() })?;
+    let outcome = crate::git::build_hardened_git(&resolved.repository)
+            .args(["worktree", "add", "--detach", "--force", "--quiet", &path, &resolved.commit])
+            .output().map_err(GitError::NotInstalled)?;
+    if !outcome.status.success() {
+        let _ = crate::git::remove_directory_tree(holder);
+        return Err(GitError::Refused { doing: "writing out the revision",
+                message: String::from_utf8_lossy(&outcome.stderr).trim().to_owned() });
+    }
+
+    Ok(Checkout { path, resolved: resolved.clone() })
 }
 
 pub fn run_git(at: &Path, arguments: &[&str]) -> String {

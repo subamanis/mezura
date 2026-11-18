@@ -1,3 +1,34 @@
+v3.6.0 - unreleased
+
+Main changes:
+  -> A git revision is read from git's objects, with no checkout written to the temporary
+      directory. Counting a revision of a large repository is many times faster.
+
+Bugfixes:
+  -> In assembly, a C preprocessor line such as '#include' or '#ifdef' counts as code.
+  -> A symbolic link in a remote repository, or in a revision of a local one whose 'core.symlinks'
+      is on, is no longer counted as a one-line file, so '--diff HEAD' shows no difference for it.
+  -> Two file names of a revision that differ only in case are both counted on Windows and macOS.
+  -> On Windows, a revision holding a file name Windows cannot write, such as one with a ':', no
+      longer stops the run.
+  -> With two revisions of one repository in one run, a test tool's file in a folder above the
+      repository is read for both.
+  -> A revision target that is a submodule holding no file is reported, as an error when it is the
+      only target and as a warning beside others.
+  -> A revision whose commit is signed resolves with 'log.showSignature' set in the git
+      configuration.
+  -> While a revision of a local repository is read, the repository's git configuration runs no
+      program, so a file under a filter other than Git LFS is counted as git holds it. Git 2.44 or
+      later fetches nothing during the read, so a commit that a partial clone lacks needs a
+      'git fetch' first.
+  -> The files a partial clone lacks of a revision are fetched over https, http, ssh or git only.
+      The run stops with an error where the repository's own git configuration names a program for
+      that fetch ('core.sshCommand', 'core.gitProxy', 'credential.helper', 'remote.<name>.vcs').
+  -> A remote over ssh and the fetch of a partial clone run the ssh command you set in your git
+      configuration ('core.sshCommand').
+
+-----------------------------------------------------------------------------------------------------------
+
 v3.5.0 - 2026-11-12
 
   55,975 Total lines  -  37,600 Code lines

@@ -444,7 +444,7 @@ fn create_note_entries(note: &super::diff::Note) -> Vec<WarningEntry> {
             entry("files-cut", Affects::Settings, about.clone(),
                 format!("'{about}' was written with a capped '--by-file' and is missing {hidden} of its file rows, so this document carries no 'by_file'."))],
         Note::CountsInDoubt { .. } | Note::NothingCounted { .. } | Note::LayoutFallback { .. }
-        | Note::NoGitignoreInCheckout { .. } | Note::MissingInRevision { .. } => Vec::new()
+        | Note::NoGitignoreInRevision { .. } | Note::MissingInRevision { .. } => Vec::new()
     }
 }
 
@@ -482,10 +482,10 @@ fn create_keyword_triads(before: &HashMap<String, usize>, now: &HashMap<String, 
 // differ by an '--exclude' look like a code change.
 fn create_scope_object(config: &Configuration, targets: &[mezura_core::Target], applied_presets: &[AppliedPreset]) -> String {
     let exclude = config.engine.exclude_patterns.patterns.iter()
-            .map(|pattern| super::sources::format_pattern_outside_checkouts(pattern, &config.view.target_checkouts))
+            .map(|pattern| super::sources::format_pattern_outside_revisions(pattern, &config.view.revision_targets))
             .collect::<Vec<_>>();
     let tests = config.engine.test_patterns.patterns.iter()
-            .map(|pattern| super::sources::format_pattern_outside_checkouts(pattern, &config.view.target_checkouts))
+            .map(|pattern| super::sources::format_pattern_outside_revisions(pattern, &config.view.revision_targets))
             .collect::<Vec<_>>();
     let members = [
         // The resolved list off the result, not the declared one off the configuration: the same

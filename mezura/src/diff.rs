@@ -86,12 +86,12 @@ impl Reading {
 
     fn of_a_counted_run(source: Source, taken: String, result: RunResult, config: &Configuration) -> Self {
         let mut scope = scope_of(&config.engine, config.view.counting);
-        if !config.view.target_checkouts.is_empty() {
+        if !config.view.revision_targets.is_empty() {
             scope.exclude = scope.exclude.iter()
-                    .map(|pattern| super::sources::format_pattern_outside_checkouts(pattern, &config.view.target_checkouts))
+                    .map(|pattern| super::sources::format_pattern_outside_revisions(pattern, &config.view.revision_targets))
                     .collect();
             scope.tests = scope.tests.iter()
-                    .map(|pattern| super::sources::format_pattern_outside_checkouts(pattern, &config.view.target_checkouts))
+                    .map(|pattern| super::sources::format_pattern_outside_revisions(pattern, &config.view.revision_targets))
                     .collect();
         }
         Reading {
@@ -345,7 +345,7 @@ pub enum Note {
     // None is a side that declared no modules at all
     ModulesDiffer { baseline: String, subject: String, baseline_modules: Option<String>, subject_modules: Option<String> },
     LayoutFallback { layout: &'static str },
-    NoGitignoreInCheckout { git_revision: String },
+    NoGitignoreInRevision { git_revision: String },
     MissingInRevision { git_revision: String, targets: Vec<String> }
 }
 
@@ -458,7 +458,7 @@ pub fn collect_files_per_language(modules: &[ModuleResult]) -> HashMap<&str, Vec
     merged
 }
 
-// Each side's rows are named relative to the common directory of its own targets, so two checkouts
+// Each side's rows are named relative to the common directory of its own targets, so two revision_targets
 // of one project pair on the same names. When one side's targets are a subset of the other's, the
 // wider side's directory serves both: a revision that lacks one of the targets would otherwise
 // relativise deeper than the run it is compared against, and nothing would pair. Two sides whose
@@ -572,24 +572,24 @@ pub fn find_settings_that_differ(baseline: &Scope, subject: &Scope) -> Vec<&'sta
 // so that the two readings measure the same thing
 pub fn resolve_settings(document: &Scope, config: &mut super::config_manager::Configuration) -> Vec<&'static str> {
     let different = |a: &[String], b: &[String]| !hold_the_same_values(a, b);
-    let checkouts = &config.view.target_checkouts;
+    let revision_targets = &config.view.revision_targets;
     let current_exclude = config.engine.exclude_patterns.patterns.iter()
-            .map(|p| super::sources::format_pattern_outside_checkouts(p, checkouts))
+            .map(|p| super::sources::format_pattern_outside_revisions(p, revision_targets))
             .collect::<Vec<_>>();
     let current_tests = config.engine.test_patterns.patterns.iter()
-            .map(|p| super::sources::format_pattern_outside_checkouts(p, checkouts))
+            .map(|p| super::sources::format_pattern_outside_revisions(p, revision_targets))
             .collect::<Vec<_>>();
 
     let typed = config.typed_explicitly;
     let mut adopted = Vec::new();
     if !typed.exclude && different(&document.exclude, &current_exclude) {
         config.engine.exclude_patterns = PathPatterns::of(document.exclude.iter()
-                .map(|p| super::sources::format_pattern_inside_checkouts(p, checkouts)));
+                .map(|p| super::sources::format_pattern_inside_revisions(p, revision_targets)));
         adopted.push(EXCLUDE);
     }
     if !typed.tests && document.tests != current_tests {
         config.engine.test_patterns = PathPatterns::of(document.tests.iter()
-                .map(|p| super::sources::format_pattern_inside_checkouts(p, checkouts)));
+                .map(|p| super::sources::format_pattern_inside_revisions(p, revision_targets)));
         adopted.push(TESTS);
     }
     if !typed.languages && different(&document.languages, &config.engine.languages_of_interest.to_written_form()) {
@@ -746,7 +746,7 @@ fn adopt_settings_from(document: &Reading, config: &mut Configuration) -> Vec<No
     });
     let naming_nothing = adopted_patterns.filter(|pattern| is_a_path_pattern(pattern)
                     && !names_an_existing_place(pattern, &config.engine.trees))
-            .map(|pattern| super::sources::format_pattern_outside_checkouts(pattern, &config.view.target_checkouts))
+            .map(|pattern| super::sources::format_pattern_outside_revisions(pattern, &config.view.revision_targets))
             .collect();
     let typed_patterns_unused = settings.contains(&HIDE_TESTS) && config.typed_explicitly.tests
             && !config.engine.test_patterns.is_empty();
@@ -754,7 +754,7 @@ fn adopt_settings_from(document: &Reading, config: &mut Configuration) -> Vec<No
     let mut notes = vec![Note::SettingsAdopted { from: document.determine_display_name(), settings, naming_nothing }];
     if typed_patterns_unused {
         let patterns = config.engine.test_patterns.patterns.iter()
-                .map(|pattern| super::sources::format_pattern_outside_checkouts(pattern, &config.view.target_checkouts))
+                .map(|pattern| super::sources::format_pattern_outside_revisions(pattern, &config.view.revision_targets))
                 .collect();
         notes.push(Note::TestPatternsUnused { patterns, from: document.determine_display_name() });
     }
@@ -804,7 +804,7 @@ fn determine_comparison_notes(baseline: &Reading, subject: &Reading, config: &Co
                 baseline_version: baseline.version.clone(), subject: subject.determine_display_name(),
                 subject_version: subject.version.clone() });
     }
-    notes.extend(find_presets_on_one_side(baseline, subject, &config.view.target_checkouts));
+    notes.extend(find_presets_on_one_side(baseline, subject, &config.view.revision_targets));
     // How each side's own scan went. Nothing else says it for a document or a revision, and a side
     // that failed to parse half its files reads as code that shrank.
     for reading in [baseline, subject] {
@@ -858,7 +858,7 @@ fn determine_comparison_notes(baseline: &Reading, subject: &Reading, config: &Co
 // A preset that decided files on one side is one-sided where the other side never turned it on,
 // whether or not it found a file there, and held files there at all
 fn find_presets_on_one_side(baseline: &Reading, subject: &Reading,
-        checkouts: &[super::config_manager::TargetCheckout]) -> Vec<Note>
+        revision_targets: &[super::config_manager::RevisionTarget]) -> Vec<Note>
 {
     let (base_before, base_now) = determine_file_bases(&baseline.result, &subject.result);
     let sides = [(baseline, base_before.as_str(), subject, base_now.as_str()), (subject, base_now.as_str(), baseline, base_before.as_str())];
@@ -872,7 +872,7 @@ fn find_presets_on_one_side(baseline: &Reading, subject: &Reading,
             let one_sided = directories.iter()
                     .filter(|directory| !others.iter().any(|other| is_held_by(directory, own_base, other, other_base)))
                     .filter(|directory| holds_files_under(not_in, &move_to_other_side(directory, own_base, other_base),
-                            checkouts, &folders_of_not_in))
+                            revision_targets, &folders_of_not_in))
                     .map(|directory| (*directory).to_owned()).collect::<Vec<_>>();
             if !one_sided.is_empty() {
                 notes.push(Note::PresetOnOneSide { name: name.to_owned(), directories: one_sided,
@@ -893,7 +893,7 @@ fn collect_outermost_preset_directories(reading: &Reading, matched_only: bool) -
             .collect()
 }
 
-// Two checkouts of one project spell every folder differently, so the place below each side's own
+// Two revision_targets of one project spell every folder differently, so the place below each side's own
 // base counts too
 fn is_held_by(directory: &str, own_base: &str, other: &str, other_base: &str) -> bool {
     if is_inside(&fold_ascii_case(directory), &fold_ascii_case(other)) {
@@ -929,13 +929,13 @@ fn move_to_other_side(directory: &str, own_base: &str, other_base: &str) -> Stri
 
 // A side that cannot tell, a document short of rows or a folder outside the repository, keeps the note
 fn holds_files_under(reading: &Reading, directory: &str,
-        checkouts: &[super::config_manager::TargetCheckout],
+        revision_targets: &[super::config_manager::RevisionTarget],
         folders: &OnceCell<Option<HashSet<String>>>) -> bool
 {
     match &reading.source {
         Source::Run => {
-            let inside = super::sources::format_path_inside_checkouts(directory, checkouts);
-            match super::sources::find_revision_holding(&inside, checkouts) {
+            let inside = super::sources::format_path_inside_revisions(directory, revision_targets);
+            match super::sources::find_revision_holding(&inside, revision_targets) {
                 Some(revision) => revision.tree.holds(std::path::Path::new(&inside)),
                 None => std::path::Path::new(&inside).exists()
             }
@@ -1138,7 +1138,7 @@ mod tests {
         assert_eq!(("D:/p".to_owned(), "D:/p".to_owned()), determine_file_bases(
                 &with_targets(&["D:/p/src", "D:/p/tests"]), &with_targets(&["D:/p/src"])));
 
-        // Two checkouts of one project each keep their own root, and pair on the names inside it
+        // Two revision_targets of one project each keep their own root, and pair on the names inside it
         assert_eq!(("D:/p/src".to_owned(), "C:/w/proj/src".to_owned()), determine_file_bases(
                 &with_targets(&["D:/p/src"]), &with_targets(&["C:/w/proj/src"])));
 
@@ -1306,7 +1306,7 @@ mod tests {
         one_clone.result.applied_presets = vec![jest("D:/clone2/web")];
         another.result.applied_presets = vec![jest("D:/r1/web")];
         assert!(determine_comparison_notes(&one_clone, &another, &config, Vec::new(), true).is_empty(),
-                "two checkouts of one project at different paths were said to differ in their presets");
+                "two revision_targets of one project at different paths were said to differ in their presets");
         let plain = reading("a.json", "3.0.0", Vec::new());
         assert!(determine_comparison_notes(&plain, &reading("b.json", "3.0.0", Vec::new()), &config, Vec::new(), true).is_empty());
 

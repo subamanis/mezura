@@ -566,7 +566,7 @@ file and will be compared and printed to the screen. For example for N = 2, it w
 
 Both `--log` and `--compare` need a log to belong to, which means either a configuration with
 target paths loaded or saved by name or a project with a `.mezura` folder, and a run that counts
-those same targets. A checked-out revision or remote repository that carries a committed
+those same targets. A git revision or remote repository that carries a committed
 `.mezura/log.jsonl` also shows its logged history and obeys `--compare`, while `--log` only
 writes to a local working tree or named configuration.
 
@@ -585,7 +585,7 @@ mezura https://github.com/owner/repo --diff v1.0..v2.0
 
 A reading is a JSON document an earlier run wrote, a git revision of the target's repository, a
 local path at a revision (`<path>@<revision>`), or a remote repository URL (optionally ending in
-`@<revision>`), checked out to a temporary directory and counted on the spot.
+`@<revision>`). A revision is read from git and counted on the spot, with no checkout written.
 
 <img src="https://raw.githubusercontent.com/subamanis/mezura/HEAD/screenshots/diff.png" width="1000">
 

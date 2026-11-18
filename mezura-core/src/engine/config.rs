@@ -407,13 +407,7 @@ pub struct EngineConfig {
     /// Every path below the root of one of them is read from that tree, a target and the place a
     /// pattern names included, and nothing below that root is read from the disk. Empty by default.
     /// See [`MountedTree`] for the lines that build one.
-    pub trees: Vec<Arc<MountedTree>>,
-    /// Set when the targets sit in a checkout of a repository written to another place on disk,
-    /// such as a revision written out to a temporary folder. The folders above the checkout are
-    /// then read above the repository, so a build file or a test tool's file there decides the
-    /// same for both. Both paths are read as the targets are, a relative one from the working
-    /// directory. None by default.
-    pub checkout: Option<RepositoryCheckout>
+    pub trees: Vec<Arc<MountedTree>>
 }
 
 // Written out rather than derived, because a derived 'count_keywords' would be false and anyone
@@ -439,8 +433,7 @@ impl Default for EngineConfig {
             detect_shebangs: true,
             detect_tests: true,
             test_patterns: PathPatterns::default(),
-            trees: Vec::new(),
-            checkout: None
+            trees: Vec::new()
         }
     }
 }
@@ -453,13 +446,4 @@ impl EngineConfig {
             ..Default::default()
         }
     }
-}
-
-/// A repository written out to another place on disk, see [`EngineConfig::checkout`].
-#[derive(Debug, PartialEq, Eq, Clone)]
-pub struct RepositoryCheckout {
-    /// The checkout's own root, spelled as the targets inside it are.
-    pub root: String,
-    /// The root of the repository it was written from.
-    pub repository: String
 }

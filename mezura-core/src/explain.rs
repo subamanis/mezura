@@ -316,8 +316,7 @@ fn decide_whole_file(absolute: &str, config: &EngineConfig, targets: Option<&Tar
     let file = Path::new(absolute);
     let folder = file.parent().unwrap_or(file);
     let climb = PresetClimb::new(patterns.get_presets_taken_back());
-    let checkout = config.checkout.as_ref().map(crate::engine::targets::resolve_checkout);
-    let holder = DirectoryScope::of_target(folder, names_root, &patterns, &climb, OwnListing::Unread, checkout.as_ref(), tree);
+    let holder = DirectoryScope::of_target(folder, names_root, &patterns, &climb, OwnListing::Unread, tree);
     let (scope, decided_by, decided_by_presets) = holder.of_file(file, &patterns, &mut Vec::new());
     // Read the way a run reads it, so a file a pattern took back is still declared under the marker
     // and a declarer a pattern made whole seeds nothing of its own
@@ -326,7 +325,7 @@ fn decide_whole_file(absolute: &str, config: &EngineConfig, targets: Option<&Tar
         let root = find_names_root_of_file(&spelled, config, targets);
         let candidate = Path::new(&spelled);
         let folder = candidate.parent().unwrap_or(candidate);
-        DirectoryScope::of_target(folder, root, &patterns, &climb, OwnListing::Unread, checkout.as_ref(), tree)
+        DirectoryScope::of_target(folder, root, &patterns, &climb, OwnListing::Unread, tree)
                 .of_file(candidate, &patterns, &mut Vec::new()).0 == TestScope::Tests
     };
     let mut files_on_disk = FilesOnDisk { lookup, config, is_whole: &is_whole };
@@ -346,7 +345,7 @@ fn decide_whole_file(absolute: &str, config: &EngineConfig, targets: Option<&Tar
                         TestFileRule::Declared { pattern, matched_folder }
             })
         },
-        (None, TestScope::Tests) => match (decided_by_presets, find_test_directory_along(folder, checkout.as_ref(), tree).0) {
+        (None, TestScope::Tests) => match (decided_by_presets, find_test_directory_along(folder, tree).0) {
             (None, Some(found)) => Some(TestFileRule::TestDirectory {
                 directory: spell_out(found.directory),
                 build_files: found.build_files.iter().map(|file| spell_out(file)).collect()

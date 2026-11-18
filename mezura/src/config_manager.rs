@@ -163,8 +163,8 @@ pub struct ViewConfig {
     // because the engine only ever fills the classes and both models are answered by one run.
     pub counting: CountingModel,
     pub theme: Theme,
-    pub target_checkouts: Vec<TargetCheckout>,
-    pub single_unnamed_checkout_root: bool
+    pub revision_targets: Vec<RevisionTarget>,
+    pub single_unnamed_revision_root: bool
 }
 
 impl ViewConfig {
@@ -241,15 +241,15 @@ impl Default for ViewConfig {
             tests_breakdown: TestsBreakdown::default(),
             counting: CountingModel::default(),
             theme: Theme::default(),
-            target_checkouts: Vec::new(),
-            single_unnamed_checkout_root: false
+            revision_targets: Vec::new(),
+            single_unnamed_revision_root: false
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct TargetCheckout {
-    pub checkout_root: String,
+pub struct RevisionTarget {
+    pub revision_root: String,
     pub display_root: String,
     pub base_root: String,
     pub repository: String,
@@ -259,14 +259,14 @@ pub struct TargetCheckout {
     pub mounted: Arc<MountedRevision>
 }
 
-impl TargetCheckout {
+impl RevisionTarget {
     pub fn new(mounted: MountedRevision, display_root: String, remote_url: Option<String>) -> Self {
         let base_root = match &remote_url {
             Some(url) => crate::git::strip_dot_git(&crate::git::strip_url_credentials(url)).to_owned(),
             None => mounted.resolved.repository.clone()
         };
         Self {
-            checkout_root: mounted.path.clone(),
+            revision_root: mounted.path.clone(),
             display_root,
             base_root,
             repository: mounted.resolved.repository.clone(),
@@ -282,9 +282,9 @@ impl TargetCheckout {
     }
 }
 
-impl PartialEq for TargetCheckout {
+impl PartialEq for RevisionTarget {
     fn eq(&self, other: &Self) -> bool {
-        self.checkout_root == other.checkout_root
+        self.revision_root == other.revision_root
                 && self.display_root == other.display_root
                 && self.repository == other.repository
                 && self.remote_url == other.remote_url
@@ -293,7 +293,7 @@ impl PartialEq for TargetCheckout {
     }
 }
 
-impl Eq for TargetCheckout {}
+impl Eq for RevisionTarget {}
 
 // A hide list and not a show list: a show list would have to be written out again every time a
 // section is added, and a configuration saved today would silently keep hiding the new one. Whole
@@ -879,7 +879,7 @@ impl TypedExplicitlyOnCommandLine {
             progress_bar: _, number_separator: _, decimal_separator: _,
             layout: _, output: _, badge: _, explain: _, diff_against: _, sort_by: _, top_n: _, by_file: _,
             tests_breakdown: _, styles: _, config_styles: _, theme_styles: _,
-            target_checkouts: _, original_typed_targets: _, single_unnamed_checkout_root: _,
+            revision_targets: _, original_typed_targets: _, single_unnamed_revision_root: _,
             typed_explicitly: _ } = builder;
 
         TypedExplicitlyOnCommandLine {
@@ -968,9 +968,9 @@ pub struct ConfigurationBuilder {
     pub styles:                   Option<Vec<(String,String)>>,
     pub config_styles:            Option<Vec<(String,String)>>,
     pub theme_styles:             Option<Vec<(String,String)>>,
-    pub target_checkouts:         Vec<TargetCheckout>,
+    pub revision_targets:         Vec<RevisionTarget>,
     pub original_typed_targets:   Option<Vec<Target>>,
-    pub single_unnamed_checkout_root: bool,
+    pub single_unnamed_revision_root: bool,
     // Not an Option: it is a fact about the command line, not a value a file can supply
     pub typed_explicitly:         TypedExplicitlyOnCommandLine
 }
@@ -988,7 +988,7 @@ impl ConfigurationBuilder {
             targets_source: _, log: _, config_name_to_save: _, config_name_to_load: _, counts_the_named_config: _,
             theme_name_to_save: _, preset_name_to_save: _, test_patterns_from_presets: _, local_dir: _, output: _,
             badge: _, explain: _, diff_against: _, styles: _, theme_styles: _,
-            target_checkouts: _, original_typed_targets: _, single_unnamed_checkout_root: _,
+            revision_targets: _, original_typed_targets: _, single_unnamed_revision_root: _,
             typed_explicitly: _ } = config;
 
         if self.targets.is_none() {self.targets = targets};
@@ -1043,7 +1043,7 @@ impl ConfigurationBuilder {
             targets_source: _, log: _, config_name_to_save: _, config_name_to_load: _, counts_the_named_config: _,
             theme_name_to_save: _, preset_name_to_save: _, test_patterns_from_presets: _, local_dir: _, output: _,
             badge: _, explain: _, diff_against: _, styles: _, theme_styles: _,
-            target_checkouts: _, original_typed_targets: _, single_unnamed_checkout_root: _,
+            revision_targets: _, original_typed_targets: _, single_unnamed_revision_root: _,
             typed_explicitly: _ } = &mut self;
 
         // The two names of 'hide' that stop a counting, the rest of the list is the look
@@ -1162,8 +1162,7 @@ impl ConfigurationBuilder {
                 detect_tests: !hidden.tests,
                 collect_files: self.by_file.is_some(),
                 test_patterns: self.test_patterns.clone().unwrap_or_default(),
-                trees: self.target_checkouts.iter().map(|tc| tc.mounted.tree.clone()).collect(),
-                checkout: None
+                trees: self.revision_targets.iter().map(|tc| tc.mounted.tree.clone()).collect()
             },
             view: ViewConfig {
                 version: VERSION_ID,
@@ -1196,8 +1195,8 @@ impl ConfigurationBuilder {
                 counting: self.counting.unwrap_or_default(),
                 theme: super::theme::resolve(self.theme_styles.as_deref().unwrap_or_default(),
                         self.config_styles.as_deref().unwrap_or_default(), self.styles.as_deref().unwrap_or_default()),
-                target_checkouts: self.target_checkouts.clone(),
-                single_unnamed_checkout_root: self.single_unnamed_checkout_root
+                revision_targets: self.revision_targets.clone(),
+                single_unnamed_revision_root: self.single_unnamed_revision_root
             }
         };
         config.engine.exclude_patterns.reports_unmatched_names = config.typed_explicitly.exclude;
@@ -1289,13 +1288,13 @@ pub fn get_command_that_counts(kind: ScanSkip) -> &'static str {
 // command they typed.
 #[cfg(test)]
 pub fn attribute_targets_error(error: mezura_core::TargetError, targets_source: &Option<String>) -> ArgParsingError {
-    attribute_targets_error_outside_checkouts(error, targets_source, &[])
+    attribute_targets_error_outside_revisions(error, targets_source, &[])
 }
 
-pub fn attribute_targets_error_outside_checkouts(error: mezura_core::TargetError,
-        targets_source: &Option<String>, checkouts: &[TargetCheckout]) -> ArgParsingError
+pub fn attribute_targets_error_outside_revisions(error: mezura_core::TargetError,
+        targets_source: &Option<String>, revision_targets: &[RevisionTarget]) -> ArgParsingError
 {
-    attribute_parsed_target_error(map_target_error_outside_checkouts(error, checkouts), targets_source)
+    attribute_parsed_target_error(map_target_error_outside_revisions(error, revision_targets), targets_source)
 }
 
 pub fn absolutize_local_path(path: &str) -> String {
@@ -1374,27 +1373,27 @@ fn create_config_builder_from_args_with_configs_in(args: &[String], config_dir: 
     }
     let hide_animation = config_builder.output.is_some_and(|output| output != OutputFormat::Text)
             || config_builder.hidden.as_ref().is_some_and(|hidden| hidden.animations);
-    materialize_checkout_targets(&mut config_builder, hide_animation)?;
+    mount_revision_targets(&mut config_builder, hide_animation)?;
 
     // Looked for around the targets as they were typed, and never around ones a configuration
     // supplies: the folder belongs to the code this command names, and what its own settings then
     // say about targets is decided after it has been found.
     let typed_paths = config_builder.targets.iter().flatten().map(|target| target.path.clone()).collect::<Vec<_>>();
-    let in_revision = match config_builder.target_checkouts.as_slice() {
+    let in_revision = match config_builder.revision_targets.as_slice() {
         [single] => Some(single),
         _ => None
     };
-    config_builder.local_dir = if no_local || config_builder.target_checkouts.len() > 1
+    config_builder.local_dir = if no_local || config_builder.revision_targets.len() > 1
             || (skip_working_dir_local && typed_paths.is_empty()) {
         None
     } else {
         crate::paths::find_local_dir_stopped_at(&typed_paths,
-                in_revision.map(|tc| std::path::Path::new(&tc.checkout_root)), in_revision.map(|tc| tc.mounted.tree.as_ref()))
+                in_revision.map(|tc| std::path::Path::new(&tc.revision_root)), in_revision.map(|tc| tc.mounted.tree.as_ref()))
     };
-    if let (Some(local), [tc]) = (&mut config_builder.local_dir, config_builder.target_checkouts.as_slice()) {
-        local.in_checkout = true;
+    if let (Some(local), [tc]) = (&mut config_builder.local_dir, config_builder.revision_targets.as_slice()) {
+        local.in_revision = true;
         local.display_dir = crate::sources::replace_root_prefix(
-                &local.project_dir, &tc.checkout_root, &tc.display_root);
+                &local.project_dir, &tc.revision_root, &tc.display_root);
     }
 
     // Before the configuration files below fill anything in, which is what makes the answer the
@@ -1456,7 +1455,7 @@ fn create_config_builder_from_args_with_configs_in(args: &[String], config_dir: 
     // project's settings are not merged underneath it unless '--save-local' is updating them.
     let mut project_targets = None;
     if let Some(local) = config_builder.local_dir.clone() && (!names_another_config || save_local) {
-        let targets_were_missing = config_builder.targets.is_none() || config_builder.single_unnamed_checkout_root;
+        let targets_were_missing = config_builder.targets.is_none() || config_builder.single_unnamed_revision_root;
         if apply_local_configuration(&mut config_builder, &local, &mut project_targets)? {
             if let Some(found) = &mut config_builder.local_dir {
                 found.configuration_applied = true;
@@ -1500,12 +1499,12 @@ fn create_config_builder_from_args_with_configs_in(args: &[String], config_dir: 
     config_builder.targets_source = targets_config_source;
 
     if config_builder.original_typed_targets.is_none()
-            && config_builder.targets.as_ref().is_some_and(|ts| ts.iter().any(|t| crate::git::is_checkout_target(&t.path))) {
+            && config_builder.targets.as_ref().is_some_and(|ts| ts.iter().any(|t| crate::git::is_revision_target(&t.path))) {
         config_builder.original_typed_targets.clone_from(&config_builder.targets);
-        materialize_checkout_targets(&mut config_builder, hide_animation)
+        mount_revision_targets(&mut config_builder, hide_animation)
                 .map_err(|error| attribute_parsed_target_error(error, &config_builder.targets_source))?;
     }
-    move_builder_patterns_into_checkouts(&mut config_builder);
+    move_builder_patterns_into_revisions(&mut config_builder);
 
     if let Some(name) = &config_builder.theme_name {
         match super::theme_files::load_theme(name, &crate::paths::PERSISTENT_APP_PATHS.themes_dir) {
@@ -1842,7 +1841,7 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
 -> Result<bool, ArgParsingError>
 {
     let file_name = crate::paths::LOCAL_CONFIG_FILE_NAME.trim_end_matches(".txt");
-    let in_revision = config_builder.target_checkouts.first().filter(|_| local.in_checkout);
+    let in_revision = config_builder.revision_targets.first().filter(|_| local.in_revision);
     let tree_of_the_revision = in_revision.map(|tc| tc.mounted.tree.clone());
     let parsed = match in_revision {
         Some(tc) => match tc.mounted.read_file(&(local.get_dir_path() + crate::paths::LOCAL_CONFIG_FILE_NAME)) {
@@ -1878,7 +1877,7 @@ fn apply_local_configuration(config_builder: &mut ConfigurationBuilder, local: &
     local_config.test_patterns = local_config.test_patterns
             .map(|declared| rebase_patterns_on(&local.project_dir, &label, declared));
     project_targets.clone_from(&local_config.targets);
-    if config_builder.single_unnamed_checkout_root && local_config.targets.is_some() {
+    if config_builder.single_unnamed_revision_root && local_config.targets.is_some() {
         config_builder.targets = None;
     }
     config_builder.add_missing_fields(local_config);
@@ -2008,9 +2007,9 @@ fn save_the_local_configuration(config_builder: &mut ConfigurationBuilder, typed
         project_targets: &mut Option<Vec<Target>>)
 -> Result<bool, ArgParsingError>
 {
-    if !config_builder.target_checkouts.is_empty() {
+    if !config_builder.revision_targets.is_empty() {
         super::warning_collector::emit(ProgramWarning::new(ProgramCode::CommandIgnored, SAVE_LOCAL,
-                format!("'--{SAVE_LOCAL}' has nowhere to write: a checked-out revision or remote repository is read-only.")));
+                format!("'--{SAVE_LOCAL}' has nowhere to write: a git revision or remote repository is read-only.")));
         return Ok(false);
     }
     let Some(local) = config_builder.local_dir.clone()
@@ -2128,7 +2127,7 @@ fn rebase_contained_place(project_dir: &str, raw: &str, is_target: bool, revisio
         Some(tree) => tree.holds(std::path::Path::new(&joined)),
         None => std::path::Path::new(&joined).exists()
     };
-    if is_target && !exists && crate::git::is_checkout_target(trimmed) {
+    if is_target && !exists && crate::git::is_revision_target(trimmed) {
         return None;
     }
 
@@ -2167,8 +2166,8 @@ fn resolve_invalid_config_fields(config_builder: &ConfigurationBuilder, invalid_
             // a badge drops the five fields below that it never draws, so a bad value in a file is
             // as overridden as a typed one would make it
             badge,
-            test_patterns_from_presets: _, target_checkouts: _, original_typed_targets: _,
-            single_unnamed_checkout_root: _,
+            test_patterns_from_presets: _, revision_targets: _, original_typed_targets: _,
+            single_unnamed_revision_root: _,
             // a style that does not parse is reported per line and skipped, and the rest of the file
             // still applies, so these warn instead of reaching here
             styles: _, config_styles: _, theme_styles: _ } = config_builder;
@@ -2353,11 +2352,11 @@ fn print_warnings_for_commands_that_need_a_loaded_configuration(builder: &Config
         return;
     }
 
-    let in_checkout = !builder.target_checkouts.is_empty();
-    if in_checkout && log_typed {
-        ignored(LOG, format!("'--{LOG}' command will be ignored: a checked-out revision or remote repository keeps no local log."));
+    let in_revision = !builder.revision_targets.is_empty();
+    if in_revision && log_typed {
+        ignored(LOG, format!("'--{LOG}' command will be ignored: a git revision or remote repository keeps no local log."));
     }
-    let log_typed = log_typed && !in_checkout;
+    let log_typed = log_typed && !in_revision;
 
     // A project's folder is a configuration without a name: it has a log of its own, so these two
     // have somewhere to write to and somewhere to read from even when nothing was named.
@@ -2422,14 +2421,14 @@ fn inspect_diff_range_without_targets(diff_against: Option<&str>) -> (Option<Vec
         return (None, false);
     };
     let explicit = [before, after].iter()
-            .any(|s| !s.trim().starts_with('@') && crate::git::is_checkout_target(s));
-    match (find_checkout_root_of_diff_side(before), find_checkout_root_of_diff_side(after)) {
+            .any(|s| !s.trim().starts_with('@') && crate::git::is_revision_target(s));
+    match (find_revision_root_of_diff_side(before), find_revision_root_of_diff_side(after)) {
         (Some(r1), Some(r2)) if r1 == r2 => (Some(vec![Target::of(after)]), true),
         _ => (None, explicit)
     }
 }
 
-fn find_checkout_root_of_diff_side(side: &str) -> Option<String> {
+fn find_revision_root_of_diff_side(side: &str) -> Option<String> {
     match crate::git::parse_target_spec(side).ok()? {
         crate::git::TargetSpec::Remote(remote) => Some(remote.url),
         crate::git::TargetSpec::LocalRevision { path, revision, .. } => {
@@ -2441,22 +2440,22 @@ fn find_checkout_root_of_diff_side(side: &str) -> Option<String> {
     }
 }
 
-fn move_builder_patterns_into_checkouts(config_builder: &mut ConfigurationBuilder) {
-    if config_builder.target_checkouts.is_empty() {
+fn move_builder_patterns_into_revisions(config_builder: &mut ConfigurationBuilder) {
+    if config_builder.revision_targets.is_empty() {
         return;
     }
-    let checkouts = &config_builder.target_checkouts;
+    let revision_targets = &config_builder.revision_targets;
     for patterns in [&mut config_builder.exclude_patterns, &mut config_builder.test_patterns]
             .into_iter().flatten() {
         patterns.patterns = patterns.patterns.iter()
-                .map(|p| crate::sources::format_pattern_inside_checkouts(p, checkouts))
+                .map(|p| crate::sources::format_pattern_inside_revisions(p, revision_targets))
                 .collect();
         if let Some(read_from) = &mut patterns.read_from {
-            *read_from = crate::sources::format_path_inside_checkouts(read_from, checkouts);
+            *read_from = crate::sources::format_path_inside_revisions(read_from, revision_targets);
         }
     }
     config_builder.test_patterns_from_presets = config_builder.test_patterns_from_presets.iter()
-            .map(|p| crate::sources::format_pattern_inside_checkouts(p, checkouts))
+            .map(|p| crate::sources::format_pattern_inside_revisions(p, revision_targets))
             .collect();
 }
 
@@ -2470,18 +2469,18 @@ fn attribute_parsed_target_error(error: ArgParsingError, targets_source: &Option
     }
 }
 
-fn materialize_checkout_targets(config_builder: &mut ConfigurationBuilder, hide_animation: bool)
+fn mount_revision_targets(config_builder: &mut ConfigurationBuilder, hide_animation: bool)
 -> Result<(), ArgParsingError>
 {
     let Some(targets) = config_builder.targets.as_ref() else {
         return Ok(());
     };
-    if !targets.iter().any(|target| crate::git::is_checkout_target(&target.path)) {
+    if !targets.iter().any(|target| crate::git::is_revision_target(&target.path)) {
         return Ok(());
     }
 
     let targets = targets.clone();
-    let mut checkouts: Vec<TargetCheckout> = Vec::new();
+    let mut revision_targets: Vec<RevisionTarget> = Vec::new();
     let mut rewritten: Vec<Target> = Vec::with_capacity(targets.len());
     let mut single_unnamed_root = false;
 
@@ -2500,7 +2499,7 @@ fn materialize_checkout_targets(config_builder: &mut ConfigurationBuilder, hide_
                 if targets.len() == 1 && index == 0 && target.module.is_none() && subpath.is_empty() {
                     single_unnamed_root = true;
                 }
-                let tc_index = match checkouts.iter().position(|tc|
+                let tc_index = match revision_targets.iter().position(|tc|
                         tc.remote_url.is_none() && tc.repository == repository && tc.revision == revision) {
                     Some(existing) => existing,
                     None => {
@@ -2511,15 +2510,15 @@ fn materialize_checkout_targets(config_builder: &mut ConfigurationBuilder, hide_
                                 .map(|name| name.to_string_lossy().into_owned())
                                 .unwrap_or_else(|| repository.clone());
                         let label = format!("{repo_name}@{revision}");
-                        let live = crate::animated_display::start_checkout_display("Reading", &label, hide_animation);
+                        let live = crate::animated_display::start_waiting_display("Reading", &label, hide_animation);
                         let mounted = crate::revision_tree::mount_revision(&resolved);
                         live.finish();
                         let mounted = mounted.map_err(|error| ArgParsingError::GitTarget(error.to_string()))?;
-                        checkouts.push(TargetCheckout::new(mounted, format!("{repository}@{revision}"), None));
-                        checkouts.len() - 1
+                        revision_targets.push(RevisionTarget::new(mounted, format!("{repository}@{revision}"), None));
+                        revision_targets.len() - 1
                     }
                 };
-                match checkouts[tc_index].mounted.find_target_of(subpath) {
+                match revision_targets[tc_index].mounted.find_target_of(subpath) {
                     TargetInRevision::At(inside) => rewritten.push(Target { module: target.module.clone(), path: inside }),
                     TargetInRevision::HoldingNoFile => {
                         let empty = crate::git::GitError::SubmoduleTarget { target: path.clone(), revision }.to_string();
@@ -2537,32 +2536,32 @@ fn materialize_checkout_targets(config_builder: &mut ConfigurationBuilder, hide_
                     single_unnamed_root = true;
                 }
                 let asked_rev = remote.revision.as_deref().unwrap_or("HEAD");
-                let tc_index = match checkouts.iter().position(|tc|
+                let tc_index = match revision_targets.iter().position(|tc|
                         tc.remote_url.as_deref() == Some(remote.url.as_str()) && tc.revision == asked_rev) {
                     Some(existing) => existing,
                     None => {
                         let label = remote.format_short_label();
-                        let live = crate::animated_display::start_checkout_display("Fetching", &label, hide_animation);
+                        let live = crate::animated_display::start_waiting_display("Fetching", &label, hide_animation);
                         let fetched = crate::git::fetch_remote_revision(&remote)
                                 .and_then(|resolved| crate::revision_tree::mount_revision(&resolved));
                         live.finish();
                         let mounted = fetched.map_err(|error| ArgParsingError::GitTarget(error.to_string()))?;
-                        checkouts.push(TargetCheckout::new(mounted, remote.display.clone(), Some(remote.url.clone())));
-                        checkouts.len() - 1
+                        revision_targets.push(RevisionTarget::new(mounted, remote.display.clone(), Some(remote.url.clone())));
+                        revision_targets.len() - 1
                     }
                 };
-                let tc = &checkouts[tc_index];
-                rewritten.push(Target { module: target.module.clone(), path: tc.checkout_root.clone() });
+                let tc = &revision_targets[tc_index];
+                rewritten.push(Target { module: target.module.clone(), path: tc.revision_root.clone() });
             }
         }
     }
 
-    let trees = checkouts.iter().map(|tc| tc.mounted.tree.clone()).collect::<Vec<_>>();
+    let trees = revision_targets.iter().map(|tc| tc.mounted.tree.clone()).collect::<Vec<_>>();
     let validated = mezura_core::validate_and_absolutize(&rewritten, &trees)
-            .map_err(|error| map_target_error_outside_checkouts(error, &checkouts))?;
+            .map_err(|error| map_target_error_outside_revisions(error, &revision_targets))?;
     config_builder.targets = Some(validated);
-    config_builder.target_checkouts = checkouts;
-    config_builder.single_unnamed_checkout_root = single_unnamed_root;
+    config_builder.revision_targets = revision_targets;
+    config_builder.single_unnamed_revision_root = single_unnamed_root;
 
     Ok(())
 }
@@ -2570,12 +2569,12 @@ fn materialize_checkout_targets(config_builder: &mut ConfigurationBuilder, hide_
 // The engine decides which paths are walkable; this turns what it says into the wording a person
 // reads on the command line.
 fn map_target_error(x: mezura_core::TargetError) -> ArgParsingError {
-    map_target_error_outside_checkouts(x, &[])
+    map_target_error_outside_revisions(x, &[])
 }
 
-fn map_target_error_outside_checkouts(x: mezura_core::TargetError, checkouts: &[TargetCheckout]) -> ArgParsingError {
+fn map_target_error_outside_revisions(x: mezura_core::TargetError, revision_targets: &[RevisionTarget]) -> ArgParsingError {
     use mezura_core::TargetError;
-    let out = |p: String| crate::sources::format_path_outside_checkouts(&p, checkouts);
+    let out = |p: String| crate::sources::format_path_outside_revisions(&p, revision_targets);
     match x {
         TargetError::InvalidPath(p) => ArgParsingError::InvalidPath(out(p)),
         TargetError::InvalidGlob(p) => ArgParsingError::InvalidGlobPattern(out(p)),
@@ -3463,11 +3462,11 @@ mod tests {
         let root_str = crate::paths::normalise_separators(&root.to_string_lossy()).into_owned();
         let target_arg = format!("{root_str}@HEAD");
         let config = create_config_from_args(&target_arg).unwrap();
-        assert_eq!(1, config.view.target_checkouts.len());
-        let checkout_path = &config.view.target_checkouts[0].mounted.path;
-        assert_eq!(vec![Target::named("core", format!("{checkout_path}/core")),
-                Target::named("cli", format!("{checkout_path}/cli")),
-                Target::named("vue", format!("{checkout_path}/packages/@vue/cli"))], config.engine.targets);
+        assert_eq!(1, config.view.revision_targets.len());
+        let revision_path = &config.view.revision_targets[0].mounted.path;
+        assert_eq!(vec![Target::named("core", format!("{revision_path}/core")),
+                Target::named("cli", format!("{revision_path}/cli")),
+                Target::named("vue", format!("{revision_path}/packages/@vue/cli"))], config.engine.targets);
         assert_eq!(Some(format!("{target_arg}/.mezura/config.txt")),
                 config.view.local_dir.as_ref().map(LocalDir::get_config_path));
         assert!(config.view.find_project_of_the_log().is_some());
@@ -3480,10 +3479,10 @@ mod tests {
             files.sort();
             files
         });
-        assert!(!std::path::Path::new(checkout_path).exists(), "the revision was written to disk");
+        assert!(!std::path::Path::new(revision_path).exists(), "the revision was written to disk");
 
         let save_local_run = create_config_from_args(&format!("{target_arg} --top 2 --{SAVE_LOCAL}")).unwrap();
-        assert!(!std::path::Path::new(&save_local_run.view.target_checkouts[0].mounted.path).exists(),
+        assert!(!std::path::Path::new(&save_local_run.view.revision_targets[0].mounted.path).exists(),
                 "'--{SAVE_LOCAL}' wrote into the place of a revision");
         assert!(crate::warning_collector::get_collected_warnings().iter()
                 .any(|w| w.subject == SAVE_LOCAL && w.message.contains("read-only")));
@@ -3493,32 +3492,32 @@ mod tests {
         let _ = std::fs::remove_file(&saved_path);
         let saved = create_config_from_args(
                 &format!("{target_arg} --{EXCLUDE} {root_str}/core/lib.rs --{SAVE} zz-rev-target")).unwrap();
-        let saved_checkout = &saved.view.target_checkouts[0].mounted.path;
-        assert_eq!(vec![format!("{saved_checkout}/core/lib.rs")], saved.engine.exclude_patterns.patterns);
+        let saved_revision = &saved.view.revision_targets[0].mounted.path;
+        assert_eq!(vec![format!("{saved_revision}/core/lib.rs")], saved.engine.exclude_patterns.patterns);
         let saved_contents = std::fs::read_to_string(&saved_path).unwrap();
         assert!(saved_contents.contains(&target_arg), "{saved_contents}");
         assert!(saved_contents.contains(&format!("{root_str}/core/lib.rs")), "{saved_contents}");
-        assert!(!saved_contents.contains(saved_checkout),
-                "the temporary checkout path leaked into the saved configuration:\n{saved_contents}");
+        assert!(!saved_contents.contains(saved_revision),
+                "the root the revision is read under leaked into the saved configuration:\n{saved_contents}");
 
         let loaded = create_config_from_args(&format!("--{LOAD} zz-rev-target")).unwrap();
         assert!(loaded.view.counts_the_named_config);
-        assert_eq!(1, loaded.view.target_checkouts.len());
+        assert_eq!(1, loaded.view.revision_targets.len());
         let _ = std::fs::remove_file(&saved_path);
 
         let compare_with_local = create_config_from_args(&format!("{target_arg} --{LOG} --{COMPARE_LEVEL} 2")).unwrap();
         let with_local_warnings = crate::warning_collector::get_collected_warnings();
         let log_pos = with_local_warnings.iter()
                 .position(|w| w.subject == LOG && w.message.contains("keeps no local log"))
-                .expect("expected '--log' warning on checkout");
+                .expect("expected '--log' warning on a revision target");
         assert!(!with_local_warnings[log_pos + 1..].iter().any(|w| w.subject == COMPARE_LEVEL),
-                "a checkout with a '.mezura' folder refused '--compare': {:?}", &with_local_warnings[log_pos..]);
+                "a revision with a '.mezura' folder refused '--compare': {:?}", &with_local_warnings[log_pos..]);
 
         let log_run = create_config_from_args(&format!("{target_arg} --{NO_LOCAL} --{LOG} --{COMPARE_LEVEL} 2")).unwrap();
         let log_warnings = crate::warning_collector::get_collected_warnings();
         let second_log_pos = log_warnings.iter()
                 .rposition(|w| w.subject == LOG && w.message.contains("keeps no local log"))
-                .expect("expected second '--log' warning on checkout");
+                .expect("expected second '--log' warning on a revision target");
         assert!(log_warnings[second_log_pos + 1..].iter()
                 .any(|w| w.subject == COMPARE_LEVEL && w.message.contains("no config file was specified")));
 
@@ -3554,7 +3553,7 @@ mod tests {
         let saved_path = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/zz-remote-credentials.txt");
         let _ = std::fs::remove_file(&saved_path);
         let saved = create_config_from_args(&format!("{with_credentials} --{SAVE} zz-remote-credentials")).unwrap();
-        assert_eq!(without_credentials, saved.view.target_checkouts[0].display_root,
+        assert_eq!(without_credentials, saved.view.revision_targets[0].display_root,
                 "the credentials reached the form of the target that is printed");
         let contents = std::fs::read_to_string(&saved_path).unwrap();
         assert!(contents.contains(&format!("===> targets\n{with_credentials}\n")),
@@ -3562,7 +3561,7 @@ mod tests {
 
         let loaded = create_config_from_args(&format!("--{LOAD} zz-remote-credentials")).unwrap();
         assert!(loaded.view.counts_the_named_config);
-        assert_eq!(without_credentials, loaded.view.target_checkouts[0].display_root);
+        assert_eq!(without_credentials, loaded.view.revision_targets[0].display_root);
 
         std::fs::remove_file(&saved_path).unwrap();
         drop(saved);

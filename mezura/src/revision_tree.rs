@@ -1,6 +1,6 @@
 // A revision of a repository read from git's objects, with nothing written to disk. The engine is
-// handed it as a mounted tree under the root a checkout of it would have had, so every path it
-// reports pairs with the working tree as a checkout's did.
+// handed it as a mounted tree under a root whose last folder is named like the repository's, and
+// every path it reports is moved back under the repository, so it pairs with the working tree's.
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -9,7 +9,8 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use mezura_core::MountedTree;
 
-use super::git::{GitError, ResolvedRevision, build_git_fetch, build_git_read, read_git_config, read_scoped_git_settings};
+use super::git::{GitError, ResolvedRevision, build_git_fetch, build_git_read, is_true_to_git, read_git_config,
+        read_scoped_git_settings};
 use super::line_endings::{CheckoutSettings, Conversion, convert_line_endings, decide_conversions, read_as_git_writes_it};
 use super::paths::fold_ascii_case;
 
@@ -117,7 +118,7 @@ fn fetch_missing_objects(resolved: &ResolvedRevision) -> Result<(), GitError> {
     let repository = resolved.repository.as_str();
     let promisors = read_git_config(repository, &["--get-regexp", r"^remote\..*\.promisor$"]).unwrap_or_default();
     let Some(promisor) = promisors.lines().filter_map(|line| line.split_once(' '))
-            .find(|(_, value)| value.trim().eq_ignore_ascii_case("true"))
+            .find(|(_, value)| is_true_to_git(Some(value.trim())))
             .and_then(|(key, _)| Some(key.strip_prefix("remote.")?.strip_suffix(".promisor")?.to_owned()))
             .or_else(|| read_git_config(repository, &["--get", "extensions.partialclone"]).filter(|name| !name.is_empty())) else {
         return Ok(());
@@ -136,7 +137,7 @@ fn fetch_missing_objects(resolved: &ResolvedRevision) -> Result<(), GitError> {
             return Err(GitError::FetchRunsRepositoryProgram { repository: repository.to_owned(),
                     revision: resolved.revision.clone(), setting });
         }
-        let mut fetch = command.args(["-c", "fetch.negotiationAlgorithm=noop", "fetch", "--no-tags", "--no-auto-gc",
+        let mut fetch = command.args(["-c", "fetch.negotiationAlgorithm=noop", "-c", "fetch.bundleURI=", "fetch", "--no-tags", "--no-auto-gc",
                 "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none", "--stdin", "--", &promisor])
                 .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(GitError::NotInstalled)?;
         if let Some(mut input) = fetch.stdin.take() {
@@ -185,8 +186,7 @@ struct BlobReader {
 impl BlobReader {
     // A process that failed a read is dropped, since what it would answer next is unknown
     fn read(&self, at: usize, buf: &mut Vec<u8>) -> std::io::Result<()> {
-        let conversion = self.conversions.get(at).copied().unwrap_or(Conversion::Untouched);
-        if conversion == Conversion::ByGit && let Some(path) = self.paths_git_writes_out.get(&at) {
+        if let Some(path) = self.paths_git_writes_out.get(&at) {
             return read_as_git_writes_it(&self.repository, &self.commit, path, &self.ids[at], buf);
         }
         let mut process = self.take()?;
@@ -194,7 +194,7 @@ impl BlobReader {
             Ok(()) => {
                 self.pool.lock().unwrap().idle.push(process);
                 self.returned.notify_one();
-                convert_line_endings(conversion, buf);
+                convert_line_endings(self.conversions.get(at).copied().unwrap_or(Conversion::Untouched), buf);
                 Ok(())
             },
             Err(error) => {
@@ -283,14 +283,14 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    use mezura_core::{EngineConfig, RepositoryCheckout, RunResult, Stats, TestCode};
+    use mezura_core::{EngineConfig, RunResult, Stats, TestCode};
 
     use crate::config_manager::{ArgParsingError, Configuration};
-    use crate::git::{GitError, checkout, remove_directory_tree, resolve_revision};
+    use crate::git::{GitError, remove_directory_tree, resolve_revision};
     use crate::git::GIT_TEST_LOCK;
     use crate::paths::normalise_separators;
     use crate::paths::test_paths::CORE_LANGUAGES_DIR;
-    use crate::test_support::run_git;
+    use crate::test_support::{checkout, run_git};
 
     #[test]
     fn ignore_files_inside_and_a_test_tools_file_above_the_repository_count_as_in_a_worktree() {
@@ -424,11 +424,15 @@ mod tests {
         let _ssh = crate::test_support::install_local_ssh_helper();
         let clone = clone_partially(&origin, &holder, "blob:none");
         let ran = normalise_separators(&holder.join("ran").to_string_lossy()).into_owned();
-        run_git(&clone, &["config", "remote.origin.url", &format!("ext::sh -c echo>'{}'", ran.replace('%', "%%").replace(' ', "% "))]);
-        run_git(&clone, &["config", "protocol.ext.allow", "always"]);
-
         let resolved = resolve_revision(&normalise_separators(&clone.to_string_lossy()), "HEAD~1").unwrap();
-        assert!(matches!(super::mount_revision(&resolved), Err(GitError::Refused { .. })));
+        let through_a_shell = format!("ext::sh -c echo>'{}'", ran.replace('%', "%%").replace(' ', "% "));
+
+        for (transport, url) in [("ext", through_a_shell.as_str()), ("mzr", "mzr::anything"), ("mzr", "mzr://anything")] {
+            run_git(&clone, &["config", "remote.origin.url", url]);
+            run_git(&clone, &["config", &format!("protocol.{transport}.allow"), "always"]);
+            assert!(matches!(super::mount_revision(&resolved), Err(GitError::Refused { message, .. }) if message.contains("not allowed")),
+                    "git was left to start the program of the transport of '{url}'");
+        }
         assert!(!Path::new(&ran).exists(), "the program the repository names as its transport was run");
         remove_directory_tree(&holder).unwrap();
     }
@@ -545,16 +549,20 @@ mod tests {
         create_repository(&repository);
         commit_files_as_given(&repository, &holder, &[("a.txt".to_owned(), b"a\nb\n".to_vec()), ("b.bin".to_owned(), b"a\nb\n".to_vec())]);
         commit_files_as_given(&repository, &holder, &[(".gitattributes".to_owned(), b"*.bin binary\n".to_vec())]);
+        commit_files_as_given(&repository, &holder, &[(".gitattributes".to_owned(), b"\"*.txt\"eol=crlf\n".to_vec())]);
         let root = normalise_separators(&repository.to_string_lossy()).into_owned();
-        let (with_none, with_binary) = (resolve_revision(&root, "HEAD~1").unwrap(), resolve_revision(&root, "HEAD").unwrap());
+        let [with_none, with_binary, with_quotes] = ["HEAD~2", "HEAD~1", "HEAD"].map(|revision| resolve_revision(&root, revision).unwrap());
         let read = |resolved, settings| read_files_held_against_a_worktree(resolved, settings).into_iter()
                 .map(|(name, bytes)| format!("{name} {}", bytes.escape_ascii())).collect::<Vec<_>>();
 
         assert_eq!(vec![r"a.txt a\nb\n", r"b.bin a\nb\n"], read(&with_none, "no attributes"));
+        assert_eq!(vec![r#".gitattributes \"*.txt\"eol=crlf\n"#, r"a.txt a\r\nb\r\n", r"b.bin a\nb\n"],
+                read(&with_quotes, "a pattern in quotes with no blank after it"));
         run_git(&repository, &["config", "core.autocrlf", "true"]);
         assert_eq!(vec![r"a.txt a\r\nb\r\n", r"b.bin a\r\nb\r\n"], read(&with_none, "no attributes and core.autocrlf"));
         assert_eq!(vec![r".gitattributes *.bin binary\r\n", r"a.txt a\r\nb\r\n", r"b.bin a\nb\n"], read(&with_binary, "a binary attribute"));
         run_git(&repository, &["config", "core.autocrlf", "false"]);
+        std::fs::create_dir_all(repository.join(".git").join("info")).unwrap();
         std::fs::write(repository.join(".git").join("info").join("attributes"), "*.txt eol=crlf\n").unwrap();
         assert_eq!(vec![r"a.txt a\r\nb\r\n", r"b.bin a\nb\n"], read(&with_none, "attributes of the clone"));
         remove_directory_tree(&holder).unwrap();
@@ -589,6 +597,58 @@ mod tests {
         assert_eq!(r"x $Id$ y\r\n", under_a_filter);
         assert_eq!(format!(r"x $Id: {id} $ y\n"), under_lfs);
         assert!(!Path::new(&ran).exists(), "reading a file under a filter ran the program the repository names for it");
+        remove_directory_tree(&holder).unwrap();
+    }
+
+    #[test]
+    fn a_path_that_is_no_utf8_is_never_handed_to_git_where_its_respelling_is_under_a_filter() {
+        let _guard = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let holder = create_fresh_folder("mezura-mounted-path-no-utf8");
+        let repository = holder.join("repo");
+        std::fs::create_dir(&repository).unwrap();
+        create_repository(&repository);
+        let store = |contents: &[u8]| {
+            std::fs::write(holder.join("blob"), contents).unwrap();
+            run_git(&repository, &["hash-object", "-w", "--no-filters", &normalise_separators(&holder.join("blob").to_string_lossy())])
+        };
+        let (keyword, attributes) = (store(b"x $Id$ y\n"), store(b"a\xff.rs ident\n*\xef\xbf\xbd* filter=evil\n"));
+        let entries = [format!("100644 blob {attributes}\t.gitattributes\0100644 blob {keyword}\ta").as_bytes(), b"\xff.rs\0"].concat();
+        let mut mktree = Command::new("git").arg("-C").arg(&repository).args(["mktree", "-z"])
+                .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn().unwrap();
+        std::io::Write::write_all(&mut mktree.stdin.take().unwrap(), &entries).unwrap();
+        let tree = String::from_utf8(mktree.wait_with_output().unwrap().stdout).unwrap();
+        let commit = run_git(&repository, &["-c", "user.name=t", "-c", "user.email=t@t", "commit-tree", "-m", "c1", tree.trim()]);
+        run_git(&repository, &["update-ref", "HEAD", &commit]);
+        let ran = normalise_separators(&holder.join("ran").to_string_lossy()).into_owned();
+        for setting in ["filter.evil.smudge", "filter.evil.process"] {
+            run_git(&repository, &["config", setting, &format!("echo ran > '{ran}' #")]);
+        }
+        let resolved = resolve_revision(&normalise_separators(&repository.to_string_lossy()), "HEAD").unwrap();
+
+        let (listed, blobs, _) = super::list_revision(&resolved, false).unwrap();
+        assert_eq!(2, listed.len());
+        for at in 0..listed.len() {
+            blobs.read(at, &mut Vec::new()).unwrap();
+        }
+        drop(blobs);
+        assert!(!Path::new(&ran).exists(), "the file was handed to git under a name whose attributes name the repository's filter");
+        remove_directory_tree(&holder).unwrap();
+    }
+
+    #[test]
+    fn the_fetch_of_what_a_revision_lacks_reads_no_bundle_the_repository_names() {
+        let _guard = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let holder = create_fresh_folder("mezura-mounted-bundle");
+        let origin = create_origin(&holder);
+        let _ssh = crate::test_support::install_local_ssh_helper();
+        let clone = clone_partially(&origin, &holder, "blob:none");
+        let bundle = normalise_separators(&holder.join("elsewhere.bundle").to_string_lossy()).into_owned();
+        run_git(&origin, &["bundle", "create", &bundle, "--all"]);
+        run_git(&clone, &["config", "fetch.bundleURI", &bundle]);
+        let resolved = resolve_revision(&normalise_separators(&clone.to_string_lossy()), "HEAD~1").unwrap();
+
+        drop(super::mount_revision(&resolved).unwrap());
+        assert_eq!("", run_git(&clone, &["for-each-ref", "refs/bundles"]), "the fetch unpacked the bundle the repository names");
         remove_directory_tree(&holder).unwrap();
     }
 
@@ -649,15 +709,20 @@ mod tests {
         (reading.result, notes)
     }
 
-    // Counted from the folder 'git worktree add' wrote, with the folders above it read above the repository
+    // Counted from the folder 'git worktree add' wrote, with the files beside the repository copied beside it
     fn count_in_a_worktree(root: &str, revision: &str, place: &str) -> Option<RunResult> {
         let written = checkout(&resolve_revision(root, revision).unwrap()).unwrap();
+        let (beside_the_repository, beside_the_worktree) = (Path::new(root).parent().unwrap(), Path::new(&written.path).parent().unwrap());
+        if beside_the_repository != std::env::temp_dir() {
+            for file in std::fs::read_dir(beside_the_repository).unwrap().flatten().filter(|entry| entry.path().is_file()) {
+                std::fs::copy(file.path(), beside_the_worktree.join(file.file_name())).unwrap();
+            }
+        }
         let target = format!("{}/{place}", written.path).trim_end_matches('/').to_owned();
         if !Path::new(&target).exists() {
             return None;
         }
-        let engine = EngineConfig { checkout: Some(RepositoryCheckout { root: written.path.clone(), repository: root.to_owned() }),
-                ..EngineConfig::new([target]) };
+        let engine = EngineConfig::new([target]);
         Some(mezura_core::run(&engine, resolve_languages(&engine)).unwrap())
     }
 

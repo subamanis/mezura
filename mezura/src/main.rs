@@ -73,7 +73,7 @@ fn main() -> ExitCode {
     let mut timing = Report::of_this_run();
 
     // Started here and not at the scan, so the footer answers for the whole command: a '--diff' pays
-    // for checkouts and baseline counting long before any scan of this run begins
+    // for reading its revisions and counting the baseline long before any scan of this run begins
     let instant = Instant::now();
 
     // Windows needs a virtual terminal enabled before it shows colors at all
@@ -144,9 +144,7 @@ fn main() -> ExitCode {
     crate::number_formatter::set_decimal_separator(config.view.decimal_separator);
     // A terminal that names itself dumb (an Emacs shell buffer, some CI shells) is a tty with no
     // cursor addressing, so nothing moving can be drawn on it. The 'dumb-emacs-ansi' form does
-    // understand colors and keeps them, and the bare 'dumb' cannot show those either. The removals guard
-    // built at the top of main reads the answer from where the setter leaves it, since there was no
-    // configuration to ask when it was made.
+    // understand colors and keeps them, and the bare 'dumb' cannot show those either.
     let terminal_kind = std::env::var("TERM").unwrap_or_default();
     crate::animated_display::set_animations_hidden(
             config.view.hidden.animations || terminal_kind.starts_with("dumb"));
@@ -294,7 +292,7 @@ fn main() -> ExitCode {
     match outcome {
         Ok(mut result) => {
             let at = stamp();
-            crate::sources::move_result_paths_out_of_checkouts(&mut result, &config.view.target_checkouts);
+            crate::sources::move_result_paths_out_of_revisions(&mut result, &config.view.revision_targets);
             // Beside a revision this run is one side of two, so a pattern reaching nothing says which
             let against_a_revision = counted_baseline.as_ref().is_some_and(crate::diff::CountedBaseline::is_a_revision);
             for warning in collect_warnings_to_emit(&result.warnings, &config.view.test_patterns_from_presets, against_a_revision) {
@@ -337,8 +335,8 @@ fn main() -> ExitCode {
         // wording is this crate's own, so that a configuration file which supplied the targets is
         // named as the culprit the reader cannot see failing.
         Err(mezura_core::RunError::InvalidTargets(inner)) => {
-            eprintln!("{}", crate::config_manager::attribute_targets_error_outside_checkouts(
-                    inner, &config.view.targets_source, &config.view.target_checkouts).format());
+            eprintln!("{}", crate::config_manager::attribute_targets_error_outside_revisions(
+                    inner, &config.view.targets_source, &config.view.revision_targets).format());
             ExitCode::FAILURE
         },
         Err(x) => {

@@ -17,12 +17,12 @@ pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
                 targets. Give the file by itself: mezura src/main.rs --explain",
                 config.engine.targets.len()));
     };
-    let display_path = crate::sources::format_path_outside_checkouts(&target.path, &config.view.target_checkouts);
+    let display_path = crate::sources::format_path_outside_revisions(&target.path, &config.view.revision_targets);
     let path = Path::new(&target.path);
     let not_a_file = format!("'--explain' answers for one file, and '{display_path}' is not one. Give the \
             file itself: mezura src/main.rs --explain");
     // A folder of a revision passes here, and the engine refuses it below
-    let names_a_file = match crate::sources::find_revision_holding(&target.path, &config.view.target_checkouts) {
+    let names_a_file = match crate::sources::find_revision_holding(&target.path, &config.view.revision_targets) {
         Some(revision) => revision.tree.holds(path),
         None => path.is_file()
     };
@@ -47,9 +47,9 @@ pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
     }
 
     match mezura_core::explain_file(path,
-            &read_names_as_a_run_from_here_would(&config.engine, &config.view.target_checkouts), languages) {
+            &read_names_as_a_run_from_here_would(&config.engine, &config.view.revision_targets), languages) {
         Ok(mut explanation) => {
-            move_explanation_paths_out_of_checkouts(&mut explanation, &config.view.target_checkouts);
+            move_explanation_paths_out_of_revisions(&mut explanation, &config.view.revision_targets);
             if config.view.prints_text() {
                 print_text(&display_path, &explanation, config.view.counting, asked_for);
             } else {
@@ -81,13 +81,13 @@ pub fn run_explain(config: &Configuration, languages: Languages) -> ExitCode {
     }
 }
 
-fn move_explanation_paths_out_of_checkouts(explanation: &mut FileExplanation,
-        checkouts: &[crate::config_manager::TargetCheckout])
+fn move_explanation_paths_out_of_revisions(explanation: &mut FileExplanation,
+        revision_targets: &[crate::config_manager::RevisionTarget])
 {
-    if checkouts.is_empty() {
+    if revision_targets.is_empty() {
         return;
     }
-    let out = |path: &mut String| *path = crate::sources::format_path_outside_checkouts(path, checkouts);
+    let out = |path: &mut String| *path = crate::sources::format_path_outside_revisions(path, revision_targets);
     match &mut explanation.test_file_rule {
         Some(TestFileRule::TestDirectory { directory, build_files }) => {
             out(directory);
@@ -99,7 +99,7 @@ fn move_explanation_paths_out_of_checkouts(explanation: &mut FileExplanation,
         },
         Some(TestFileRule::Declared { pattern, matched_folder }
                 | TestFileRule::DeclaredNotTests { pattern, matched_folder }) => {
-            *pattern = crate::sources::format_pattern_outside_checkouts(pattern, checkouts);
+            *pattern = crate::sources::format_pattern_outside_revisions(pattern, revision_targets);
             matched_folder.iter_mut().for_each(out);
         },
         Some(TestFileRule::DeclaredModule { declared_by }) => declared_by.iter_mut().for_each(out),
@@ -114,19 +114,19 @@ fn refuse(message: &str) -> ExitCode {
 
 // The core applies the directory only to a file inside it, so nothing is checked here.
 fn read_names_as_a_run_from_here_would(engine: &EngineConfig,
-        checkouts: &[crate::config_manager::TargetCheckout]) -> EngineConfig
+        revision_targets: &[crate::config_manager::RevisionTarget]) -> EngineConfig
 {
     let mut engine = engine.clone();
     if engine.test_patterns.read_from.is_none() {
         let working_dir = std::env::current_dir().ok()
                 .map(|dir| crate::paths::normalise_separators(&dir.to_string_lossy()).into_owned());
-        engine.test_patterns.read_from = match (working_dir, checkouts.first()) {
+        engine.test_patterns.read_from = match (working_dir, revision_targets.first()) {
             (Some(dir), Some(tc)) => {
-                let mapped = crate::sources::format_path_inside_checkouts(&dir, checkouts);
+                let mapped = crate::sources::format_path_inside_revisions(&dir, revision_targets);
                 if mapped != dir {
                     Some(mapped)
                 } else {
-                    Some(tc.checkout_root.clone())
+                    Some(tc.revision_root.clone())
                 }
             },
             (dir, _) => dir
@@ -465,9 +465,9 @@ mod tests {
     }
 
     #[test]
-    fn the_paths_of_a_test_file_rule_are_moved_out_of_its_checkouts() {
+    fn the_paths_of_a_test_file_rule_are_moved_out_of_its_revisions() {
         let _guard = crate::git::GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let root = std::env::temp_dir().join("mezura-explain-checkout-paths");
+        let root = std::env::temp_dir().join("mezura-explain-revision-paths");
         let _ = crate::git::remove_directory_tree(&root);
         std::fs::create_dir_all(root.join("pkg/src")).unwrap();
         std::fs::write(root.join("pkg/src/lib.rs"), "pub fn a() {}\n").unwrap();
@@ -484,18 +484,18 @@ mod tests {
         let mounted = crate::revision_tree::mount_revision(&resolved).unwrap();
         let chk = mounted.path.clone();
         let display = format!("{root_str}@HEAD");
-        let checkouts = [crate::config_manager::TargetCheckout::new(mounted, display.clone(), None)];
+        let revision_targets = [crate::config_manager::RevisionTarget::new(mounted, display.clone(), None)];
 
         let mut engine = EngineConfig::new([format!("{chk}/pkg/src/lib.rs")]);
         engine.test_patterns = PathPatterns::of(["pkg/"]);
-        let anchored = read_names_as_a_run_from_here_would(&engine, &checkouts);
+        let anchored = read_names_as_a_run_from_here_would(&engine, &revision_targets);
         assert_eq!(Some(chk.clone()), anchored.test_patterns.read_from);
 
         let rewrite = |rule: TestFileRule| {
             let mut explanation = FileExplanation { language: "Rust".to_owned(), identified_by: None,
                     left_out_of_a_scan: None, test_file_rule: Some(rule),
                     contents: String::new(), lines: Vec::new(), classes: LineClasses::default() };
-            move_explanation_paths_out_of_checkouts(&mut explanation, &checkouts);
+            move_explanation_paths_out_of_revisions(&mut explanation, &revision_targets);
             explanation.test_file_rule.unwrap()
         };
 
@@ -528,7 +528,7 @@ mod tests {
             declared_by: vec![format!("{chk}/pkg/src/lib.rs")]
         }));
 
-        drop(checkouts);
+        drop(revision_targets);
         crate::git::remove_directory_tree(&root).unwrap();
     }
 

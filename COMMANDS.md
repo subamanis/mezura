@@ -80,9 +80,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
 
     A target can also be a local git revision ('./src@v3.1.0', or '@v3.2.0' for the current
     directory) or a remote git repository URL ('https://github.com/owner/repo',
-    'https://github.com/owner/repo@v1.0', or 'git@github.com:owner/repo@main'), written out to a
-    temporary directory and counted with the project's own '.mezura' settings at that commit. A
-    folder or file that exists on disk with '@' in its name is taken as that path on disk.
+    'https://github.com/owner/repo@v1.0', or 'git@github.com:owner/repo@main'), read from git and
+    counted with the project's own '.mezura' settings at that commit. A folder or file that exists
+    on disk with '@' in its name is taken as that path on disk.
 
     A path you write out is always counted, even if it is ignored, dotted, a link, minified,
     generated or not code. The matches of a pattern are paths mezura found, so those are skipped
@@ -1084,9 +1084,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
     what it names. For a local revision, every target must be in one git repository. A directory
     the revision does not have counts as zero, so all of it reads as new.
 
-    Counting a revision is slower, since the commit is written out to a temporary directory
-    first. Size can move there while no line did, when git gives the checkout different line
-    endings from your working tree.
+    A revision is read from git, each file with the line endings a checkout would give it. Under
+    'text' or 'eol' attributes that needs git 2.40. With an older git, Size can move there while
+    no line did.
 
     Every figure shows what it is now, how much it moved, and by what percentage. A figure that
     did not move is a dash. There is no 'Extra' column. Keywords are marked the same way and only

@@ -11,6 +11,9 @@ Breaking:
   function of the caller's.
 - `is_on_disk` is `names_an_existing_place`, and it takes the mounted trees of the run, so a place
   below the root of one is looked for in that tree.
+- `EngineConfig::checkout` and `RepositoryCheckout` are removed. A copy of a repository counted
+  under another root is a `MountedTree` that names the repository, and the folders above its root
+  are read above that repository as they were for a checkout.
 
 New:
 

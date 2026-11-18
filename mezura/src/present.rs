@@ -84,14 +84,14 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
 
     let log_file_path = determine_log_file_path(config);
     let existing_log_contents = log_file_path.as_ref().and_then(|path|
-            match super::sources::find_revision_holding(path, &config.view.target_checkouts) {
+            match super::sources::find_revision_holding(path, &config.view.revision_targets) {
         Some(revision) => revision.read_file(path).and_then(|bytes| String::from_utf8(bytes).ok()),
         None => super::log::extract_file_contents(path)
     });
     super::result_printer::format_and_print_results(result, &existing_log_contents, &datetime_now, config);
     print_test_preset_notes(result, &suggestions, config);
 
-    let can_write_log = config.view.target_checkouts.is_empty()
+    let can_write_log = config.view.revision_targets.is_empty()
             || config.view.config_name_to_save.is_some()
             || config.view.config_name_to_load.is_some();
     if config.view.log.should_log && can_write_log && let Some(path) = log_file_path
@@ -242,7 +242,7 @@ fn keep_test_preset_suggestions(result: &RunResult, config: &Configuration) -> V
     if !config.engine.detect_tests || !config.engine.test_patterns.patterns.is_empty() {
         return Vec::new();
     }
-    let target_roots = if config.view.target_checkouts.is_empty() {
+    let target_roots = if config.view.revision_targets.is_empty() {
         &result.targets
     } else {
         &config.engine.targets

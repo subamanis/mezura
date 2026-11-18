@@ -2,18 +2,18 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Stdio;
 
-use super::git::build_git_read;
+use super::git::{build_git_read, is_true_to_git, read_answer_of, start_plain_git};
 
 const ATTRIBUTES : [&str; 6] = ["text", "crlf", "eol", "filter", "ident", "working-tree-encoding"];
+const MOST_BYTES_OF_ATTRIBUTES : u64 = 100 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Conversion {
     Untouched,
     Auto,
-    Text,
-    ByGit
+    Text
 }
 
 pub(crate) struct CheckoutSettings {
@@ -55,11 +55,7 @@ impl CheckoutSettings {
                 "lf" => false,
                 _ => cfg!(windows)
             },
-            attributes_outside_the_revision: files.iter().any(|file| match file.as_ref().map(std::fs::read) {
-                Some(Ok(attributes)) => names_a_conversion(&attributes),
-                Some(Err(error)) => error.kind() != ErrorKind::NotFound,
-                None => true
-            })
+            attributes_outside_the_revision: files.iter().any(|file| file.as_deref().is_none_or(file_names_a_conversion))
         }
     }
 }
@@ -75,12 +71,13 @@ pub(crate) fn decide_conversions(settings: &CheckoutSettings, repository: &str, 
                 attributes.clear();
                 read_blob(at, &mut attributes).is_err() || names_a_conversion(&attributes)
             });
-    let (mut conversions, paths_git_writes_out) = attributes_apply.then(|| ask_git_for_attributes(settings, repository, commit, paths))
+    let (mut conversions, mut paths_git_writes_out) = attributes_apply.then(|| ask_git_for_attributes(settings, repository, commit, paths))
             .flatten().unwrap_or_else(|| (match settings.autocrlf {
                 true => vec![Conversion::Auto; paths.len()],
                 false => Vec::new()
             }, HashMap::new()));
     for link in links {
+        paths_git_writes_out.remove(link);
         if let Some(conversion) = conversions.get_mut(*link) {
             *conversion = Conversion::Untouched;
         }
@@ -92,7 +89,7 @@ pub(crate) fn convert_line_endings(conversion: Conversion, bytes: &mut Vec<u8>) 
     let bare_line_feeds = match conversion {
         Conversion::Auto => count_line_feeds_of_text(bytes).unwrap_or(0),
         Conversion::Text => (0..bytes.len()).filter(|at| bytes[*at] == b'\n' && (*at == 0 || bytes[at - 1] != b'\r')).count(),
-        Conversion::Untouched | Conversion::ByGit => 0
+        Conversion::Untouched => 0
     };
     let (mut from, mut to) = (bytes.len(), bytes.len() + bare_line_feeds);
     bytes.resize(to, 0);
@@ -117,25 +114,21 @@ pub(crate) fn read_as_git_writes_it(repository: &str, commit: &str, path: &str, 
     Ok(())
 }
 
-fn start_plain_git(repository: &str, arguments: &[&str]) -> Option<Child> {
-    Command::new("git").env("GIT_TERMINAL_PROMPT", "0").arg("-C").arg(repository).args(arguments)
-            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()
+// Git reads no file of attributes past 100 MB, and what is no regular file could be a device that never ends
+fn file_names_a_conversion(file: &Path) -> bool {
+    match std::fs::metadata(file) {
+        Ok(found) if found.is_file() && found.len() <= MOST_BYTES_OF_ATTRIBUTES =>
+                std::fs::read(file).map_or(true, |attributes| names_a_conversion(&attributes)),
+        Ok(_) => true,
+        Err(error) => error.kind() != ErrorKind::NotFound
+    }
 }
 
-fn read_answer_of(git: Option<Child>) -> Option<String> {
-    let outcome = git?.wait_with_output().ok()?;
-    outcome.status.success().then(|| String::from_utf8_lossy(&outcome.stdout).into_owned())
-}
-
-fn is_true_to_git(value: Option<&str>) -> bool {
-    value.is_none_or(|value| ["true", "yes", "on"].iter().any(|word| value.eq_ignore_ascii_case(word))
-            || value.parse::<i64>().is_ok_and(|number| number != 0))
-}
-
-// Where no file of attributes names one of the six or git's macro 'binary', no path has one, through another macro either
+// Where no file of attributes names one of the six or git's macro 'binary', no path has one, through another macro either.
+// A pattern in quotes ends at its closing quote, with no blank needed before the attributes.
 fn names_a_conversion(attributes: &[u8]) -> bool {
     attributes.split(|byte| *byte == b'\n').filter(|line| !line.trim_ascii_start().starts_with(b"#"))
-            .flat_map(|line| line.split(u8::is_ascii_whitespace))
+            .flat_map(|line| line.split(|byte| byte.is_ascii_whitespace() || *byte == b'"'))
             .any(|word| {
                 let name = word.strip_prefix(b"-").or_else(|| word.strip_prefix(b"!")).unwrap_or(word);
                 let name = name.split(|byte| *byte == b'=').next().unwrap_or_default();
@@ -164,11 +157,15 @@ fn ask_git_for_attributes(settings: &CheckoutSettings, repository: &str, commit:
                 }
                 value.pop();
             }
-            let conversion = decide_conversion(settings, &values);
-            if conversion == Conversion::ByGit {
-                paths_git_writes_out.insert(at, String::from_utf8_lossy(path).into_owned());
+            let [text, crlf, eol, filter, ident, encoding] = &values;
+            // A path that is no UTF-8 would reach git respelled, where the attributes of another path may name a filter
+            match std::str::from_utf8(path).ok().filter(|_| is_written_out_by_git(filter, ident, encoding)) {
+                Some(path) => {
+                    paths_git_writes_out.insert(at, path.to_owned());
+                    conversions.push(Conversion::Untouched);
+                },
+                None => conversions.push(decide_conversion(settings, text, crlf, eol))
             }
-            conversions.push(conversion);
         }
         true
     });
@@ -176,14 +173,15 @@ fn ask_git_for_attributes(settings: &CheckoutSettings, repository: &str, commit:
 }
 
 // A filter other than lfs is a program of the repository's configuration, so its path is never handed to git
-fn decide_conversion(settings: &CheckoutSettings, [text, crlf, eol, filter, ident, encoding]: &[Vec<u8>; 6]) -> Conversion {
-    let is_encoded = !matches!(encoding.as_slice(), b"unspecified" | b"unset" | b"set")
+fn is_written_out_by_git(filter: &[u8], ident: &[u8], encoding: &[u8]) -> bool {
+    let is_encoded = !matches!(encoding, b"unspecified" | b"unset" | b"set")
             && !encoding.eq_ignore_ascii_case(b"utf-8") && !encoding.eq_ignore_ascii_case(b"utf8");
-    if (ident == b"set" || is_encoded) && matches!(filter.as_slice(), b"unspecified" | b"unset" | b"lfs") {
-        return Conversion::ByGit;
-    }
-    let text = if matches!(text.as_slice(), b"set" | b"unset" | b"auto" | b"input") { text } else { crlf };
-    match (text.as_slice(), eol.as_slice()) {
+    (ident == b"set" || is_encoded) && matches!(filter, b"unspecified" | b"unset" | b"lfs")
+}
+
+fn decide_conversion(settings: &CheckoutSettings, text: &[u8], crlf: &[u8], eol: &[u8]) -> Conversion {
+    let text = if matches!(text, b"set" | b"unset" | b"auto" | b"input") { text } else { crlf };
+    match (text, eol) {
         (b"unset", _) | (_, b"lf") => Conversion::Untouched,
         (b"auto", b"crlf") => Conversion::Auto,
         (_, b"crlf") => Conversion::Text,

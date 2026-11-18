@@ -7,7 +7,7 @@ use std::path::{Component, Path};
 use std::sync::Arc;
 
 use crate::GitignoreStack;
-use crate::engine::config::{RepositoryCheckout, Target};
+use crate::engine::config::Target;
 use crate::engine::tree::{MountedTree, TreeView};
 
 pub(crate) const WILDCARDS : [char; 4] = ['*', '?', '[', '{'];
@@ -249,11 +249,6 @@ pub(crate) fn is_inside_or_at(path: &str, folder: &str) -> bool {
     path == folder || is_ancestor_of(&folder, &path)
 }
 
-// Spelled the way the targets are, since the climbs above them compare the two by component
-pub(crate) fn resolve_checkout(checkout: &RepositoryCheckout) -> RepositoryCheckout {
-    RepositoryCheckout { root: convert_to_absolute(&checkout.root), repository: convert_to_absolute(&checkout.repository) }
-}
-
 fn absolutize_targets(declared: &[Target], tree: &TreeView) -> Result<Vec<Target>, TargetError> {
     let mut prepared: Vec<Target> = Vec::with_capacity(declared.len());
     for target in declared {
@@ -277,8 +272,8 @@ fn absolutize_targets(declared: &[Target], tree: &TreeView) -> Result<Vec<Target
         }
     }
     // Here as well as after the patterns expand. A contest between two literal paths is decidable
-    // the moment they are typed, and under '--diff' the later check runs against a checkout, so it
-    // names a temporary directory nobody wrote.
+    // the moment they are typed, and under '--diff' the later check runs under the root a revision
+    // is read from, so it names a temporary directory nobody wrote.
     find_contested_target(&prepared)?;
 
     Ok(prepared)
@@ -575,8 +570,8 @@ mod target_path_tests {
         assert_eq!(1, repeated.unwrap().len());
     }
 
-    // Under '--diff' the later check runs against a checkout, so a whole repository is written out
-    // before the message names a temporary directory nobody wrote.
+    // Under '--diff' the later check runs under the root a revision is read from, so its message
+    // would name a temporary directory nobody wrote.
     #[test]
     fn two_names_over_one_typed_path_are_refused_before_anything_is_counted() {
         let root = std::env::temp_dir().join("mezura-contested-early");

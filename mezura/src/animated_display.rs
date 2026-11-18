@@ -48,8 +48,6 @@ const LINES_RATE_SUFFIX : &str = " lines/s";
 const ERASE_BELOW : &str = "\r\x1b[0J";
 // Erase, then up onto the blank line the first frame opened
 const ERASE_BELOW_AND_RETREAT : &str = "\r\x1b[0J\x1b[1A";
-// A static and not an argument: the guard that waits for the checkout removals is built before
-// there is a configuration to ask, since it has to be the last thing this process drops.
 static ANIMATIONS_HIDDEN : AtomicBool = AtomicBool::new(false);
 
 const _ : () = {
@@ -150,7 +148,7 @@ pub fn start_walk_display(config: &Configuration, progress: Arc<ScanProgress>) -
 }
 
 // The transient line of a '--diff' side that is a git revision: its name with the files discovered
-// while the checkout is scanned, then the parsing frame once the scan ends. It erases itself
+// while the revision is scanned, then the parsing frame once the scan ends. It erases itself
 // completely, so the printed comparison carries no trace of it.
 pub fn start_revision_display(config: &Configuration, git_revision: &str, writing_verb: &str,
         progress: Arc<ScanProgress>) -> AnimatedDisplay {
@@ -180,7 +178,7 @@ pub fn start_revision_display(config: &Configuration, git_revision: &str, writin
     }
 }
 
-pub fn start_checkout_display(verb: &str, name: &str, hidden: bool) -> AnimatedDisplay {
+pub fn start_waiting_display(verb: &str, name: &str, hidden: bool) -> AnimatedDisplay {
     if hidden || animations_are_hidden() {
         return AnimatedDisplay::default();
     }
@@ -191,7 +189,7 @@ pub fn start_checkout_display(verb: &str, name: &str, hidden: bool) -> AnimatedD
     let animator = {
         let (stop, opened) = (stop.clone(), opened.clone());
         thread::Builder::new().name("animated-display".to_owned())
-                .spawn(move || animate_checkout_line(&stop, &opened, &label)).ok()
+                .spawn(move || animate_waiting_line(&stop, &opened, &label)).ok()
     };
 
     AnimatedDisplay {
@@ -452,7 +450,7 @@ fn open_line_below() {
     let _ = stderr.flush();
 }
 
-fn animate_checkout_line(stop: &AtomicBool, opened: &AtomicBool, label: &str) {
+fn animate_waiting_line(stop: &AtomicBool, opened: &AtomicBool, label: &str) {
     let started = Instant::now();
     let mut row = TransientRow::new();
     while !stop.load(Ordering::Relaxed) {

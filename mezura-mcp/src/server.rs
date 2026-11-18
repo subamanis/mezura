@@ -27,7 +27,7 @@ const MOST_FILE_ROWS : u32 = 50;
 const INSTRUCTIONS : &str = include_str!("../descriptions/instructions.txt");
 
 // Nothing of a run is kept between calls: every tool starts the binary again, which is what keeps
-// one call's theme, warnings and temporary checkouts out of the next one's answer.
+// one call's theme, warnings and temporary repositories out of the next one's answer.
 #[derive(Debug, Clone, Default)]
 pub struct MezuraServer;
 

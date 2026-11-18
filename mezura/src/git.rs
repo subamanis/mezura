@@ -1,36 +1,34 @@
 // The repository a target belongs to, the commit a revision names, and the temporary repository a
 // remote is fetched into, for a comparison against a commit or a count of a revision or a remote.
 use std::collections::HashSet;
-use std::path::Path;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::paths::{GLOB_METACHARACTERS, fold_ascii_case, fold_for_comparison,
         is_unquoted_glob_pattern, normalise_separators};
 
-// The path built from this also carries the process id, since a worktree cannot be added twice at
-// one place and two runs of one revision can overlap
-const CHECKOUT_PREFIX : &str = "mezura-diff-";
+// The root built from this names nothing on disk. A release before 3.6.0 wrote a checkout there,
+// and the sweep finds what such a run left by this prefix and another process's id.
+const REVISION_ROOT_PREFIX : &str = "mezura-diff-";
 const REMOTE_PREFIX : &str = "mezura-remote-";
 const DEFAULT_SSH_COMMAND : &str = "ssh -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=10 -o ServerAliveCountMax=2";
 const REMOTE_SCHEMES : [&str; 4] = ["https", "http", "ssh", "git"];
-// These stop the programs a repository's configuration names and a link written outside a checkout.
+// All but 'core.longpaths' stop a program the repository's configuration names.
 // The 'true' of 'core.alternateRefsCommand' is the program of that name, which lists no refs.
-const HARDENED_GIT_CONFIG : [&str; 24] = [
+const HARDENED_GIT_CONFIG : [&str; 16] = [
     "-c", "core.longpaths=true",
     "-c", "core.hooksPath=/dev/null",
     "-c", "core.fsmonitor=false",
-    "-c", "core.symlinks=false",
     "-c", "core.alternateRefsCommand=true",
     "-c", "filter.lfs.smudge=",
     "-c", "filter.lfs.process=",
     "-c", "filter.lfs.required=false",
     "-c", "log.showSignature=false",
-    "-c", "protocol.ext.allow=never",
-    "-c", "protocol.file.allow=never",
-    "-c", "advice.detachedHead=false",
 ];
+// Every other transport runs a program its name picks, and this overrules what the repository allows
+const ALLOWED_PROTOCOLS : &str = "https:http:ssh:git";
 const NETWORK_GIT_CONFIG : [&str; 8] = [
     "-c", "credential.interactive=never",
     "-c", "http.connectTimeout=15",
@@ -39,7 +37,7 @@ const NETWORK_GIT_CONFIG : [&str; 8] = [
 ];
 
 static REMOTE_HOLDERS : Mutex<Vec<String>> = Mutex::new(Vec::new());
-static NEXT_CHECKOUT_ID : AtomicUsize = AtomicUsize::new(0);
+static NEXT_REVISION_ROOT_ID : AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 pub(crate) static TEST_GIT_SSH : Mutex<Option<String>> = Mutex::new(None);
 #[cfg(test)]
@@ -76,7 +74,7 @@ impl std::fmt::Display for GitError {
             Self::SubmoduleTarget { target, revision } => write!(f, "'{target}' is a submodule, which holds no file at '{revision}'."),
             Self::SameCommit { first, second, commit } => write!(f, "'{first}' and '{second}' name the same commit, {}, so the comparison has nothing to say.", &commit[..commit.len().min(12)]),
             Self::PatternTarget { pattern } => write!(f, "'{pattern}' is a glob pattern, and what it matches in the working tree and what it would match at that commit are two different sets of files. Write out the paths it should mean."),
-            Self::CountingRevision { revision, error } => write!(f, "'{revision}' was written out, but counting it failed. {error}"),
+            Self::CountingRevision { revision, error } => write!(f, "'{revision}' was read from git, but counting it failed. {error}"),
             Self::FetchRunsRepositoryProgram { repository, revision, setting } => write!(f, "'{repository}' lacks files of '{revision}', and fetching them could run a program named by '{setting}' in the repository's own configuration. If that setting is yours, move it to your own git configuration and run this again."),
             Self::Refused { doing, message } => write!(f, "git refused while {doing}: {message}")
         }
@@ -184,7 +182,7 @@ pub fn parse_remote_spec(raw: &str) -> Result<Option<RemoteSpec>, GitError> {
     Ok(None)
 }
 
-pub fn is_checkout_target(raw: &str) -> bool {
+pub fn is_revision_target(raw: &str) -> bool {
     !matches!(parse_target_spec(raw), Ok(TargetSpec::LocalPath(_)))
 }
 
@@ -216,7 +214,7 @@ pub fn strip_url_credentials(url: &str) -> String {
 }
 
 // The repository a path belongs to, and where the path sits inside it. Both come from git: the
-// prefix it answers with is already the path to use inside a checkout, so nothing here takes a root
+// prefix it answers with is already the path to use inside a revision, so nothing here takes a root
 // off a path. A path that was deleted since climbs to the nearest folder that still exists and puts
 // the missing tail back on the prefix.
 pub fn find_repository_of(path: &str) -> Result<(String, String), GitError> {
@@ -302,21 +300,6 @@ pub fn collect_folders_at(repository: &str, commit: &str) -> Option<HashSet<Stri
     Some(listed.split('\0').filter(|folder| !folder.is_empty()).map(|folder| fold_ascii_case(folder).into_owned()).collect())
 }
 
-// A commit written out with 'git worktree add', which the tests hold a mounted revision against
-#[cfg(test)]
-#[derive(Debug)]
-pub struct Checkout {
-    pub path: String,
-    pub resolved: ResolvedRevision
-}
-
-#[cfg(test)]
-impl Drop for Checkout {
-    fn drop(&mut self) {
-        remove_worktree(&self.resolved.repository, &self.path);
-    }
-}
-
 pub fn remove_remote_repositories() {
     let holders = std::mem::take(&mut *REMOTE_HOLDERS.lock().unwrap());
     for holder in holders {
@@ -338,12 +321,12 @@ pub fn is_remote_temp_repository(repository: &str) -> bool {
 // repository's own, so that a name pattern sees the same folders on both sides of a comparison.
 pub fn find_place_for_revision(resolved: &ResolvedRevision) -> String {
     let short_commit = &resolved.commit[..resolved.commit.len().min(12)];
-    let seq = NEXT_CHECKOUT_ID.fetch_add(1, Ordering::Relaxed);
+    let seq = NEXT_REVISION_ROOT_ID.fetch_add(1, Ordering::Relaxed);
     let holder = normalise_separators(&std::env::temp_dir()
             .join(if seq == 0 {
-                format!("{CHECKOUT_PREFIX}{short_commit}-{}", std::process::id())
+                format!("{REVISION_ROOT_PREFIX}{short_commit}-{}", std::process::id())
             } else {
-                format!("{CHECKOUT_PREFIX}{short_commit}-{seq}-{}", std::process::id())
+                format!("{REVISION_ROOT_PREFIX}{short_commit}-{seq}-{}", std::process::id())
             })
             .to_string_lossy()).into_owned();
     let name = Path::new(resolved.repository.trim_end_matches('/')).file_name()
@@ -351,43 +334,23 @@ pub fn find_place_for_revision(resolved: &ResolvedRevision) -> String {
     format!("{holder}/{name}")
 }
 
-// The hardened configuration writes every link as a file, and the repository's setting of
-// 'core.symlinks' replaces that, as a mounted revision follows it
-#[cfg(test)]
-pub fn checkout(resolved: &ResolvedRevision) -> Result<Checkout, GitError> {
-    let path = find_place_for_revision(resolved);
-    let holder = Path::new(&path).parent().unwrap();
-    let _ = remove_directory_tree(holder);
-    std::fs::create_dir_all(holder).map_err(|error| GitError::Refused { doing: "making room for the revision",
-            message: error.to_string() })?;
-    let setting = read_git_config(&resolved.repository, &["--bool", "core.symlinks"]).unwrap_or_else(|| "true".to_owned());
-    let outcome = build_hardened_git(&resolved.repository).arg("-c").arg(format!("core.symlinks={setting}"))
-            .args(["worktree", "add", "--detach", "--force", "--quiet", &path, &resolved.commit])
-            .output().map_err(GitError::NotInstalled)?;
-    if !outcome.status.success() {
-        let _ = remove_directory_tree(holder);
-        return Err(GitError::Refused { doing: "writing out the revision",
-                message: String::from_utf8_lossy(&outcome.stderr).trim().to_owned() });
-    }
-
-    Ok(Checkout { path, resolved: resolved.clone() })
-}
-
 // What a killed run left behind. 'prune' alone clears nothing while the directory still exists, so
 // every worktree under the temp directory whose holding folder carries this prefix and another
 // process's id is removed whole, and the prune afterwards drops whatever registration has already
 // lost its directory. A holding folder whose worktree is already gone is removed last, since a run
-// killed between the two leaves it empty. Called once per run and never from inside 'checkout'. The
-// prune walking the registrations while a parallel write is half registered is the one interference
-// between them.
+// killed between the two leaves it empty. A release before 3.6.0 wrote these folders, and git is
+// started only where the temp directory holds one.
 pub fn remove_leftover_checkouts(repository: &str) {
     let ours = format!("-{}", std::process::id());
     let temp = std::env::temp_dir();
+    if find_leftover_holders(&temp, REVISION_ROOT_PREFIX, &ours).is_empty() {
+        return;
+    }
+    let is_a_leftover = |name: &str| is_a_holder_of_a_checkout(name) && !name.ends_with(&ours);
     // TEMP may carry short 8.3 names ('RUNNER~1') where git lists the long ones
     let folded_temps = [Some(temp.clone()), std::fs::canonicalize(&temp).ok()].into_iter().flatten()
             .map(|spelling| fold_for_comparison(&spelling.to_string_lossy()).trim_start_matches("//?/").to_owned())
             .collect::<Vec<_>>();
-    let is_a_leftover = |name: &str| is_a_holder_of_a_checkout(name) && !name.ends_with(&ours);
     if let Ok(listed) = build_hardened_git(repository).args(["worktree", "list", "--porcelain"]).output() {
         for line in String::from_utf8_lossy(&listed.stdout).lines() {
             let Some(path) = line.strip_prefix("worktree ") else { continue };
@@ -400,7 +363,7 @@ pub fn remove_leftover_checkouts(repository: &str) {
         }
     }
     let _ = build_hardened_git(repository).args(["worktree", "prune"]).output();
-    remove_leftover_holders(&temp, CHECKOUT_PREFIX, &ours);
+    remove_leftover_holders(&temp, REVISION_ROOT_PREFIX, &ours);
 }
 
 pub(crate) fn remove_directory_tree(path: &Path) -> std::io::Result<()> {
@@ -426,11 +389,25 @@ pub(crate) fn build_git_fetch(repository: &str) -> Command {
     build_git(repository, own_ssh_command.is_some_and(|(_, _, command)| !command.trim().is_empty()))
 }
 
-// Reading a setting runs no program. The hardened settings would replace 'core.symlinks' with their own.
+// Without the hardened settings, for a question whose answer runs no program. Several can be started and read afterwards.
+pub(crate) fn start_plain_git(repository: &str, arguments: &[&str]) -> Option<Child> {
+    Command::new("git").env("GIT_TERMINAL_PROMPT", "0").arg("-C").arg(repository).args(arguments)
+            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()
+}
+
+pub(crate) fn read_answer_of(git: Option<Child>) -> Option<String> {
+    let outcome = git?.wait_with_output().ok()?;
+    outcome.status.success().then(|| String::from_utf8_lossy(&outcome.stdout).into_owned())
+}
+
 pub(crate) fn read_git_config(repository: &str, arguments: &[&str]) -> Option<String> {
-    let outcome = Command::new("git").env("GIT_TERMINAL_PROMPT", "0").arg("-C").arg(repository).arg("config")
-            .args(arguments).output().ok()?;
-    outcome.status.success().then(|| String::from_utf8_lossy(&outcome.stdout).trim().to_owned())
+    read_answer_of(start_plain_git(repository, &[&["config"], arguments].concat())).map(|answer| answer.trim().to_owned())
+}
+
+// A setting with no value is true to git
+pub(crate) fn is_true_to_git(value: Option<&str>) -> bool {
+    value.is_none_or(|value| ["true", "yes", "on"].iter().any(|word| value.eq_ignore_ascii_case(word))
+            || value.parse::<i64>().is_ok_and(|number| number != 0))
 }
 
 pub(crate) fn read_scoped_git_settings(repository: &str, names: &str) -> Vec<(String, String, String)> {
@@ -463,18 +440,21 @@ fn remove_leftover_remotes() {
     let temp = std::env::temp_dir();
     let ours = format!("-{}", std::process::id());
     remove_leftover_holders(&temp, REMOTE_PREFIX, &ours);
-    remove_leftover_holders(&temp, CHECKOUT_PREFIX, &ours);
+    remove_leftover_holders(&temp, REVISION_ROOT_PREFIX, &ours);
 }
 
 fn remove_leftover_holders(temp: &Path, prefix: &str, ours: &str) {
-    if let Ok(entries) = std::fs::read_dir(temp) {
-        for holder in entries.flatten().filter(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            is_a_holder_with_prefix(&name, prefix) && !name.ends_with(ours)
-        }) {
-            let _ = remove_directory_tree(&holder.path());
-        }
+    for holder in find_leftover_holders(temp, prefix, ours) {
+        let _ = remove_directory_tree(&holder);
     }
+}
+
+fn find_leftover_holders(temp: &Path, prefix: &str, ours: &str) -> Vec<PathBuf> {
+    std::fs::read_dir(temp).into_iter().flatten().flatten().map(|entry| entry.path())
+            .filter(|holder| holder.file_name().is_some_and(|name| {
+                let name = name.to_string_lossy();
+                is_a_holder_with_prefix(&name, prefix) && !name.ends_with(ours)
+            })).collect()
 }
 
 fn ensure_remote_repository(url: &str, repo_name: &str) -> Result<String, GitError> {
@@ -603,7 +583,8 @@ fn build_git(repository: &str, person_names_ssh_command: bool) -> Command {
 fn configure_hardened_git(command: &mut Command, person_names_ssh_command: bool) {
     command.env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "never")
-            .env("GIT_LFS_SKIP_SMUDGE", "1");
+            .env("GIT_LFS_SKIP_SMUDGE", "1")
+            .env("GIT_ALLOW_PROTOCOL", ALLOWED_PROTOCOLS);
     #[cfg(test)]
     let test_ssh = TEST_GIT_SSH.lock().unwrap().clone();
     #[cfg(not(test))]
@@ -656,16 +637,16 @@ fn hash_to_twelve_hex(text: &str) -> String {
     format!("{:012x}", hash & 0xffffffffffff)
 }
 
-fn remove_worktree(repository: &str, path: &str) {
+pub(crate) fn remove_worktree(repository: &str, path: &str) {
     let _ = build_hardened_git(repository).args(["worktree", "remove", "--force", "--force", path]).output();
     if let Some(holder) = Path::new(path).parent() {
         let _ = remove_directory_tree(holder);
     }
 }
 
-// The exact shape 'checkout' writes, since the sweep deletes what it recognises
+// The exact shape a release before 3.6.0 wrote, since the sweep deletes what it recognises
 fn is_a_holder_of_a_checkout(name: &str) -> bool {
-    is_a_holder_with_prefix(name, CHECKOUT_PREFIX)
+    is_a_holder_with_prefix(name, REVISION_ROOT_PREFIX)
 }
 
 fn is_a_holder_of_a_remote(name: &str) -> bool {
@@ -742,7 +723,7 @@ mod tests {
         assert!(!Path::new(&mounted.path).parent().unwrap().exists(), "the revision was written to {}", mounted.path);
         assert_eq!(Path::new(&root).file_name(), Path::new(&mounted.path).file_name(),
                 "the root is not named like the repository's folder");
-        assert!(Path::new(&mounted.path).parent().unwrap().file_name().unwrap().to_string_lossy().starts_with(CHECKOUT_PREFIX));
+        assert!(Path::new(&mounted.path).parent().unwrap().file_name().unwrap().to_string_lossy().starts_with(REVISION_ROOT_PREFIX));
         assert!(matches!(mounted.find_target_of("mezura-core/src/"), TargetInRevision::At(_)));
         assert!(matches!(mounted.find_target_of("a-directory-this-commit-never-had/"), TargetInRevision::Missing));
         let TargetInRevision::At(whole) = mounted.find_target_of("") else { panic!("the root of the revision was not found") };
@@ -753,11 +734,11 @@ mod tests {
         assert_eq!((2, 4), (counted.total.files, counted.total.lines));
         drop((engine, mounted));
 
-        let killed = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + "0123456789ab-1");
-        let locked_holder = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + "fedcba987654-1");
+        let killed = std::env::temp_dir().join(REVISION_ROOT_PREFIX.to_owned() + "0123456789ab-1");
+        let locked_holder = std::env::temp_dir().join(REVISION_ROOT_PREFIX.to_owned() + "fedcba987654-1");
         let locked_worktree = locked_holder.join("locked-checkout");
-        let ours = std::env::temp_dir().join(format!("{CHECKOUT_PREFIX}0123456789ab-{}", std::process::id()));
-        let somebody_elses = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + "notes");
+        let ours = std::env::temp_dir().join(format!("{REVISION_ROOT_PREFIX}0123456789ab-{}", std::process::id()));
+        let somebody_elses = std::env::temp_dir().join(REVISION_ROOT_PREFIX.to_owned() + "notes");
         let _ = remove_directory_tree(&locked_holder);
         for folder in [&killed, &locked_holder, &ours, &somebody_elses] {
             std::fs::create_dir_all(folder).unwrap();
@@ -895,7 +876,7 @@ mod tests {
         assert_ne!(first_tag.commit, head.commit);
         let _ssh_guard = crate::test_support::install_local_ssh_helper();
 
-        let killed_checkout = std::env::temp_dir().join(CHECKOUT_PREFIX.to_owned() + "0123456789ab-1");
+        let killed_checkout = std::env::temp_dir().join(REVISION_ROOT_PREFIX.to_owned() + "0123456789ab-1");
         std::fs::create_dir_all(&killed_checkout).unwrap();
 
         let base_url = format!("ssh://local/{root}");
