@@ -1,6 +1,7 @@
 // A revision of a repository read from git's objects, with nothing written to disk. The engine is
 // handed it as a mounted tree under the root a checkout of it would have had, so every path it
 // reports pairs with the working tree as a checkout's did.
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -9,6 +10,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use mezura_core::MountedTree;
 
 use super::git::{GitError, ResolvedRevision, build_git_fetch, build_git_read, read_git_config, read_scoped_git_settings};
+use super::line_endings::{CheckoutSettings, Conversion, convert_line_endings, decide_conversions, read_as_git_writes_it};
 use super::paths::fold_ascii_case;
 
 const LINK_MODE : &str = "120000";
@@ -58,36 +60,53 @@ pub enum TargetInRevision {
 // The listing names every file of the revision, and a file's size is learned when it is read
 pub fn mount_revision(resolved: &ResolvedRevision) -> Result<MountedRevision, GitError> {
     let (repository, remote) = (resolved.repository.as_str(), super::git::is_remote_temp_repository(&resolved.repository));
+    let (files, blobs, submodules) = list_revision(resolved, remote)?;
+    let path = super::git::find_place_for_revision(resolved);
+    let blobs = Arc::new(blobs);
+    let tree = MountedTree::new(&path, (!remote).then_some(repository), files, move |at, buf| blobs.read(at, buf));
+    Ok(MountedRevision { path, resolved: resolved.clone(), tree: Arc::new(tree), submodules })
+}
+
+fn list_revision(resolved: &ResolvedRevision, remote: bool) -> Result<(Vec<PathBuf>, BlobReader, Vec<String>), GitError> {
+    let repository = resolved.repository.as_str();
     fetch_missing_objects(resolved)?;
+    let settings = CheckoutSettings::read(repository);
     let listing = read_output_of(build_git_read(repository).args(["ls-tree", "-r", "-z", "--full-tree", &resolved.commit]),
             "listing the files of the revision")?;
     // A remote has no working tree for its links to agree with
-    let links_are_files = !remote && read_git_config(repository, &["--bool", "core.symlinks"])
-            .is_some_and(|setting| setting == "false");
+    let links_are_files = !remote && !settings.symlinks;
 
     let mut files = Vec::new();
     let mut ids = Vec::new();
+    let mut listed_paths = Vec::new();
+    let mut links = Vec::new();
     let mut submodules = Vec::new();
-    for record in listing.split(|byte| *byte == 0).filter(|record| !record.is_empty()) {
-        let record = String::from_utf8_lossy(record);
-        let Some((head, path)) = record.split_once('\t') else { continue };
+    for record in listing.split(|byte| *byte == 0) {
+        let Some(tab) = record.iter().position(|byte| *byte == b'\t') else { continue };
+        let (head, path) = (String::from_utf8_lossy(&record[..tab]), String::from_utf8_lossy(&record[tab + 1..]));
         let mut fields = head.split(' ');
         let (Some(mode), Some(_), Some(id)) = (fields.next(), fields.next(), fields.next()) else { continue };
         match mode {
-            SUBMODULE_MODE => submodules.push(fold_ascii_case(path).into_owned()),
+            SUBMODULE_MODE => submodules.push(fold_ascii_case(&path).into_owned()),
             LINK_MODE if !links_are_files => {},
             _ => {
-                files.push(PathBuf::from(path));
+                if mode == LINK_MODE {
+                    links.push(files.len());
+                }
+                files.push(PathBuf::from(path.as_ref()));
                 ids.push(id.to_owned());
+                listed_paths.push(&record[tab + 1..]);
             }
         }
     }
 
-    let path = super::git::find_place_for_revision(resolved);
-    let blobs = Arc::new(BlobReader { repository: repository.to_owned(), ids, pool: Mutex::new(Pool::default()),
-            returned: Condvar::new(), most: std::thread::available_parallelism().map_or(1, std::num::NonZero::get) });
-    let tree = MountedTree::new(&path, (!remote).then_some(repository), files, move |at, buf| blobs.read(at, buf));
-    Ok(MountedRevision { path, resolved: resolved.clone(), tree: Arc::new(tree), submodules })
+    let mut blobs = BlobReader { repository: repository.to_owned(), commit: resolved.commit.clone(), ids, conversions: Vec::new(),
+            paths_git_writes_out: HashMap::new(), pool: Mutex::new(Pool::default()), returned: Condvar::new(),
+            most: std::thread::available_parallelism().map_or(1, std::num::NonZero::get) };
+    let (conversions, paths_git_writes_out) = decide_conversions(&settings, repository, &resolved.commit, &listed_paths, &links,
+            |at, buf| blobs.read(at, buf));
+    (blobs.conversions, blobs.paths_git_writes_out) = (conversions, paths_git_writes_out);
+    Ok((files, blobs, submodules))
 }
 
 // No read fetches an object, so what a partial clone lacks of the revision is fetched here first. A
@@ -154,7 +173,10 @@ fn read_output_of(command: &mut Command, doing: &'static str) -> Result<Vec<u8>,
 // starts one when every one is taken and the pool is below its size, and waits otherwise.
 struct BlobReader {
     repository: String,
+    commit: String,
     ids: Vec<String>,
+    conversions: Vec<Conversion>,
+    paths_git_writes_out: HashMap<usize, String>,
     pool: Mutex<Pool>,
     returned: Condvar,
     most: usize
@@ -163,11 +185,16 @@ struct BlobReader {
 impl BlobReader {
     // A process that failed a read is dropped, since what it would answer next is unknown
     fn read(&self, at: usize, buf: &mut Vec<u8>) -> std::io::Result<()> {
+        let conversion = self.conversions.get(at).copied().unwrap_or(Conversion::Untouched);
+        if conversion == Conversion::ByGit && let Some(path) = self.paths_git_writes_out.get(&at) {
+            return read_as_git_writes_it(&self.repository, &self.commit, path, &self.ids[at], buf);
+        }
         let mut process = self.take()?;
         match process.read_blob(&self.ids[at], buf) {
             Ok(()) => {
                 self.pool.lock().unwrap().idle.push(process);
                 self.returned.notify_one();
+                convert_line_endings(conversion, buf);
                 Ok(())
             },
             Err(error) => {
@@ -462,6 +489,109 @@ mod tests {
         remove_directory_tree(&holder).unwrap();
     }
 
+    #[test]
+    fn every_file_of_a_revision_reads_byte_for_byte_as_a_worktree_holds_it_under_each_setting_of_line_endings() {
+        let _guard = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let holder = create_fresh_folder("mezura-mounted-line-endings");
+        let repository = holder.join("repo");
+        std::fs::create_dir(&repository).unwrap();
+        create_repository(&repository);
+        let pad_with_printable = |printable: usize| [vec![b'x'; printable], b"\x01\na\n".to_vec()].concat();
+        let contents = [("lf", b"a\nb\n".to_vec()), ("mixed", b"a\r\nb\n".to_vec()), ("lone-cr", b"a\rb\n".to_vec()),
+                ("crlf", b"a\r\nb\r\n".to_vec()), ("nul-byte", b"a\0b\nc\n".to_vec()), ("no-last-break", b"a\nb".to_vec()),
+                ("break-first", b"\na\n".to_vec()), ("empty", Vec::new()), ("control", b"\x01\x02\nx\n".to_vec()),
+                ("dos-end", b"a\nb\n\x1a".to_vec()), ("dos-end-inside", b"a\n\x1ab\n".to_vec()), ("latin1", b"caf\xe9\n".to_vec()),
+                ("printable-enough", pad_with_printable(127)), ("too-few-printable", pad_with_printable(126))];
+        let rows = [("none", ""), ("text", "text"), ("auto", "text=auto"), ("autocrlf", "text=auto eol=crlf"),
+                ("autolf", "text=auto eol=lf"), ("textlf", "text eol=lf"), ("textcrlf", "text eol=crlf"), ("eolcrlf", "eol=crlf"),
+                ("eollf", "eol=lf"), ("notext", "-text"), ("binary", "binary"), ("crlf", "crlf"), ("nocrlf", "-crlf"),
+                ("crlfinput", "crlf=input"), ("inputcrlf", "crlf=input eol=crlf"), ("lfs", "filter=lfs -text"), ("dos", "dos"),
+                ("odd", "text=odd crlf"), ("utf8", "working-tree-encoding=UTF-8 eol=crlf"), ("ident", "ident"),
+                ("identcrlf", "ident eol=crlf"), ("utf16", "working-tree-encoding=UTF-16LE-BOM")];
+        let attributes = rows.iter().filter(|(_, attributes)| !attributes.is_empty())
+                .map(|(row, attributes)| format!("*.{row} {attributes}\n")).collect::<String>();
+        let mut files = vec![(".gitattributes".to_owned(), format!("[attr]dos text eol=crlf\n{attributes}").into_bytes()),
+                ("sub/.gitattributes".to_owned(), b"*.text -text\n".to_vec()), ("sub/lf.text".to_owned(), b"a\nb\n".to_vec())];
+        for (row, _) in &rows[..rows.len() - 3] {
+            files.extend(contents.iter().map(|(name, bytes)| (format!("{name}.{row}"), bytes.clone())));
+        }
+        files.extend(["ident", "identcrlf"].map(|row| (format!("keyword.{row}"), b"x $Id$ y\nz\n".to_vec())));
+        files.push(("wide.utf16".to_owned(), b"a\nb\n".to_vec()));
+        commit_files_as_given(&repository, &holder, &files);
+        let root = normalise_separators(&repository.to_string_lossy()).into_owned();
+        let resolved = resolve_revision(&root, "HEAD").unwrap();
+
+        let mut converted = 0;
+        for (autocrlf, eol) in [("false", None), ("true", None), ("input", None), ("false", Some("lf")), ("false", Some("crlf")),
+                ("true", Some("lf")), ("input", Some("crlf"))] {
+            run_git(&repository, &["config", "core.autocrlf", autocrlf]);
+            if let Some(eol) = eol {
+                run_git(&repository, &["config", "core.eol", eol]);
+            }
+            let read = read_files_held_against_a_worktree(&resolved, &format!("core.autocrlf={autocrlf} and core.eol={eol:?}"));
+            assert_eq!(files.len(), read.len());
+            converted += read.iter().filter(|(name, bytes)| files.iter().any(|(path, stored)| path == name && stored != bytes)).count();
+        }
+        assert_ne!(0, converted, "no setting changed a byte of any file");
+        remove_directory_tree(&holder).unwrap();
+    }
+
+    #[test]
+    fn a_revision_with_no_attributes_and_attributes_outside_the_revision_read_as_a_worktree_holds_them() {
+        let _guard = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let holder = create_fresh_folder("mezura-mounted-attributes-outside");
+        let repository = holder.join("repo");
+        std::fs::create_dir(&repository).unwrap();
+        create_repository(&repository);
+        commit_files_as_given(&repository, &holder, &[("a.txt".to_owned(), b"a\nb\n".to_vec()), ("b.bin".to_owned(), b"a\nb\n".to_vec())]);
+        commit_files_as_given(&repository, &holder, &[(".gitattributes".to_owned(), b"*.bin binary\n".to_vec())]);
+        let root = normalise_separators(&repository.to_string_lossy()).into_owned();
+        let (with_none, with_binary) = (resolve_revision(&root, "HEAD~1").unwrap(), resolve_revision(&root, "HEAD").unwrap());
+        let read = |resolved, settings| read_files_held_against_a_worktree(resolved, settings).into_iter()
+                .map(|(name, bytes)| format!("{name} {}", bytes.escape_ascii())).collect::<Vec<_>>();
+
+        assert_eq!(vec![r"a.txt a\nb\n", r"b.bin a\nb\n"], read(&with_none, "no attributes"));
+        run_git(&repository, &["config", "core.autocrlf", "true"]);
+        assert_eq!(vec![r"a.txt a\r\nb\r\n", r"b.bin a\r\nb\r\n"], read(&with_none, "no attributes and core.autocrlf"));
+        assert_eq!(vec![r".gitattributes *.bin binary\r\n", r"a.txt a\r\nb\r\n", r"b.bin a\nb\n"], read(&with_binary, "a binary attribute"));
+        run_git(&repository, &["config", "core.autocrlf", "false"]);
+        std::fs::write(repository.join(".git").join("info").join("attributes"), "*.txt eol=crlf\n").unwrap();
+        assert_eq!(vec![r"a.txt a\r\nb\r\n", r"b.bin a\nb\n"], read(&with_none, "attributes of the clone"));
+        remove_directory_tree(&holder).unwrap();
+    }
+
+    #[test]
+    fn a_path_under_a_filter_of_the_repository_is_read_without_running_its_program() {
+        let _guard = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let holder = create_fresh_folder("mezura-mounted-filter-program");
+        let repository = holder.join("repo");
+        std::fs::create_dir(&repository).unwrap();
+        create_repository(&repository);
+        commit_files_as_given(&repository, &holder, &[
+                (".gitattributes".to_owned(), b"*.up filter=upper ident eol=crlf\n*.lfs filter=lfs ident\n".to_vec()),
+                ("keyword.up".to_owned(), b"x $Id$ y\n".to_vec()), ("keyword.lfs".to_owned(), b"x $Id$ y\n".to_vec())]);
+        let ran = normalise_separators(&holder.join("ran").to_string_lossy()).into_owned();
+        let program = format!("echo ran > '{ran}' #");
+        for setting in ["filter.upper.smudge", "filter.upper.process", "filter.lfs.smudge", "filter.lfs.process"] {
+            run_git(&repository, &["config", setting, &program]);
+        }
+        let resolved = resolve_revision(&normalise_separators(&repository.to_string_lossy()), "HEAD").unwrap();
+        let id = run_git(&repository, &["rev-parse", "HEAD:keyword.lfs"]);
+
+        let (listed, blobs, _) = super::list_revision(&resolved, false).unwrap();
+        let read = |name: &str| {
+            let mut read = Vec::new();
+            blobs.read(listed.iter().position(|file| file == Path::new(name)).unwrap(), &mut read).unwrap();
+            read.escape_ascii().to_string()
+        };
+        let (under_a_filter, under_lfs) = (read("keyword.up"), read("keyword.lfs"));
+        drop(blobs);
+        assert_eq!(r"x $Id$ y\r\n", under_a_filter);
+        assert_eq!(format!(r"x $Id: {id} $ y\n"), under_lfs);
+        assert!(!Path::new(&ran).exists(), "reading a file under a filter ran the program the repository names for it");
+        remove_directory_tree(&holder).unwrap();
+    }
+
     // A worktree of each revision counted by itself reads the configuration above its repository, and
     // one run holding both revisions reads it for each. The test file at the repository's root lies
     // outside 'testpaths', so it is test code only where 'testpaths' went unread.
@@ -573,6 +703,37 @@ mod tests {
     fn commit_everything(folder: &Path, message: &str) {
         run_git(folder, &["add", "-f", "-A", "."]);
         run_git(folder, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--no-verify", "-q", "-m", message]);
+    }
+
+    fn read_files_held_against_a_worktree(resolved: &crate::git::ResolvedRevision, settings: &str) -> Vec<(String, Vec<u8>)> {
+        let written = checkout(resolved).unwrap();
+        let (listed, blobs, _) = super::list_revision(resolved, false).unwrap();
+        listed.iter().enumerate().map(|(at, file)| {
+            let mut read = Vec::new();
+            blobs.read(at, &mut read).unwrap();
+            let in_the_worktree = std::fs::read(Path::new(&written.path).join(file)).unwrap();
+            assert!(in_the_worktree == read, "{} with {settings} read as '{}' where a worktree holds '{}'", file.display(),
+                    read.escape_ascii(), in_the_worktree.escape_ascii());
+            (normalise_separators(&file.to_string_lossy()).into_owned(), read)
+        }).collect()
+    }
+
+    fn commit_files_as_given(repository: &Path, holder: &Path, files: &[(String, Vec<u8>)]) {
+        let mut ids : HashMap<&[u8], String> = HashMap::new();
+        let mut entries = Vec::new();
+        for (path, contents) in files {
+            let id = ids.entry(contents.as_slice()).or_insert_with(|| {
+                std::fs::write(holder.join("blob"), contents).unwrap();
+                run_git(repository, &["hash-object", "-w", "--no-filters", &normalise_separators(&holder.join("blob").to_string_lossy())])
+            });
+            entries.push(format!("100644,{id},{path}"));
+        }
+        for some in entries.chunks(80) {
+            let arguments = ["update-index", "--add"].into_iter().chain(some.iter().flat_map(|entry| ["--cacheinfo", entry.as_str()]))
+                    .collect::<Vec<_>>();
+            run_git(repository, &arguments);
+        }
+        run_git(repository, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--no-verify", "-q", "-m", "c1"]);
     }
 
     fn create_origin(holder: &Path) -> PathBuf {

@@ -24,6 +24,7 @@ mod git;
 mod html_printer;
 mod json_printer;
 mod json_reader;
+mod line_endings;
 mod log;
 mod message_printer;
 mod migration;
