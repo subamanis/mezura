@@ -275,6 +275,8 @@ pub fn format_path_outside_revisions(path: &str, revision_targets: &[RevisionTar
 pub fn format_path_inside_revisions(path: &str, revision_targets: &[RevisionTarget]) -> String {
     revision_targets.iter().find_map(|tc| replace_root_prefix(path, &tc.display_root, &tc.revision_root)
             .or_else(|| replace_root_prefix(path, tc.get_base_root(), &tc.revision_root)))
+            .or_else(|| revision_targets.iter()
+                    .find_map(|tc| replace_real_root_prefix(path, tc.get_base_root(), &tc.revision_root)))
             .unwrap_or_else(|| path.to_owned())
 }
 
@@ -395,20 +397,9 @@ fn move_preset_directories_out_of_revision(result: &mut mezura_core::RunResult, 
 // The revision is the same tree at another root, so a place inside the repository moves with it, and
 // so does the project folder the names are read from, or a pattern would apply on one side only
 fn move_patterns_into_revision(revision_root: &str, repository: &str, patterns: &PathPatterns) -> PathPatterns {
-    let key = |path: &str| super::paths::fold_ascii_case(&super::paths::normalise_separators(path)).into_owned();
-    let root = repository.trim_end_matches('/');
-    let folded_root = key(root);
-    let moved = |place: &str| {
-        let normalized = super::paths::normalise_separators(place).into_owned();
-        let folded = key(&normalized);
-        if folded == folded_root {
-            revision_root.to_owned()
-        } else if folded.starts_with(&(folded_root.clone() + "/")) {
-            revision_root.to_owned() + &normalized[root.len()..]
-        } else {
-            place.to_owned()
-        }
-    };
+    let moved = |place: &str| replace_root_prefix(place, repository, revision_root)
+            .or_else(|| replace_real_root_prefix(place, repository, revision_root))
+            .unwrap_or_else(|| place.to_owned());
 
     PathPatterns {
         patterns: patterns.patterns.iter().map(|pattern| {
@@ -418,6 +409,28 @@ fn move_patterns_into_revision(revision_root: &str, repository: &str, patterns: 
         read_from: patterns.read_from.as_deref().map(moved),
         reports_unmatched_names: patterns.reports_unmatched_names
     }
+}
+
+// A link, a junction or an 8.3 name spells a folder one way while git answers with its real path
+fn replace_real_root_prefix(path: &str, from_root: &str, to_root: &str) -> Option<String> {
+    let path = super::paths::normalise_separators(path);
+    if !Path::new(path.as_ref()).is_absolute() {
+        return None;
+    }
+    let real_root = read_real_spelling(Path::new(from_root))?;
+    let existing = Path::new(path.as_ref()).ancestors().find(|ancestor| ancestor.exists())?.to_str()?;
+    let rest = &path[existing.trim_end_matches('/').len()..];
+    replace_root_prefix(&(read_real_spelling(Path::new(existing))? + rest), &real_root, to_root)
+}
+
+fn read_real_spelling(path: &Path) -> Option<String> {
+    let real = std::fs::canonicalize(path).ok()?;
+    let real = real.to_str()?;
+    let real = match real.strip_prefix(r"\\?\UNC\") {
+        Some(share) => format!(r"\\{share}"),
+        None => real.strip_prefix(r"\\?\").unwrap_or(real).to_owned()
+    };
+    Some(super::paths::normalise_separators(&real).trim_end_matches('/').to_owned())
 }
 
 #[cfg(test)]
@@ -707,6 +720,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_place_typed_through_a_link_to_the_repository_is_carried_into_the_revision() {
+        let _guard = crate::git::GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        let temp = std::path::PathBuf::from(temp.to_string_lossy().trim_start_matches(r"\\?\"));
+        let root = temp.join("mezura-revision-behind-a-link");
+        let link = temp.join("mezura-revision-link");
+        remove_link(&link);
+        let _ = crate::git::remove_directory_tree(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("vendor")).unwrap();
+        std::fs::write(root.join("src/a.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(root.join("vendor/v.rs"), "fn v() {}\nfn w() {}\n").unwrap();
+        commit_everything_in(&root);
+        link_folder(&root, &link);
+
+        let through_link = crate::paths::normalise_separators(&link.to_string_lossy()).into_owned();
+        let (repository, _) = crate::git::find_repository_of(&through_link).unwrap();
+        assert_ne!(crate::paths::fold_for_comparison(&through_link), crate::paths::fold_for_comparison(&repository),
+                "git answered with the link, so the test reaches nothing");
+        let parsed = mezura_core::language_file::parse_languages_in_dir(CORE_LANGUAGES_DIR).unwrap().0;
+
+        let revision_target = crate::config_manager::create_config_from_args(&crate::test_support::split_typed_line(
+                &format!("{through_link}@HEAD --exclude {through_link}/vendor"))).unwrap();
+        let counted = mezura_core::run(&revision_target.engine,
+                mezura_core::Languages::resolve(&revision_target.engine, parsed.clone(), &Default::default()).0).unwrap();
+        assert_eq!(1, counted.total.lines, "the exclude of a revision target stayed outside the revision");
+
+        let mut config = Configuration::new(vec![through_link.clone()]);
+        config.engine.exclude_patterns = PathPatterns::of([format!("{through_link}/vendor")]);
+        let prepared = prepare_revisions_for_config(&["HEAD"], &config).unwrap();
+        let side = start_acquiring_prepared_revisions(prepared).into_iter().next().unwrap();
+        let (revision, _) = count_git_revision(side, &config, parsed, &Default::default()).unwrap();
+        assert_eq!(1, revision.result.total.lines, "the exclude of '--diff' stayed outside the revision");
+
+        drop((revision_target, revision));
+        remove_link(&link);
+        crate::git::remove_directory_tree(&root).unwrap();
+    }
+
     fn commit_everything_in(root: &Path) {
         let git = |arguments: &[&str]| {
             let outcome = std::process::Command::new("git").arg("-C").arg(root).args(arguments).output().unwrap();
@@ -715,5 +768,19 @@ mod tests {
         git(&["init", "-q"]);
         git(&["add", "."]);
         git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--no-verify", "-q", "-m", "x"]);
+    }
+
+    fn link_folder(folder: &Path, link: &Path) {
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(folder, link).unwrap();
+        #[cfg(windows)]
+        {
+            let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(link).arg(folder).output().unwrap();
+            assert!(made.status.success(), "mklink: {}{}", String::from_utf8_lossy(&made.stdout), String::from_utf8_lossy(&made.stderr));
+        }
+    }
+
+    fn remove_link(link: &Path) {
+        let _ = if cfg!(windows) {std::fs::remove_dir(link)} else {std::fs::remove_file(link)};
     }
 }
