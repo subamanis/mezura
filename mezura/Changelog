@@ -3,6 +3,8 @@ v3.6.0 - unreleased
 Main changes:
   -> A git revision is read from git's objects, with no checkout written to the temporary
       directory. Counting a revision of a large repository is many times faster.
+  -> With '--by-file', a file holding nothing but test code takes the colors of the 'tests' row,
+      and a file holding some draws the end of its branch in the tests color.
 
 Bugfixes:
   -> In assembly, a C preprocessor line such as '#include' or '#ifdef' counts as code.

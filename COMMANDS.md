@@ -767,6 +767,9 @@ The full help of every command, exactly as `mezura --help <command>` prints it. 
       file-name  file-branch  file-files  file-lines  file-code  file-comments
       file-extra  file-size  file-size-unit  file-percent
 
+    A file that holds nothing but test code takes the 'tests-' tokens. A file holding tests draws
+    the '──▫' or '▫' of its branch with 'tests-name' and the rest with 'file-branch'.
+
     The total:
       separator-total          the line above the total
       details-total            the word 'Total'

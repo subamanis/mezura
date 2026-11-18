@@ -306,6 +306,17 @@ impl Group<'_> {
     fn leaves_tests_out(&self) -> bool {
         self.tests_breakdown == TestsBreakdown::Removed && !self.tests.is_empty()
     }
+
+    // Under '--hide tests' the group holds no tests while its files still carry theirs
+    fn classify_tests_of(&self, file: &mezura_core::FileEntry) -> FileTests {
+        if file.tests.is_none() || self.tests.is_empty() || self.leaves_tests_out() {
+            FileTests::Absent
+        } else if file.is_tests_whole() {
+            FileTests::Whole
+        } else {
+            FileTests::Mixed
+        }
+    }
 }
 
 // The figures the rows above the total are drawn from, the languages whole or without their tests
@@ -596,14 +607,21 @@ enum RowKind {
     Nested,
     Production,
     Tests,
-    File,
+    File(FileTests),
     Note
 }
 
 impl RowKind {
     fn is_sub_row(self) -> bool {
-        matches!(self, RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File)
+        matches!(self, RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File(_))
     }
+}
+
+#[derive(PartialEq,Eq,Clone,Copy,Debug)]
+enum FileTests {
+    Absent,
+    Mixed,
+    Whole
 }
 
 // A sub-row is painted by role and not by position. 'Change' resolves to no paint at all: those
@@ -695,6 +713,7 @@ static NO_TESTS : std::sync::LazyLock<HashMap<String, TestCode>> = std::sync::La
 struct SubRowStyles<'a> {
     name: &'a Style,
     branch: &'a Style,
+    arm: &'a Style,
     percent: &'a Style,
     files: &'a Style,
     lines: &'a Style,
@@ -708,24 +727,40 @@ struct SubRowStyles<'a> {
 impl<'a> SubRowStyles<'a> {
     fn of(theme: &'a Theme, kind: RowKind) -> Self {
         match kind {
-            RowKind::File => SubRowStyles { name: &theme.file_name, branch: &theme.file_branch,
-                    percent: &theme.file_percent, files: &theme.file_files, lines: &theme.file_lines,
-                    code: &theme.file_code, comments: &theme.file_comments, extra: &theme.file_extra,
-                    size: &theme.file_size, size_unit: &theme.file_size_unit },
+            RowKind::File(FileTests::Absent) => SubRowStyles { name: &theme.file_name, branch: &theme.file_branch,
+                    arm: &theme.file_branch, percent: &theme.file_percent, files: &theme.file_files,
+                    lines: &theme.file_lines, code: &theme.file_code, comments: &theme.file_comments,
+                    extra: &theme.file_extra, size: &theme.file_size, size_unit: &theme.file_size_unit },
+            // The tests' color is the one of 'tests-name', since 'tests-branch' is grey in every shipped theme
+            RowKind::File(FileTests::Mixed) => SubRowStyles { arm: &theme.tests_name,
+                    ..SubRowStyles::of(theme, RowKind::File(FileTests::Absent)) },
+            RowKind::File(FileTests::Whole) => SubRowStyles { branch: &theme.file_branch, arm: &theme.tests_name,
+                    ..SubRowStyles::of(theme, RowKind::Tests) },
             RowKind::Production => SubRowStyles { name: &theme.production_name, branch: &theme.production_branch,
-                    percent: &theme.production_percent, files: &theme.production_files,
-                    lines: &theme.production_lines, code: &theme.production_code,
+                    arm: &theme.production_branch, percent: &theme.production_percent,
+                    files: &theme.production_files, lines: &theme.production_lines, code: &theme.production_code,
                     comments: &theme.production_comments, extra: &theme.production_extra,
                     size: &theme.production_size, size_unit: &theme.production_size_unit },
             RowKind::Tests => SubRowStyles { name: &theme.tests_name, branch: &theme.tests_branch,
-                    percent: &theme.tests_percent, files: &theme.tests_files, lines: &theme.tests_lines,
-                    code: &theme.tests_code, comments: &theme.tests_comments, extra: &theme.tests_extra,
-                    size: &theme.tests_size, size_unit: &theme.tests_size_unit },
-            _ => SubRowStyles { name: &theme.nested_name, branch: &theme.nested_branch,
+                    arm: &theme.tests_branch, percent: &theme.tests_percent, files: &theme.tests_files,
+                    lines: &theme.tests_lines, code: &theme.tests_code, comments: &theme.tests_comments,
+                    extra: &theme.tests_extra, size: &theme.tests_size, size_unit: &theme.tests_size_unit },
+            _ => SubRowStyles { name: &theme.nested_name, branch: &theme.nested_branch, arm: &theme.nested_branch,
                     percent: &theme.nested_percent, files: &theme.nested_files, lines: &theme.nested_lines,
                     code: &theme.nested_code, comments: &theme.nested_comments, extra: &theme.nested_extra,
                     size: &theme.nested_size, size_unit: &theme.nested_size_unit }
         }
+    }
+
+    // The vertical line of the tree keeps the branch's token, so it runs on unbroken past a file holding tests
+    fn paint_tree(&self, tree: &str) -> [ColoredString; 2] {
+        if self.arm == self.branch {
+            return [self.branch.paint(tree), ColoredString::from("")];
+        }
+        let (spine, arm) = tree.split_at(tree.find(|c| !matches!(c, ' ' | '\u{2502}' | '\u{251c}' | '\u{2514}'))
+                .unwrap_or(tree.len()));
+
+        [self.branch.paint(spine), self.arm.paint(arm)]
     }
 
     fn find_style_of(&self, column: ColumnKind) -> &'a Style {
@@ -939,7 +974,7 @@ fn create_nested_rows_under<'a>(group: &'a Group<'a>, name: &'a String, grouped:
     for (at, (shown_path, file)) in shown.iter().enumerate() {
         let last = at + 1 == shown.len() && complete;
         rows.push(NamedRow { cell: format!("{indent}{}{shown_path}", find_file_branch_marker(last)),
-                kind: RowKind::File, group, language: Some(name),
+                kind: RowKind::File(group.classify_tests_of(file)), group, language: Some(name),
                 stats: Some(find_shown_stats_of(file, group.leaves_tests_out())), under_production: None });
     }
 
@@ -983,7 +1018,7 @@ fn find_row_figures(row: &NamedRow, total: &Stats, model: CountingModel) -> Opti
         RowKind::Module => Some(shown_against(&group.total, total)),
         RowKind::Total => Some(shown_against(total, total)),
         RowKind::Language => Some(shown_against(of_language(row.language.unwrap()), &group.total)),
-        RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File => Some(shown_against(row.stats.as_deref().unwrap(),
+        RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File(_) => Some(shown_against(row.stats.as_deref().unwrap(),
                 row.under_production.as_ref().unwrap_or_else(|| row.language.map_or(total, of_language)))),
         RowKind::Note => None
     }
@@ -1504,10 +1539,10 @@ fn create_compared_rows(pairs: Option<&[super::diff::ModulePair]>, baseline: &Ru
                 kind: RowKind::Tests, depth: 0, baseline: tests_before.stats, subject: tests_now.stats });
     }
 
-    let budget = rows.iter().filter(|row| row.kind == RowKind::File)
+    let budget = rows.iter().filter(|row| matches!(row.kind, RowKind::File(_)))
             .map(|row| calculate_path_floor(find_section_name_in(&row.name)))
             .max().unwrap_or(0).max(SHOWN_PATH_WIDTH);
-    for row in rows.iter_mut().filter(|row| row.kind == RowKind::File) {
+    for row in rows.iter_mut().filter(|row| matches!(row.kind, RowKind::File(_))) {
         let (branch, path) = split_off_the_branch(&row.name);
         row.name = format!("{branch}{}", elide_long_path_to(path, budget));
     }
@@ -1523,7 +1558,7 @@ fn create_compared_file_rows(files: Vec<super::diff::FileStatsChange>, complete:
     files.into_iter().enumerate().map(|(at, file)| ComparedRow {
         name: format!("{indent}{BRANCH_INDENT}{}{}",
                 find_file_branch_marker(at + 1 == count && complete), file.path),
-        kind: RowKind::File, depth: 0, baseline: file.baseline, subject: file.subject
+        kind: RowKind::File(FileTests::Absent), depth: 0, baseline: file.baseline, subject: file.subject
     }).collect()
 }
 
@@ -1887,7 +1922,7 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
 
     // The language name and the percentages are not right aligned: padding a percentage on the left
     // would push it away from its number on exactly the rows where its column is wider.
-    let render = |cells: &[String], styles: &[&Style], branch: Option<&Style>| {
+    let render = |cells: &[String], styles: &[&Style], sub_row: Option<&SubRowStyles>| {
         let mut line = String::with_capacity(140);
         if cells[1..].iter().all(String::is_empty) {
             return styles[0].paint(&cells[0]).to_string();
@@ -1895,10 +1930,11 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
         for (i, cell) in cells.iter().enumerate() {
             let padding = " ".repeat(widths[i].saturating_sub(calculate_widest_visible_line(cell)));
             if i == 0 {
-                let painted = match branch {
-                    Some(branch) => {
+                let painted = match sub_row {
+                    Some(sub_row) => {
                         let (tree, name) = split_off_the_branch(cell);
-                        format!("{}{}", branch.paint(tree), styles[i].paint(name))
+                        let [spine, arm] = sub_row.paint_tree(tree);
+                        format!("{spine}{arm}{}", styles[i].paint(name))
                     },
                     None => styles[i].paint(cell).to_string()
                 };
@@ -1917,9 +1953,9 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
     let headers = columns.iter().map(|column| column.header.clone()).collect::<Vec<_>>();
     let rendered = std::iter::once(render(&headers, &header_styles, None))
             .chain(rows.iter().zip(kinds.iter()).map(|(row, kind)| match kind {
-                RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File => {
+                RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File(_) => {
                     let of_a_sub_row = SubRowStyles::of(theme, *kind);
-                    render(row, &of_a_sub_row.take_columns(&column_kinds), Some(of_a_sub_row.branch))
+                    render(row, &of_a_sub_row.take_columns(&column_kinds), Some(&of_a_sub_row))
                 },
                 RowKind::Note => render(row, &vec![&theme.note; row.len()], None),
                 RowKind::Module | RowKind::Language | RowKind::Total => {
@@ -1947,7 +1983,7 @@ fn draw_aligned_table(theme: &Theme, columns: &[Column], rows: &[Vec<String>], k
     let mut previous: Option<RowKind> = None;
     for (position, (line, kind)) in rendered.zip(kinds.iter()).enumerate() {
         let gap_above = match kind {
-            RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File => false,
+            RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File(_) => false,
             RowKind::Language => (kinds.get(position + 1).is_some_and(|next| next.is_sub_row())
                     || previous.is_some_and(RowKind::is_sub_row)) && previous != Some(RowKind::Module),
             // Two notes are one paragraph, so only the first opens a gap
@@ -2345,13 +2381,14 @@ fn draw_boxed_table(theme: &Theme, columns: &[Column], rows: &[(String, usize, V
             RowKind::Total => &theme.details_total,
             RowKind::Language => &theme.details_language_name,
             RowKind::Note => &theme.note,
-            RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File => of_a_sub_row.name
+            RowKind::Nested | RowKind::Production | RowKind::Tests | RowKind::File(_) => of_a_sub_row.name
         };
         let name = format_boxed_name(name, *depth, kind);
         let padding = " ".repeat(inner_widths[0].saturating_sub(calculate_widest_visible_line(&name)));
         let painted_name = if kind.is_sub_row() {
             let (tree, section) = split_off_the_branch(&name);
-            format!("{}{}", of_a_sub_row.branch.paint(tree), name_style.paint(section))
+            let [spine, arm] = of_a_sub_row.paint_tree(tree);
+            format!("{spine}{arm}{}", name_style.paint(section))
         } else {
             name_style.paint(&name).to_string()
         };
@@ -2388,7 +2425,7 @@ fn format_boxed_name(cell: &str, depth: usize, kind: RowKind) -> Cow<'_, str> {
     if !kind.is_sub_row() {
         return Cow::Borrowed(cell);
     }
-    let marker = if kind == RowKind::File {BOXED_FILE_MARKER} else {BOXED_MARKER};
+    let marker = if matches!(kind, RowKind::File(_)) {BOXED_FILE_MARKER} else {BOXED_MARKER};
     let start = cell.len() - cell.trim_start_matches(' ').len();
 
     Cow::Owned(format!("{}{marker} {}", " ".repeat(start + 2 * depth), find_section_name_in(cell)))
@@ -2451,7 +2488,8 @@ fn format_language_lines(theme: &Theme, group: &Group, lang_name: &str, columns:
     for (at, (path, file)) in files.iter().enumerate() {
         let branch = find_file_branch_marker(at + 1 == files.len() && complete);
         lines.push(format_list_sub_row(theme, columns, indent, branch, path,
-                &find_shown_stats_of(file, group.leaves_tests_out()), RowKind::File, block_width));
+                &find_shown_stats_of(file, group.leaves_tests_out()), RowKind::File(group.classify_tests_of(file)),
+                block_width));
     }
     if should_print_keywords {
         let keywords = get_keywords_as_str(theme, &content_info.keyword_occurrences, None, columns.calculate_words_start(), block_width);
@@ -2467,11 +2505,12 @@ fn format_list_sub_row(theme: &Theme, columns: &Columns, indent: &str, branch: &
         kind: RowKind, block_width: usize) -> String
 {
     let styles = SubRowStyles::of(theme, kind);
-    let painted_name = format!("{indent}{BRANCH_INDENT}{}{}", styles.branch.paint(branch), styles.name.paint(name));
+    let [spine, arm] = styles.paint_tree(branch);
+    let painted_name = format!("{indent}{BRANCH_INDENT}{spine}{arm}{}", styles.name.paint(name));
     let row = columns.format_nested_row(theme, &styles, &painted_name,
             indent.len() + BRANCH_INDENT.len() + calculate_widest_visible_line(branch)
                     + calculate_widest_visible_line(name),
-            (kind != RowKind::File).then_some(stats.files), stats.lines,
+            (!matches!(kind, RowKind::File(_))).then_some(stats.files), stats.lines,
             stats.calculate_code_lines(columns.model), stats.calculate_comment_lines(columns.model));
 
     columns.append_size(styles.branch, &row, &format_sub_row_size(&styles, stats.bytes), block_width)
@@ -4279,7 +4318,7 @@ mod tests {
             performance: mezura_core::Performance { duration_millis: 0, threads: mezura_core::Threads::new(1, 1) }
         };
         let (compared, _) = create_compared_rows(None, &empty, &run, config.view.by_file, &config);
-        let file_rows = compared.iter().filter(|row| row.kind == RowKind::File)
+        let file_rows = compared.iter().filter(|row| matches!(row.kind, RowKind::File(_)))
                 .map(|row| find_section_name_in(&row.name)).collect::<Vec<_>>();
         assert_eq!(vec![
             ".../http_cdnjs.cloudflare.com_ajax_libs_Chart.js_3.9.1_chart.js",
@@ -4483,6 +4522,74 @@ mod tests {
         config.view.top_n = Some(1);
         assert_eq!(vec!["Go".to_owned()], create_groups_of(&run, &config)[0].languages,
                 "Rust holds 100 lines outside its tests and Go 500");
+    }
+
+    #[test]
+    fn a_file_holding_tests_takes_the_tests_color_past_the_tree_line_and_on_its_figures_when_tests_whole() {
+        colored::control::set_override(false);
+
+        let stats = |files, lines| crate::test_support::plain_stats_of(files, lines * 10, lines, lines, 0, hashmap![]);
+        let file = |path: &str, lines, tested| mezura_core::FileEntry { path: path.to_owned(), stats: stats(1, lines),
+                nested_languages: HashMap::new(), tests: (tested > 0).then(|| stats(1, tested)) };
+        let per_language = hashmap!["Rust".to_owned() => stats(3, 1050)];
+        let tests = hashmap!["Rust".to_owned() => TestCode { stats: stats(2, 900), whole_files: 1 }];
+        let files = hashmap!["Rust".to_owned() => vec![file("D:/x/tests/all.rs", 600, 600),
+                file("D:/x/src/lib.rs", 400, 300), file("D:/x/src/main.rs", 50, 0)]];
+        let module = ModuleResult { name: None, per_language: per_language.clone(), total: Stats::calculate_total_of(&per_language),
+                nested_languages: HashMap::new(), tests: tests.clone(), files };
+        let mut run = crate::test_support::plain_result_of(per_language, vec![module], vec![mezura_core::Target::of("D:/x")]);
+        run.tests = tests;
+        let file_rows_of = |breakdown, hidden| {
+            let mut config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
+            config.view.by_file = Some(ByFile::All);
+            config.view.tests_breakdown = breakdown;
+            config.view.hidden.tests = hidden;
+            let groups = create_groups_of(&run, &config);
+            create_named_rows(&groups, &groups[0].total, false, &[]).into_iter()
+                    .filter_map(|row| match row.kind {
+                        RowKind::File(tests) => Some((row.cell.clone(), tests)),
+                        _ => None
+                    }).collect::<Vec<_>>()
+        };
+
+        let (whole, mixed, absent) = (FileTests::Whole, FileTests::Mixed, FileTests::Absent);
+        for (breakdown, hidden, expected) in [
+                (TestsBreakdown::Share, false, vec![("tests/all.rs", whole), ("src/lib.rs", mixed), ("src/main.rs", absent)]),
+                (TestsBreakdown::Split, false, vec![("tests/all.rs", whole), ("src/lib.rs", mixed), ("src/main.rs", absent)]),
+                (TestsBreakdown::Removed, false, vec![("src/lib.rs", absent), ("src/main.rs", absent)]),
+                (TestsBreakdown::Share, true, vec![("tests/all.rs", absent), ("src/lib.rs", absent), ("src/main.rs", absent)])] {
+            let rows = file_rows_of(breakdown, hidden);
+            let shown = rows.iter().map(|(cell, tests)| (find_section_name_in(cell), *tests)).collect::<Vec<_>>();
+            assert_eq!(expected, shown, "{breakdown:?}, hidden {hidden}");
+        }
+
+        let mut theme = Theme::default();
+        // Set apart from 'file-branch', which it equals in the stock theme
+        theme.tests_branch = theme.nested_name.clone();
+        let stroke = "\u{2500}\u{2500}\u{25ab} ";
+        for (cell, tests) in file_rows_of(TestsBreakdown::Share, false) {
+            let kind = RowKind::File(tests);
+            let styles = SubRowStyles::of(&theme, kind);
+            let trees = [(split_off_the_branch(&cell).0.to_owned(), " \u{251c}", stroke),
+                    (split_off_the_branch(&format_boxed_name(&cell, 0, kind)).0.to_owned(), " ", "\u{25ab} "),
+                    (find_file_branch_marker(false).to_owned(), "\u{251c}", stroke)];
+            for (tree, spine, arm) in trees {
+                let expected = match tests {
+                    FileTests::Absent => [theme.file_branch.paint(&tree), ColoredString::from("")],
+                    _ => {
+                        assert_eq!(spine.to_owned() + arm, tree);
+                        [theme.file_branch.paint(spine), theme.tests_name.paint(arm)]
+                    }
+                };
+                assert_eq!(expected, styles.paint_tree(&tree), "{cell}");
+            }
+            let figures = (styles.name, styles.lines, styles.size_unit, styles.branch);
+            match tests {
+                FileTests::Whole => assert_eq!((&theme.tests_name, &theme.tests_lines, &theme.tests_size_unit,
+                        &theme.file_branch), figures),
+                _ => assert_eq!((&theme.file_name, &theme.file_lines, &theme.file_size_unit, &theme.file_branch), figures)
+            }
+        }
     }
 
     #[test]
