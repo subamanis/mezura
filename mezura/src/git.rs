@@ -77,7 +77,7 @@ impl std::fmt::Display for GitError {
             Self::SameCommit { first, second, commit } => write!(f, "'{first}' and '{second}' name the same commit, {}, so the comparison has nothing to say.", &commit[..commit.len().min(12)]),
             Self::PatternTarget { pattern } => write!(f, "'{pattern}' is a glob pattern, and what it matches in the working tree and what it would match at that commit are two different sets of files. Write out the paths it should mean."),
             Self::CountingRevision { revision, error } => write!(f, "'{revision}' was written out, but counting it failed. {error}"),
-            Self::FetchRunsRepositoryProgram { repository, revision, setting } => write!(f, "'{repository}' lacks files of '{revision}', and fetching them would run a program named by '{setting}' in the repository's own configuration. If that setting is yours, move it to your own git configuration and run this again."),
+            Self::FetchRunsRepositoryProgram { repository, revision, setting } => write!(f, "'{repository}' lacks files of '{revision}', and fetching them could run a program named by '{setting}' in the repository's own configuration. If that setting is yours, move it to your own git configuration and run this again."),
             Self::Refused { doing, message } => write!(f, "git refused while {doing}: {message}")
         }
     }
@@ -429,6 +429,15 @@ pub(crate) fn read_git_config(repository: &str, arguments: &[&str]) -> Option<St
     outcome.status.success().then(|| String::from_utf8_lossy(&outcome.stdout).trim().to_owned())
 }
 
+pub(crate) fn read_scoped_git_settings(repository: &str, names: &str) -> Vec<(String, String, String)> {
+    let settings = read_git_config(repository, &["--show-scope", "-z", "--get-regexp", names]).unwrap_or_default();
+    let mut fields = settings.split('\0');
+    std::iter::from_fn(|| Some((fields.next()?, fields.next()?))).map(|(scope, setting)| {
+        let (name, value) = setting.split_once('\n').unwrap_or((setting, ""));
+        (scope.to_owned(), name.to_owned(), value.to_owned())
+    }).collect()
+}
+
 fn clear_readonly_recursively(path: &Path) {
     let Ok(entries) = std::fs::read_dir(path) else { return };
     for entry in entries.flatten() {
@@ -589,7 +598,8 @@ fn configure_hardened_git(command: &mut Command) {
     #[cfg(not(test))]
     let test_ssh : Option<String> = None;
     if let Some(ssh) = test_ssh {
-        command.env("GIT_SSH", ssh);
+        command.env("GIT_SSH", ssh).env_remove("GIT_SSH_COMMAND").env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1");
     } else if std::env::var_os("GIT_SSH_COMMAND").is_none() && std::env::var_os("GIT_SSH").is_none() {
         command.env("GIT_SSH_COMMAND", DEFAULT_SSH_COMMAND);
     }

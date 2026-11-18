@@ -8,7 +8,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use mezura_core::MountedTree;
 
-use super::git::{GitError, ResolvedRevision, build_git_read, build_hardened_git, read_git_config};
+use super::git::{GitError, ResolvedRevision, build_git_read, build_hardened_git, read_git_config, read_scoped_git_settings};
 use super::paths::fold_ascii_case;
 
 const LINK_MODE : &str = "120000";
@@ -117,7 +117,7 @@ fn fetch_missing_objects(resolved: &ResolvedRevision) -> Result<(), GitError> {
             return Err(GitError::FetchRunsRepositoryProgram { repository: repository.to_owned(),
                     revision: resolved.revision.clone(), setting });
         }
-        let mut fetch = command.args(["-c", "fetch.negotiationAlgorithm=noop", "fetch", "--no-tags",
+        let mut fetch = command.args(["-c", "fetch.negotiationAlgorithm=noop", "fetch", "--no-tags", "--no-auto-gc",
                 "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none", "--stdin", "--", &promisor])
                 .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(GitError::NotInstalled)?;
         if let Some(mut input) = fetch.stdin.take() {
@@ -132,18 +132,14 @@ fn fetch_missing_objects(resolved: &ResolvedRevision) -> Result<(), GitError> {
     }
 }
 
-// What the person's own configuration and the machine's name is theirs to trust, so only the
-// repository's own counts. 'GIT_SSH_COMMAND' outranks 'core.sshCommand' wherever it is set.
+// Only the repository's own configuration counts. 'GIT_SSH_COMMAND' outranks 'core.sshCommand'.
 fn find_setting_naming_a_fetch_program(repository: &str, fetch: &Command) -> Option<String> {
-    let ssh_command_is_given = std::env::var_os("GIT_SSH_COMMAND").is_some()
-            || fetch.get_envs().any(|(name, value)| name == "GIT_SSH_COMMAND" && value.is_some());
-    let settings = read_git_config(repository, &["--show-scope", "--get-regexp",
-            r"^(core\.(gitproxy|sshcommand)|credential\.(.*\.)?helper)$"])?;
-    settings.lines().filter_map(|line| line.split_once('\t'))
-            .filter(|(scope, _)| matches!(*scope, "local" | "worktree"))
-            .filter_map(|(_, setting)| setting.split_once(' '))
-            .find(|(name, program)| !program.trim().is_empty() && !(*name == "core.sshcommand" && ssh_command_is_given))
-            .map(|(name, _)| name.to_owned())
+    let ssh_command_is_given = fetch.get_envs().find(|(name, _)| *name == "GIT_SSH_COMMAND")
+            .map_or_else(|| std::env::var_os("GIT_SSH_COMMAND").is_some(), |(_, value)| value.is_some());
+    read_scoped_git_settings(repository, r"^(core\.(gitproxy|sshcommand)|credential\.(.*\.)?helper|remote\..*\.vcs)$")
+            .into_iter().filter(|(scope, _, _)| matches!(scope.as_str(), "local" | "worktree"))
+            .find(|(_, name, program)| !program.trim().is_empty() && !(name == "core.sshcommand" && ssh_command_is_given))
+            .map(|(_, name, _)| name)
 }
 
 fn read_output_of(command: &mut Command, doing: &'static str) -> Result<Vec<u8>, GitError> {
@@ -420,9 +416,11 @@ mod tests {
         let resolved = resolve_revision(&normalise_separators(&clone.to_string_lossy()), "HEAD~1").unwrap();
         let ran = normalise_separators(&holder.join("ran").to_string_lossy()).into_owned();
         let ssh_command = format!("echo ran > '{ran}' #");
+        let ssh_command_on_a_second_line = format!("\n{ssh_command}");
 
         for (setting, program) in [("credential.helper", "store"), ("credential.https://example.com.helper", "store"),
-                ("core.gitProxy", "proxy-command"), ("core.sshCommand", ssh_command.as_str())] {
+                ("core.gitProxy", "proxy-command"), ("core.sshCommand", ssh_command.as_str()),
+                ("core.sshCommand", ssh_command_on_a_second_line.as_str()), ("remote.origin.vcs", "folder/helper")] {
             run_git(&clone, &["config", setting, program]);
             assert!(matches!(super::mount_revision(&resolved), Err(GitError::FetchRunsRepositoryProgram { setting: named, .. })
                     if named.eq_ignore_ascii_case(setting)), "'{setting}' in the repository's own configuration did not stop the fetch");
@@ -432,6 +430,35 @@ mod tests {
 
         run_git(&clone, &["config", "credential.helper", ""]);
         drop(super::mount_revision(&resolved).unwrap());
+        remove_directory_tree(&holder).unwrap();
+    }
+
+    #[test]
+    fn the_fetch_of_what_a_revision_lacks_starts_no_maintenance_of_the_repository() {
+        let _guard = GIT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let holder = create_fresh_folder("mezura-mounted-maintenance");
+        let origin = create_origin(&holder);
+        let _ssh = crate::test_support::install_local_ssh_helper();
+        let clone = clone_partially(&origin, &holder, "blob:none");
+        let resolved = resolve_revision(&normalise_separators(&clone.to_string_lossy()), "HEAD~1").unwrap();
+        let ran = normalise_separators(&holder.join("ran").to_string_lossy()).into_owned();
+        let hook = format!("echo ran > '{ran}'");
+        for (setting, value) in [("maintenance.strategy", "gc"), ("gc.auto", "1"), ("gc.autoPackLimit", "1"),
+                ("gc.autoDetach", "false"), ("maintenance.autoDetach", "false"), ("gc.recentObjectsHook", hook.as_str())] {
+            run_git(&clone, &["config", setting, value]);
+        }
+        // Without an old object that nothing reaches, the gc never runs the hook
+        write(&holder, &[("unreachable.txt", "reached by nothing\n")]);
+        let id = run_git(&clone, &["hash-object", "-w", &normalise_separators(&holder.join("unreachable.txt").to_string_lossy())]);
+        let object = clone.join(".git").join("objects").join(&id[..2]).join(&id[2..]);
+        let contents = std::fs::read(&object).unwrap();
+        std::fs::remove_file(&object).unwrap();
+        std::fs::write(&object, contents).unwrap();
+        std::fs::File::options().write(true).open(&object).unwrap()
+                .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_500_000_000)).unwrap();
+
+        drop(super::mount_revision(&resolved).unwrap());
+        assert!(!Path::new(&ran).exists(), "the fetch started a gc, which ran the hook the repository names");
         remove_directory_tree(&holder).unwrap();
     }
 
@@ -566,7 +593,8 @@ mod tests {
         let helper = crate::git::TEST_GIT_SSH.lock().unwrap().clone().unwrap();
         let url = format!("ssh://local/{}", normalise_separators(&origin.to_string_lossy()));
         let name = filter.replace(':', "-");
-        let cloned = Command::new("git").env("GIT_SSH", helper).arg("-C").arg(holder)
+        let cloned = Command::new("git").env("GIT_SSH", helper).env_remove("GIT_SSH_COMMAND")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").arg("-C").arg(holder)
                 .args(["clone", "-q", &format!("--filter={filter}"), &url, &name]).output().unwrap();
         assert!(cloned.status.success(), "{}", String::from_utf8_lossy(&cloned.stderr));
         let clone = holder.join(name);
