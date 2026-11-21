@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
-use mezura_core::{AppliedPreset, FaultyFileDetails, RunResult, ScanSkip, UnreadableDirDetails};
+use mezura_core::{AppliedPreset, FaultyFileDetails, Languages, RunResult, ScanSkip, UnreadableDirDetails};
 
 use crate::config_manager::{Configuration, OutputFormat};
 use crate::message_printer::{collect_distinct, format_tests_command, join_with, quote_for_the_shell};
@@ -10,9 +10,12 @@ use crate::paths::find_outermost_directories;
 use crate::paths::PERSISTENT_APP_PATHS;
 use crate::preset_hint::{PresetSuggestion, find_generic_project_file_naming, find_presets_to_suggest};
 use crate::result_printer::{format_cut_list, format_preset_directory};
+use crate::target_commits::CommitOfTarget;
 use crate::warning_collector::{ProgramCode, ProgramWarning};
 
-pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>, config: &Configuration) {
+pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>, languages: Option<&Languages>,
+        config: &Configuration)
+{
     let datetime_now = chrono::Local::now();
     // Before anything else: a scan can come back empty precisely because the directories could not
     // be opened, and the report would otherwise say "no relevant files" with a straight face
@@ -94,9 +97,14 @@ pub fn present(result: &RunResult, comparison: Option<&super::diff::Comparison>,
     let can_write_log = config.view.revision_targets.is_empty()
             || config.view.config_name_to_save.is_some()
             || config.view.config_name_to_load.is_some();
-    if config.view.log.should_log && can_write_log && let Some(path) = log_file_path
-        && let Err(reason) = super::log::log_stats(&path, existing_log_contents.as_deref(), result, &datetime_now, config) {
-        eprintln!("\n{}",super::theme::get_active().warning.paint(&format!("Error while trying to save the log: {reason}")));
+    if config.view.log.should_log && can_write_log && let Some(path) = log_file_path {
+        let commits = languages.map(|languages| super::target_commits::find_commits_of_targets(result,
+                &config.view.revision_targets, languages)).unwrap_or_default();
+        match super::log::log_stats(&path, existing_log_contents.as_deref(), result, &commits, &datetime_now, config) {
+            Ok(()) => print_commits_the_log_could_not_record(result, &commits),
+            Err(reason) => eprintln!("\n{}",super::theme::get_active().warning.paint(
+                    &format!("Error while trying to save the log: {reason}")))
+        }
     }
 }
 
@@ -427,6 +435,40 @@ fn determine_log_file_path(config: &Configuration) -> Option<String> {
     }
 }
 
+fn print_commits_the_log_could_not_record(result: &RunResult, commits: &[CommitOfTarget]) {
+    const FILES_NAMED_PER_MODULE : usize = 3;
+    let warning = &super::theme::get_active().warning;
+    let mut differing : Vec<(String, Vec<&str>)> = Vec::new();
+    for (target, commit) in result.targets.iter().zip(commits) {
+        match commit {
+            CommitOfTarget::Found(found) if !found.differing_files.is_empty() => {
+                let label = target.module.clone().unwrap_or_else(|| target.path.clone());
+                let files = found.differing_files.iter().map(String::as_str);
+                match differing.iter_mut().find(|(known, _)| *known == label) {
+                    Some((_, known_files)) => known_files.extend(files),
+                    None => differing.push((label, files.collect()))
+                }
+            },
+            CommitOfTarget::Unreadable(reason) => eprintln!("\n{}", warning.paint(
+                    &format!("No commit recorded for '{}': {reason}", target.path))),
+            _ => ()
+        }
+    }
+    if differing.is_empty() {
+        return;
+    }
+
+    let mut lines = vec![String::from("Counted files differ from the commit:")];
+    for (label, files) in differing {
+        let named = files.iter().take(FILES_NAMED_PER_MODULE).copied().collect::<Vec<_>>().join(", ");
+        lines.push(match files.len().saturating_sub(FILES_NAMED_PER_MODULE) {
+            0 => format!("  {label}: {named}"),
+            more => format!("  {label}: {named} and {more} more")
+        });
+    }
+    eprintln!("\n{}", warning.paint(&lines.join("\n")));
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -603,10 +645,10 @@ mod tests {
         let comparison = crate::diff::Comparison::of(baseline,
                 crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config), &config, Vec::new());
 
-        present(&result, Some(&comparison), &config);
+        present(&result, Some(&comparison), None, &config);
         assert!(!path.exists(), "the comparison run wrote a log entry");
 
-        present(&result, None, &config);
+        present(&result, None, None, &config);
         assert!(path.exists(), "the ordinary run stopped logging");
         std::fs::remove_file(&path).unwrap();
     }

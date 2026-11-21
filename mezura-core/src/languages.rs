@@ -96,6 +96,13 @@ impl Languages {
                 extension_to_name, resolved_against: LanguageSelection::of(config) }, reported)
     }
 
+    /// Whether the module named reads a file of this name, judged by the name and the run's
+    /// selection with no file opened, as the directory scan does. A file only its `#!` line
+    /// identifies answers no.
+    pub fn reads_files_named(&self, module: Option<&str>, file_name: &str) -> bool {
+        self.lookups.get_of_module_named(module).of_name(std::path::Path::new(file_name)).is_some()
+    }
+
     pub(crate) fn describe_the_same_selection_as(&self, config: &EngineConfig) -> bool {
         self.resolved_against == LanguageSelection::of(config)
     }

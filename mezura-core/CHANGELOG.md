@@ -21,6 +21,8 @@ New:
   through a function of the caller's and counted under a root as though it were a folder. A run
   takes its trees in `EngineConfig::trees`, and `MountedTree::holds` checks whether a path names a
   file or a folder of one.
+- `Languages::reads_files_named` answers whether a module reads a file of a given name, the name
+  lookup of the directory scan with no file opened.
 
 ## 3.0.0, 2026-11-12
 

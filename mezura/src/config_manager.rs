@@ -1160,7 +1160,8 @@ impl ConfigurationBuilder {
                 // The three flags that answer what is counted and what is shown alike
                 count_keywords: !hidden.keywords,
                 detect_tests: !hidden.tests,
-                collect_files: self.by_file.is_some(),
+                // The log compares every counted file with the commit of its target
+                collect_files: self.by_file.is_some() || self.log.as_ref().is_some_and(|log| log.should_log),
                 test_patterns: self.test_patterns.clone().unwrap_or_default(),
                 trees: self.revision_targets.iter().map(|tc| tc.mounted.tree.clone()).collect()
             },
@@ -2760,9 +2761,9 @@ mod tests {
                 create_config_from_args("./ --languages a,b,c").unwrap());
         assert_eq!(conf("./", |c| {c.engine.languages_of_interest = vec!["a".to_owned()].into(); c.typed_explicitly.languages = true;}),
                 create_config_from_args("./ --languages a, ").unwrap());
-        assert_eq!(conf("./", |c| {c.view.set_log_option(LogOption::new(Some("this is a test".to_owned())));}),
+        assert_eq!(conf("./", |c| {c.view.set_log_option(LogOption::new(Some("this is a test".to_owned()))); c.engine.collect_files = true;}),
                 create_config_from_args("./ --log   this is a test ").unwrap());
-        assert_eq!(conf("./", |c| {c.view.set_log_option(LogOption::new(None));}),
+        assert_eq!(conf("./", |c| {c.view.set_log_option(LogOption::new(None)); c.engine.collect_files = true;}),
                 create_config_from_args("./ --log  ").unwrap());
     }
 
@@ -2783,6 +2784,7 @@ mod tests {
         // Asking for the rows is what makes the counting keep them, so the two halves cannot drift
         assert!(!create_config_from_args("./").unwrap().engine.collect_files);
         assert!(create_config_from_args("./ --by-file").unwrap().engine.collect_files);
+        assert!(create_config_from_args("./ --log").unwrap().engine.collect_files);
 
         // A comparison collects them too, since its subject side is this very run
         let compared = create_config_from_args("./ --by-file 8 --diff old.json").unwrap();

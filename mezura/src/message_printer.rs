@@ -1045,6 +1045,9 @@ pub const LOG_HELP  :  &str =
     created if it is not there yet, and any words you give are kept with the entry as its
     description.
 
+    Each entry also holds the version of mezura and, for every target inside a git repository, its
+    commit. A counted file that differs from that commit is named in a warning after the run.
+
     Cannot be saved in a configuration file, so loading one never writes an entry on its own. A
     '--diff' run writes no entry either, and a warning gives the reason.
 

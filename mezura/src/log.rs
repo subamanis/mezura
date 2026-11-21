@@ -14,6 +14,7 @@ use super::json_printer::{create_array, create_object, escape};
 use super::json_reader::{DocumentError, Scope};
 use super::json_reader::{join_location, parse_classes, parse_scope, parse_stats, read_list, read_nested,
         read_number, read_object, read_optional_name, read_text};
+use super::target_commits::{CommitOfTarget, TargetCommit};
 
 // Separate from the run document's version: it moves when a key of an entry is removed or changes
 // meaning, and an entry of a newer format is skipped rather than misread
@@ -32,8 +33,8 @@ pub struct LogEntry {
     pub modules: Vec<ModuleEntry>
 }
 
-// Only what a module line of the history section prints. The files and the extra lines are on the
-// total and not repeated per module.
+// Only what a module line of the history section prints, which leaves out the files and bytes an
+// entry also writes per module.
 pub struct ModuleEntry {
     pub name: String,
     pub lines: usize,
@@ -43,7 +44,9 @@ pub struct ModuleEntry {
 
 // A log is the one output that cannot be measured again, since the trees those runs counted have
 // moved on, so it is never truncated in place.
-pub fn log_stats(path: &str, contents: Option<&str>, result: &RunResult, datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()> {
+pub fn log_stats(path: &str, contents: Option<&str>, result: &RunResult, commits: &[CommitOfTarget],
+        datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()>
+{
     // A file that exists and is not empty has history in it whatever stopped it being read this
     // time: a lock, an editor holding it, bytes that are not UTF-8. Writing this run alone over it
     // would leave one entry where there were twenty.
@@ -56,7 +59,7 @@ pub fn log_stats(path: &str, contents: Option<&str>, result: &RunResult, datetim
     // way through costs this entry and not the file. The process id is in the name because with a
     // fixed one two runs against the same log would splice one run's header onto another's body.
     let being_written = format!("{path}.writing.{}", std::process::id());
-    let outcome = write_whole_log(&being_written, contents, result, datetime_now, config)
+    let outcome = write_whole_log(&being_written, contents, result, commits, datetime_now, config)
             .and_then(|()| std::fs::rename(&being_written, path));
     if outcome.is_err() {
         let _ = std::fs::remove_file(&being_written);
@@ -88,12 +91,12 @@ pub fn read_last_entries(contents: &str, count: usize) -> Vec<LogEntry> {
             .take(count).collect()
 }
 
-fn write_whole_log(path: &str, contents: Option<&str>, result: &RunResult,
+fn write_whole_log(path: &str, contents: Option<&str>, result: &RunResult, commits: &[CommitOfTarget],
         datetime_now: &DateTime<Local>, config: &Configuration) -> io::Result<()>
 {
     let mut writer = BufWriter::new(File::create(path)?);
 
-    writer.write_all(format_entry_line(config, datetime_now, result).as_bytes())?;
+    writer.write_all(format_entry_line(config, datetime_now, result, commits).as_bytes())?;
     writer.write_all(b"\n")?;
 
     if let Some(contents) = contents {
@@ -107,14 +110,17 @@ fn write_whole_log(path: &str, contents: Option<&str>, result: &RunResult,
 // classes they were sorted into are written, being two separate measurements; nothing worked out
 // from them is, not the extra lines, not the average size, and not code and comments, which are
 // what a counting model makes of the classes.
-fn format_entry_line(config: &Configuration, datetime_now: &DateTime<Local>, result: &RunResult) -> String {
+fn format_entry_line(config: &Configuration, datetime_now: &DateTime<Local>, result: &RunResult,
+        commits: &[CommitOfTarget]) -> String
+{
     let name = config.view.log.name.as_ref()
             .map_or("null".to_owned(), |name| format!("\"{}\"", escape(name)));
 
-    format!("{{\"format\":{LOG_FORMAT_VERSION},\"kind\":\"{LOG_ENTRY_KIND}\",\"name\":{name},\
+    format!("{{\"format\":{LOG_FORMAT_VERSION},\"kind\":\"{LOG_ENTRY_KIND}\",\"mezura_version\":\"{}\",\"name\":{name},\
             \"taken_at\":\"{}\",\"scope\":{},\"total\":{},\"tests\":{},\"modules\":{}}}",
+            escape(config.view.version.trim_start_matches('v')),
             datetime_now.to_rfc3339_opts(SecondsFormat::Secs, false),
-            format_scope(config, &result.targets),
+            format_scope(config, &result.targets, commits),
             format_stats(&result.total),
             format_tests(&result.tests, config),
             format_modules(result, config))
@@ -122,13 +128,13 @@ fn format_entry_line(config: &Configuration, datetime_now: &DateTime<Local>, res
 
 // The same keys as the run document's scope, read back through the same 'parse_scope', so the two
 // kinds of file cannot drift apart in what they record
-fn format_scope(config: &Configuration, targets: &[Target]) -> String {
+fn format_scope(config: &Configuration, targets: &[Target], commits: &[CommitOfTarget]) -> String {
     let engine = &config.engine;
     format!("{{\"targets\":{},\"exclude\":{},\"tests\":{},\"languages\":{},\"excluded_languages\":{},\
             \"forced_languages\":{},\"counting\":\"{}\",\"search_in_dotted\":{},\"gitignore\":{},\"ignore_files\":{},\
             \"keywords_counted\":{},\"tests_detected\":{},\"count_minified\":{},\"count_generated\":{},\"count_not_code\":{},\
             \"use_heuristics\":{},\"shebangs\":{}}}",
-            format_targets(targets, config),
+            format_targets(targets, commits, config),
             format_patterns(&engine.exclude_patterns.patterns, config),
             format_patterns(&engine.test_patterns.patterns, config),
             format_strings(&engine.languages_of_interest.to_written_form()),
@@ -175,8 +181,9 @@ fn format_modules(result: &RunResult, config: &Configuration) -> String {
 
     create_array(result.modules.iter().map(|module| {
         let name = module.name.as_ref().map_or("null".to_owned(), |name| format!("\"{}\"", escape(name)));
-        format!("{{\"name\":{name},\"lines\":{},\"classes\":{},\"tests\":{}}}",
-                module.total.lines, format_classes(&module.total.classes), format_tests(&module.tests, config))
+        format!("{{\"name\":{name},\"files\":{},\"bytes\":{},\"lines\":{},\"classes\":{},\"tests\":{}}}",
+                module.total.files, module.total.bytes, module.total.lines, format_classes(&module.total.classes),
+                format_tests(&module.tests, config))
     }))
 }
 
@@ -184,15 +191,26 @@ fn format_modules(result: &RunResult, config: &Configuration) -> String {
 // project does, relative to itself. Recorded absolutely, the same project counted from two
 // checkouts would report its targets as having changed on every entry the other one wrote, which is
 // the history section's way of saying the numbers are not comparable.
-fn format_targets(targets: &[Target], config: &Configuration) -> String {
-    create_array(targets.iter().map(|target| {
+fn format_targets(targets: &[Target], commits: &[CommitOfTarget], config: &Configuration) -> String {
+    create_array(targets.iter().enumerate().map(|(at, target)| {
         let module = target.module.as_ref().map_or("null".to_owned(), |x| format!("\"{}\"", escape(x)));
         let path = match config.view.find_project_of_the_log() {
             Some(project) => super::config_manager::format_path_inside(&project.project_dir, &target.path),
             None => target.path.clone()
         };
-        format!("{{\"module\":{module},\"path\":\"{}\"}}", escape(&path))
+        let revision = match commits.get(at) {
+            Some(CommitOfTarget::Found(found)) => format!(",\"revision\":{}", format_revision(found)),
+            _ => String::new()
+        };
+        format!("{{\"module\":{module},\"path\":\"{}\"{revision}}}", escape(&path))
     }))
+}
+
+fn format_revision(found: &TargetCommit) -> String {
+    let repository = found.repository.as_ref()
+            .map_or(String::new(), |repository| format!("\"repository\":\"{}\",", escape(repository)));
+    format!("{{{repository}\"commit\":\"{}\",\"path\":\"{}\",\"uncommitted\":{}}}",
+            escape(&found.commit), escape(&found.path), !found.differing_files.is_empty())
 }
 
 // The places a pattern names are spelled the way the targets are, for the same reason
@@ -302,7 +320,17 @@ mod tests {
         result.modules[0].tests = tests_of(1, 40, 1);
 
         let now: DateTime<Local> = DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
-        let entry = parse_entry(&format_entry_line(&config, &now, &result)).unwrap();
+        // A line that fails to parse drops out of the history without a word
+        let commits = [CommitOfTarget::Found(TargetCommit { repository: Some("https://example.com/o/r".to_owned()),
+                commit: "a1b2".to_owned(), path: "web".to_owned(), differing_files: vec!["a.rs".to_owned()] }),
+                CommitOfTarget::Absent];
+        let line = format_entry_line(&config, &now, &result, &commits);
+        assert!(line.contains(&format!("\"mezura_version\":\"{}\"", crate::release::VERSION_ID.trim_start_matches('v')))
+                && line.contains("\"path\":\"./web\",\"revision\":{\"repository\":\"https://example.com/o/r\",\
+                        \"commit\":\"a1b2\",\"path\":\"web\",\"uncommitted\":true}}")
+                && line.contains("{\"module\":null,\"path\":\"./src\"}")
+                && line.contains("\"name\":\"frontend\",\"files\":1,\"bytes\":10,\"lines\":600"), "{line}");
+        let entry = parse_entry(&line).unwrap();
 
         let model = mezura_core::CountingModel::Content;
         assert_eq!(Some("with \"quotes\" in it".to_owned()), entry.name);
@@ -329,7 +357,7 @@ mod tests {
 
         config.view.set_log_option(LogOption::new(None));
         let plain_line = format_entry_line(&config, &now,
-                &result_of(crate::test_support::plain_stats_of(1, 1, 1, 1, 0, HashMap::new()), Vec::new()));
+                &result_of(crate::test_support::plain_stats_of(1, 1, 1, 1, 0, HashMap::new()), Vec::new()), &[]);
         let plain = parse_entry(&plain_line).unwrap();
         assert_eq!(None, plain.name);
         assert!(plain.modules.is_empty());
@@ -340,7 +368,7 @@ mod tests {
         assert!(parse_entry(&before_tests_were_recorded).unwrap().tests.is_none(), "an entry written without tests refused to read");
 
         config.engine.detect_tests = false;
-        let detection_off = format_entry_line(&config, &now, &result);
+        let detection_off = format_entry_line(&config, &now, &result, &[]);
         assert!(detection_off.contains(",\"tests\":null,\"modules\""), "{detection_off}");
         let parsed = parse_entry(&detection_off).unwrap();
         assert!(parsed.tests.is_none() && parsed.modules.iter().all(|x| x.tests.is_none()), "a run with the detection off recorded a count");
@@ -356,12 +384,12 @@ mod tests {
         result.targets = vec![Target::named("web", "/work/portal/web"), Target::of("/somewhere/else")];
         let now: DateTime<Local> = DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
 
-        let entry = parse_entry(&format_entry_line(&config, &now, &result)).unwrap();
+        let entry = parse_entry(&format_entry_line(&config, &now, &result, &[])).unwrap();
         assert_eq!(vec![Target::named("web", "./web"), Target::of("/somewhere/else")], entry.targets);
 
         // A configuration asked for by name keeps a log of its own, which is nobody else's to read
         config.view.config_name_to_load = Some("portal".to_owned());
-        let named = parse_entry(&format_entry_line(&config, &now, &result)).unwrap();
+        let named = parse_entry(&format_entry_line(&config, &now, &result, &[])).unwrap();
         assert_eq!(result.targets, named.targets);
     }
 
@@ -369,7 +397,7 @@ mod tests {
     fn a_broken_line_does_not_discard_the_lines_around_it() {
         let config = crate::config_manager::Configuration::new(vec!["./".to_owned()]);
         let now: DateTime<Local> = DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap();
-        let good = format_entry_line(&config, &now, &result_of(crate::test_support::plain_stats_of(2, 2, 2, 2, 0, HashMap::new()), Vec::new()));
+        let good = format_entry_line(&config, &now, &result_of(crate::test_support::plain_stats_of(2, 2, 2, 2, 0, HashMap::new()), Vec::new()), &[]);
 
         let contents = format!("{good}\nnot json at all\n{}\n{good}\n",
                 good.replace(&format!("\"format\":{LOG_FORMAT_VERSION}"), "\"format\":99"));
@@ -395,12 +423,12 @@ mod tests {
             files: HashMap::new(), total: crate::test_support::plain_stats_of(1, 10, lines, code, comments, HashMap::new()) };
 
         let older = result_of(crate::test_support::plain_stats_of(4, 4000, 400, 300, 0, HashMap::new()), Vec::new());
-        log_stats(&path, None, &older, &DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap(), &config).unwrap();
+        log_stats(&path, None, &older, &[], &DateTime::from_str("2021-09-12 04:00:00 +03:00").unwrap(), &config).unwrap();
 
         let with_modules = result_of(crate::test_support::plain_stats_of(10, 5000, 1000, 700, 200, HashMap::new()),
                 vec![module_of(Some("frontend"), 600, 400, 150), module_of(None, 400, 300, 50)]);
         let history = extract_file_contents(&path);
-        log_stats(&path, history.as_deref(), &with_modules,
+        log_stats(&path, history.as_deref(), &with_modules, &[],
                 &DateTime::from_str("2021-09-13 04:00:00 +03:00").unwrap(), &config).unwrap();
 
         let entries = read_last_entries(&extract_file_contents(&path).unwrap(), 2);
@@ -437,7 +465,7 @@ mod tests {
         std::fs::write(&path, "AN ENTRY FROM BEFORE\n").unwrap();
         let history = extract_file_contents(&path);
         assert!(history.is_some());
-        log_stats(&path, history.as_deref(), &result, &now, &config).unwrap();
+        log_stats(&path, history.as_deref(), &result, &[], &now, &config).unwrap();
         let written = std::fs::read_to_string(&path).unwrap();
         assert!(written.contains("AN ENTRY FROM BEFORE"), "the history was dropped:\n{written}");
 
@@ -447,7 +475,7 @@ mod tests {
         let unreadable = extract_file_contents(&path);
         assert!(unreadable.is_none(), "the probe no longer reproduces an unreadable log");
 
-        let refused = log_stats(&path, unreadable.as_deref(), &result, &now, &config);
+        let refused = log_stats(&path, unreadable.as_deref(), &result, &[], &now, &config);
         assert!(refused.is_err(), "a log that could not be read was overwritten anyway");
         let after = std::fs::read(&path).unwrap();
         assert!(String::from_utf8_lossy(&after).contains("AN ENTRY FROM BEFORE"),
@@ -470,7 +498,7 @@ mod tests {
         for emptied in ["", "\r\n", "\n\n   \n", "   "] {
             std::fs::write(&path, emptied).unwrap();
             let history = extract_file_contents(&path);
-            let written = log_stats(&path, history.as_deref(), &result, &now, &config);
+            let written = log_stats(&path, history.as_deref(), &result, &[], &now, &config);
             assert!(written.is_ok(), "a log holding {emptied:?} was refused: {:?}", written.err());
             assert_eq!(1, read_last_entries(&std::fs::read_to_string(&path).unwrap(), 5).len(),
                     "a log holding {emptied:?} was left without the entry of this run");

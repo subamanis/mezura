@@ -554,6 +554,10 @@ a .jsonl file: one JSON entry per line, the newest first, so it is read by any J
 a time. Each entry records the settings the run was counted with (the target directories, the
 counting model, and so on, so you can see if at some point the configuration got modified).
 
+An entry also records the version of mezura, and the commit of each target that sits inside a git
+repository. A counted file that is modified, untracked or deleted since that commit is listed in a
+warning after the run.
+
 A run that names its targets records its modules in the entry, and the history section then carries
 one narrow line per module: which of them grew, and by how much. A module that was not there last
 time, or that is not there any more, is named as such. An

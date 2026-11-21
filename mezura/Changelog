@@ -5,6 +5,8 @@ Main changes:
       directory. Counting a revision of a large repository is many times faster.
   -> With '--by-file', a file holding nothing but test code takes the colors of the 'tests' row,
       and a file holding some draws the end of its branch in the tests color.
+  -> A '--log' entry records the version of mezura and the commit of each target inside a git
+      repository. A counted file that differs from that commit is listed in a warning.
 
 Bugfixes:
   -> In assembly, a C preprocessor line such as '#include' or '#ifdef' counts as code.

@@ -38,6 +38,7 @@ mod revision_tree;
 mod sources;
 mod startup_timing;
 mod suggestions;
+mod target_commits;
 mod test_presets;
 #[cfg(test)]
 mod test_support;
@@ -268,6 +269,7 @@ fn main() -> ExitCode {
         },
         None => None
     };
+    let languages_for_the_log = config.view.log.should_log.then(|| languages.clone());
 
     timing.print_startup();
     let at = stamp();
@@ -305,7 +307,7 @@ fn main() -> ExitCode {
             }
             let comparison = counted_baseline.map(|baseline| baseline.with_subject(
                     crate::diff::Reading::of_this_run(&result, &chrono::Local::now(), &config), &config));
-            crate::present::present(&result, comparison.as_ref(), &config);
+            crate::present::present(&result, comparison.as_ref(), languages_for_the_log.as_ref(), &config);
             crate::present::print_how_to_save_the_document(&config);
             // Already presented above as the failures they are. The exit code keeps its meaning:
             // 1 is a run that did not happen, every file unparseable or every place unopenable.
