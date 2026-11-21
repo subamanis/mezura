@@ -28,6 +28,8 @@ Bugfixes:
       that fetch ('core.sshCommand', 'core.gitProxy', 'credential.helper', 'remote.<name>.vcs').
   -> A remote over ssh and the fetch of a partial clone run the ssh command you set in your git
       configuration ('core.sshCommand').
+  -> A target of a project's settings that is a git revision or a remote repository is ignored with a
+      warning naming that reason, and '--save-local' refuses such a target with the same reason.
   -> An '--exclude' or '--tests' path that reaches the repository through a link or an 8.3 short
       name, such as '/tmp' on macOS, applies to a revision target and to the revision of '--diff'.
 

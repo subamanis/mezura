@@ -2009,7 +2009,8 @@ fn save_the_local_configuration(config_builder: &mut ConfigurationBuilder, typed
 {
     if !config_builder.revision_targets.is_empty() {
         super::warning_collector::emit(ProgramWarning::new(ProgramCode::CommandIgnored, SAVE_LOCAL,
-                format!("'--{SAVE_LOCAL}' has nowhere to write: a git revision or remote repository is read-only.")));
+                format!("'--{SAVE_LOCAL}' was ignored, since the settings of a project cannot hold a git revision \
+                        or a remote repository as a target.")));
         return Ok(false);
     }
     let Some(local) = config_builder.local_dir.clone()
@@ -2057,9 +2058,13 @@ fn rebase_targets_on(project_dir: &str, config_name: &str, targets: Vec<Target>,
         match rebase_contained_place(project_dir, &target.path, true, revision) {
             Some(path) => Some(Target { module: target.module, path }),
             None => {
+                let reason = match crate::git::parse_target_spec(&target.path) {
+                    Ok(crate::git::TargetSpec::LocalPath(_)) => "points outside the project directory",
+                    Ok(crate::git::TargetSpec::Remote(_)) => "is a remote repository, which the settings of a project cannot hold,",
+                    _ => "is a git revision, which the settings of a project cannot hold,"
+                };
                 super::warning_collector::emit(ProgramWarning::new(ProgramCode::ConfigValueIgnored,
-                        config_name, format!("In config '{config_name}': target '{}' points outside \
-                                the project directory and was ignored.", target.path)));
+                        config_name, format!("In config '{config_name}': target '{}' {reason} and was ignored.", target.path)));
                 None
             }
         }
@@ -3485,7 +3490,7 @@ mod tests {
         assert!(!std::path::Path::new(&save_local_run.view.revision_targets[0].mounted.path).exists(),
                 "'--{SAVE_LOCAL}' wrote into the place of a revision");
         assert!(crate::warning_collector::get_collected_warnings().iter()
-                .any(|w| w.subject == SAVE_LOCAL && w.message.contains("read-only")));
+                .any(|w| w.subject == SAVE_LOCAL && w.message.contains("cannot hold a git revision")));
 
         std::fs::create_dir_all(&crate::paths::PERSISTENT_APP_PATHS.config_dir).unwrap();
         let saved_path = crate::paths::PERSISTENT_APP_PATHS.config_dir.clone().add("/zz-rev-target.txt");
